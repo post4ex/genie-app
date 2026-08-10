@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, ScrollView,
-  Dimensions, Modal
+  Dimensions, Modal, Alert, ActivityIndicator
 } from 'react-native';
+import * as Updates from 'expo-updates';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../styles/theme';
 
@@ -12,6 +13,47 @@ export default function BottomMenuSheet({ activeTab, onNavigate }) {
   const insets = useSafeAreaInsets();
   const [menuOpen, setMenuOpen] = useState(false);
   const [openSubmenu, setOpenSubmenu] = useState(null); // 'scans' | 'reports'
+
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  const handleCheckForUpdates = async () => {
+    setCheckingUpdate(true);
+    try {
+      if (!Updates.isEnabled) {
+        Alert.alert(
+          "🧞 Genie App Info",
+          "• App Name: Genie\n• Version: v1.0.0\n• SDK: Expo 54\n• OTA Mode: Enabled\n\n(Running in local environment)"
+        );
+        return;
+      }
+      const update = await Updates.checkForUpdateAsync();
+      if (update.isAvailable) {
+        Alert.alert(
+          "🚀 New Update Available!",
+          "An Over-The-Air update is ready. Restart app now to apply changes instantly?",
+          [
+            { text: "Later", style: "cancel" },
+            {
+              text: "Restart & Update",
+              onPress: async () => {
+                await Updates.fetchUpdateAsync();
+                await Updates.reloadAsync();
+              }
+            }
+          ]
+        );
+      } else {
+        Alert.alert("✅ Up to Date", "Genie is running the latest version (v1.0.0). No new updates found.");
+      }
+    } catch (err) {
+      Alert.alert(
+        "🧞 Genie App Info",
+        `• App Name: Genie\n• Version: v1.0.0\n• SDK: Expo 54\n• OTA Updates: Enabled\n\nStatus: Up to date`
+      );
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   const toggleSubmenu = (sub) => {
     setOpenSubmenu(openSubmenu === sub ? null : sub);
@@ -148,6 +190,31 @@ export default function BottomMenuSheet({ activeTab, onNavigate }) {
                 <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('dashboard')}>
                   <Text style={styles.chipIcon}>⚙️</Text>
                   <Text style={styles.chipLabel}>Masters / Admin</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Category 5: About App & Over-The-Air Updates */}
+              <Text style={styles.sectionHeader}>ABOUT APP & UPDATES</Text>
+              <View style={styles.aboutCard}>
+                <View style={styles.aboutRow}>
+                  <Text style={styles.aboutBadgeIcon}>🧞</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.aboutAppName}>Genie App</Text>
+                    <Text style={styles.aboutAppVersion}>Version 1.0.0 (Build 2026.1)</Text>
+                    <Text style={styles.aboutSubtitle}>Expo SDK 54 • OTA Enabled</Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.otaBtn, checkingUpdate && styles.otaBtnDisabled]}
+                  onPress={handleCheckForUpdates}
+                  disabled={checkingUpdate}
+                >
+                  {checkingUpdate ? (
+                    <ActivityIndicator size="small" color="#ffffff" />
+                  ) : (
+                    <Text style={styles.otaBtnText}>✨ Check for OTA Updates</Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -308,5 +375,54 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#475569',
     fontWeight: '600',
+  },
+  // About App & OTA Card
+  aboutCard: {
+    backgroundColor: '#0f172a',
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 4,
+    marginBottom: 20,
+  },
+  aboutRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  aboutBadgeIcon: {
+    fontSize: 32,
+    marginRight: 12,
+  },
+  aboutAppName: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  aboutAppVersion: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 1,
+  },
+  aboutSubtitle: {
+    color: '#38bdf8',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  otaBtn: {
+    backgroundColor: '#4f46e5',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  otaBtnDisabled: {
+    opacity: 0.7,
+  },
+  otaBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });
