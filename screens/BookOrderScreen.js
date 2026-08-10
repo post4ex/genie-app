@@ -71,7 +71,7 @@ const DOX_SIZES = {
 export default function BookOrderScreen({
   bookForm = {}, setBookForm, onBookOrder, bookingLoading,
   b2b2cMap = {}, b2bList = [], carriersMap = {}, modesMap = {}, ratesMap = {}, branchesMap = {},
-  token = '', apiBase = '', onContactCreated = null
+  token = '', apiBase = '', onContactCreated = null, editOrder = null, onEditDone = null
 }) {
   // --- 1. Top Section Local States ---
   const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
@@ -875,6 +875,13 @@ export default function BookOrderScreen({
     if (productsList.some(p => p.DOC_TYPE === 'DOX')) setFlagDox(true);
   };
 
+  // App-level edit navigation (Orders detail → Edit → book tab). Re-runs only when a
+  // different order is picked (App clears editOrder after edit/submit via onEditDone).
+  useEffect(() => {
+    if (editOrder) startEditFromPayload(editOrder);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editOrder]);
+
   // --- Add Contact (Web: jawaS/book-order-add-contact.js) ---
   const openAddContact = (type) => {
     setAddContactType(type);
@@ -1044,6 +1051,7 @@ export default function BookOrderScreen({
         recordBookingTxn({ id: `${Date.now()}-${ref || 'x'}`, ts: Date.now(), status: result.confirmed ? 'booked' : 'pending', ref });
         setLastBookedOrder({ ...payload.order, reference: ref, boxes: payload.multibox, products: payload.products });
         setEditRef(null);
+        onEditDone && onEditDone();
         resetForNextBooking();
       } else {
         showBookingMessage(`Booking failed: ${result?.message || 'Unknown error'}`, 'error', 8000);
@@ -1119,7 +1127,7 @@ export default function BookOrderScreen({
       {editRef && (
         <View style={styles.editBanner}>
           <Text style={styles.editBannerText}>✏️ Editing Order: {editRef}</Text>
-          <TouchableOpacity onPress={() => { setEditRef(null); setBookingMessage(''); }}>
+          <TouchableOpacity onPress={() => { setEditRef(null); setBookingMessage(''); onEditDone && onEditDone(); }}>
             <Text style={{ color: '#b45309', fontWeight: '800' }}>✕</Text>
           </TouchableOpacity>
         </View>

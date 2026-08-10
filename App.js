@@ -63,6 +63,8 @@ function MainApp() {
     destCity: '', destPincode: '', weight: '0.5', pieces: '1', value: '1000', cod: '0', topay: 'No',
   });
   const [bookingLoading, setBookingLoading] = useState(false);
+  // Edit flow: Orders detail → Edit button → book tab pre-filled (web editOrderRef parity)
+  const [editOrder, setEditOrder] = useState(null);
   const sseRef = useRef(null);
   const tokenRef = useRef('');
   const syncInProgressRef = useRef(false);
@@ -642,6 +644,11 @@ function MainApp() {
     return false;
   };
 
+  const handleEditOrder = (order) => {
+    setEditOrder(order);
+    setActiveTab('book');
+  };
+
   const handleBookOrder = async (payload) => {
     const order = payload.order || payload;
     const isEdit = !!order.REFERENCE;
@@ -746,12 +753,14 @@ function MainApp() {
             b2b2cMap={b2b2cMap}
             carriersMap={carriersMap}
             modesMap={modesMap}
+            branchesMap={branchesMap}
             productsMap={productsMap}
             multiboxMap={multiboxMap}
             uploadsMap={uploadsMap}
             shipmentsMap={shipmentsMap}
             token={token}
             apiBase={API_BASE}
+            onEditOrder={handleEditOrder}
           />
         )}
         {activeTab === 'book' && (
@@ -769,6 +778,8 @@ function MainApp() {
             token={token}
             apiBase={API_BASE}
             onContactCreated={handleContactCreated}
+            editOrder={editOrder}
+            onEditDone={() => setEditOrder(null)}
           />
         )}
         {activeTab === 'track' && (

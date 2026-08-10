@@ -1,11 +1,16 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, FlatList, TextInput,
-  TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator, Image, Share
+  TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator, Image, Share, Platform
 } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { COLORS } from '../styles/theme';
 import { fmtDate, parseDate } from '../utils/formatIST';
+import * as docgen from '../utils/docgen.js';
+import * as ImagePicker from 'expo-image-picker';
+import * as Print from 'expo-print';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 
 // ── Web SVG Icons (Exact GENIE_WEB shipments.js _docIco 1-to-1 match) ──────────
 const WhatsAppIcon = ({ size = 14, color = '#25D366' }) => (
@@ -177,7 +182,8 @@ const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
 
 export default function OrdersScreen({
   orders = [], searchQuery, setSearchQuery, refreshing, onRefresh,
-  b2b2cMap = {}, carriersMap = {}, modesMap = {}, productsMap = {}, multiboxMap = {}, uploadsMap = {}, shipmentsMap = {}, token = '', apiBase = ''
+  b2b2cMap = {}, carriersMap = {}, modesMap = {}, productsMap = {}, multiboxMap = {}, uploadsMap = {}, shipmentsMap = {},
+  branchesMap = {}, token = '', apiBase = '', onEditOrder = null
 }) {
   const [currentView, setCurrentView] = useState('tiles');
   const [selectedTile, setSelectedTile] = useState('all');
@@ -614,6 +620,134 @@ export default function OrdersScreen({
         },
       },
     ]);
+  };
+
+  // ── Document Center actions (web printSelectedShipment*/download*/mail* parity) ──
+  const [labelLayout, setLabelLayout] = useState('2up-landscape'); // '2up-landscape' | '4up-portrait' (web window._labelLayout)
+  const [uploadVisible, setUploadVisible] = useState(false);
+  const [uploadType, setUploadType] = useState('POD');
+  const [uploading, setUploading] = useState(false);
+  const [uploadTarget, setUploadTarget] = useState(null);
+
+  useEffect(() => {
+    docgen.setDocgenContext({
+      modesDataMap: new Map(Object.entries(modesMap || {})),
+      branchDataMap: new Map(Object.entries(branchesMap || {})),
+      labelLayout,
+    });
+  }, [modesMap, branchesMap, labelLayout]);
+
+  const DOC_KIND_SLUG = { 'Label': 'Label', 'Receipt': 'Receipt', 'POD': 'POD', 'Office Copy': 'OfficeCopy', 'Docs + Box': 'DocsAndBox' };
+  const DOC_KIND_LABEL = { 'Label': 'Shipping Label', 'Receipt': 'Receipt', 'POD': 'Proof of Delivery', 'Office Copy': 'Office Copy', 'Docs + Box': 'Docs & Box Labels' };
+
+  const _docCtx = (o) => ({
+    cnor: b2b2cMap[o.CONSIGNOR],
+    cnee: b2b2cMap[o.CONSIGNEE],
+    products: productsMap[o.REFERENCE] || [],
+    multiboxItems: multiboxMap[o.REFERENCE] || [],
+    branch: branchesMap[o.BRANCH],
+    layout: labelLayout,
+  });
+
+  const printDoc = async (o, kind) => {
+    const slug = DOC_KIND_SLUG[kind] || kind;
+    const html = docgen.buildSingleDocHtml(slug, o, _docCtx(o));
+    const title = `${kind} - ${o.AWB_NUMBER || o.REFERENCE}`;
+    try {
+      if (Platform.OS === 'web') docgen.openDocInNewTab(title, html);
+      else await Print.printAsync({ html });
+    } catch (e) { toast('❌ Print failed', e.message); }
+  };
+
+  const printAllDocs = async (o) => {
+    const html = docgen.buildAllDocsHtml(o, _docCtx(o));
+    try {
+      if (Platform.OS === 'web') docgen.openDocInNewTab(`All Docs - ${o.AWB_NUMBER || o.REFERENCE}`, html);
+      else await Print.printAsync({ html });
+    } catch (e) { toast('❌ Print failed', e.message); }
+  };
+
+  const _saveOrShareDoc = async (title, html) => {
+    const path = `${FileSystem.cacheDirectory || ''}${title}.html`;
+    await FileSystem.writeAsStringAsync(path, html, { encoding: FileSystem.EncodingType.UTF8 });
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(path, { mimeType: 'text/html', dialogTitle: title, UTI: 'public.html' });
+    } else {
+      toast('✅ Saved', `Saved: ${title}.html`);
+    }
+  };
+
+  const downloadDoc = async (o, kind) => {
+    const slug = DOC_KIND_SLUG[kind] || kind;
+    const html = docgen.buildSingleDocHtml(slug, o, _docCtx(o));
+    const title = `${slug} - ${o.AWB_NUMBER || o.REFERENCE}`;
+    try {
+      if (Platform.OS === 'web') { docgen.downloadDocBlob(title, html); toast('✅ Downloading', `${title}.html`); }
+      else await _saveOrShareDoc(title, html);
+    } catch (e) { toast('❌ Download failed', e.message); }
+  };
+
+  const downloadAllDocs = async (o) => {
+    const title = `AllDocs - ${o.AWB_NUMBER || o.REFERENCE}`;
+    try {
+      const html = docgen.buildAllDocsHtml(o, _docCtx(o));
+      if (Platform.OS === 'web') { docgen.downloadDocBlob(title, html); toast('✅ Downloading', `${title}.html`); }
+      else await _saveOrShareDoc(title, html);
+    } catch (e) { toast('❌ Download failed', e.message); }
+  };
+
+  const mailDoc = async (o, kind) => {
+    const emails = partyEmails(o);
+    if (!emails.length) { toast('No Email', 'No email address on file for consignor or consignee.'); return; }
+    try {
+      const slug = DOC_KIND_SLUG[kind] || kind;
+      const html = docgen.buildSingleDocHtml(slug, o, _docCtx(o));
+      const att = docgen.docToAttachment(`${slug} - ${o.AWB_NUMBER || o.REFERENCE}`, html);
+      await apiCall('/api/mailOrder', {
+        reference: o.REFERENCE,
+        to: emails.join(','),
+        template: 'SHIPMENT_DOC',
+        template_vars: { DOC_LABEL: DOC_KIND_LABEL[kind] || kind },
+        attachment_b64: att.b64,
+        attachment_name: att.name,
+      });
+      toast('✅ Email sent', `Attachment to ${emails.join(', ')}`);
+    } catch (e) { toast('❌ Mail failed', e.message); }
+  };
+
+  const toggleLabelLayout = () => {
+    const next = labelLayout === '4up-portrait' ? '2up-landscape' : '4up-portrait';
+    setLabelLayout(next);
+    toast('Label Layout', next === '4up-portrait' ? 'Switched to 4-up Portrait' : 'Switched to 2-up Landscape');
+  };
+
+  const openUpload = (o) => { setUploadTarget(o); setUploadType('POD'); setUploadVisible(true); };
+
+  const pickAndUpload = async () => {
+    const o = uploadTarget;
+    if (!o) return;
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) { toast('Permission needed', 'Allow photo access to upload documents.'); return; }
+      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], base64: true, quality: 0.8 });
+      if (res.canceled || !res.assets || !res.assets.length) return;
+      const asset = res.assets[0];
+      if (!asset.base64) { toast('Upload failed', 'Could not read image data.'); return; }
+      setUploading(true);
+      await apiCall('/api/upload', {
+        upload_type: uploadType,
+        content_type: asset.mimeType || 'image/jpeg',
+        data: asset.base64,
+        reference: o.REFERENCE || '',
+        awb_number: o.AWB_NUMBER || '',
+        branch: o.BRANCH || '',
+        code: '', status_remark: '', child_awb: '', customer_uid: '', kyc_number: '', kyc_type: '', doc_number: '', doc_type: '',
+      });
+      toast('✅ Uploaded', `${uploadType} uploaded for ${o.REFERENCE}`);
+      setUploadVisible(false);
+      if (onRefresh) onRefresh();
+    } catch (e) { toast('❌ Upload failed', e.message); }
+    finally { setUploading(false); }
   };
 
   const handleSelectOrder = (order) => {
@@ -1059,16 +1193,16 @@ export default function OrdersScreen({
           <View style={styles.cardHeaderRow}>
             <Text style={styles.cardTitle}>Document Center</Text>
             <View style={styles.actionIconGroup}>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Upload', 'Upload doc')} title="Upload">
+              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => openUpload(o)} title="Upload">
                 <UploadIcon size={14} color="#16a34a" />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Layout', 'Toggle layout')} title="Toggle Layout">
+              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={toggleLabelLayout} title="Toggle Layout">
                 <LayoutIcon size={14} color="#64748b" />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Print All', 'Print all docs')} title="Print All">
+              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => printAllDocs(o)} title="Print All">
                 <PrintIcon size={14} color="#64748b" />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Download All', 'Download all docs')} title="Download All">
+              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => downloadAllDocs(o)} title="Download All">
                 <DownloadIcon size={14} color="#64748b" />
               </TouchableOpacity>
               <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => mailShipment(o)} title="Mail All">
@@ -1085,13 +1219,13 @@ export default function OrdersScreen({
               <View key={idx} style={styles.docRowItem}>
                 <Text style={styles.docRowLabel}>{item.label}</Text>
                 <View style={styles.docRowActionBtns}>
-                  <TouchableOpacity style={styles.docItemBtn} onPress={() => Alert.alert('Print', `Print ${item.label}`)}>
+                  <TouchableOpacity style={styles.docItemBtn} onPress={() => printDoc(o, item.label)}>
                     <PrintIcon size={13} color="#64748b" />
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.docItemBtn} onPress={() => mailShipment(o)}>
+                  <TouchableOpacity style={styles.docItemBtn} onPress={() => mailDoc(o, item.label)}>
                     <MailIcon size={13} color="#64748b" />
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.docItemBtn} onPress={() => Alert.alert('Download', `Download ${item.label} — available on web`)}>
+                  <TouchableOpacity style={styles.docItemBtn} onPress={() => downloadDoc(o, item.label)}>
                     <DownloadIcon size={13} color="#64748b" />
                   </TouchableOpacity>
                   <TouchableOpacity style={[styles.docItemBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waDoc(o, item.label)}>
@@ -1109,7 +1243,7 @@ export default function OrdersScreen({
             <Text style={styles.cardTitle}>Shipment Details</Text>
             <View style={styles.actionIconGroup}>
               {!o.INV_NUMBER && (
-                <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Edit', 'Edit order ' + o.REFERENCE)} title="Edit">
+                <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => (onEditOrder ? onEditOrder({ ...o, boxes: multiboxMap[o.REFERENCE] || [], products: productsMap[o.REFERENCE] || [] }) : toast('Edit', 'Edit order ' + o.REFERENCE))} title="Edit">
                   <EditIcon size={14} color="#64748b" />
                 </TouchableOpacity>
               )}
@@ -1176,7 +1310,7 @@ export default function OrdersScreen({
           <View style={styles.cardHeaderRow}>
             <Text style={styles.cardTitle}>Product, Box & Upload Details</Text>
             <View style={styles.actionIconGroup}>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Upload', 'Upload file for ' + o.REFERENCE)} title="Upload File">
+              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => openUpload(o)} title="Upload File">
                 <UploadIcon size={14} color="#16a34a" />
               </TouchableOpacity>
               {uploads.length > 0 && (
@@ -1461,6 +1595,50 @@ export default function OrdersScreen({
           )}
         </View>
 
+        {/* ── Upload Modal (web mini-uploader parity — pick type, then image) ── */}
+        <Modal
+          visible={uploadVisible}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setUploadVisible(false)}
+        >
+          <View style={styles.uploadModalOverlay}>
+            <View style={styles.uploadModalContent}>
+              <Text style={styles.uploadModalTitle}>Upload Document</Text>
+              {uploadTarget ? (
+                <Text style={styles.uploadModalRef}>Ref: {uploadTarget.REFERENCE}{uploadTarget.AWB_NUMBER ? ` · AWB: ${uploadTarget.AWB_NUMBER}` : ''}</Text>
+              ) : null}
+              <Text style={styles.uploadModalLabel}>Document Type</Text>
+              <View style={styles.uploadTypeRow}>
+                {['POD', 'Reciept', 'Product', 'MultiBox'].map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.uploadTypeChip, uploadType === t && styles.uploadTypeChipActive]}
+                    onPress={() => setUploadType(t)}
+                  >
+                    <Text style={[styles.uploadTypeChipText, uploadType === t && styles.uploadTypeChipTextActive]}>{t}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {uploading ? (
+                <View style={{ paddingVertical: 14, alignItems: 'center' }}>
+                  <ActivityIndicator size="small" color={COLORS.primary} />
+                  <Text style={styles.loadingText}>Uploading…</Text>
+                </View>
+              ) : (
+                <View style={styles.modalActions}>
+                  <TouchableOpacity style={styles.resetModalBtn} onPress={() => setUploadVisible(false)}>
+                    <Text style={styles.resetModalBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.applyModalBtn} onPress={pickAndUpload}>
+                    <Text style={styles.applyModalBtnText}>Pick Image &amp; Upload</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          </View>
+        </Modal>
+
         {/* ── POD Image Viewer (web _showPodImage parity) ── */}
         <Modal
           visible={podImageUrl !== null}
@@ -1720,4 +1898,16 @@ const styles = StyleSheet.create({
   resetModalBtnText: { fontSize: 13, fontWeight: '700', color: '#475569' },
   applyModalBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, backgroundColor: COLORS.primary, alignItems: 'center' },
   applyModalBtnText: { fontSize: 13, fontWeight: '800', color: '#ffffff' },
+
+  // Upload Modal (web mini-uploader)
+  uploadModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  uploadModalContent: { backgroundColor: '#ffffff', borderRadius: 16, padding: 18, width: '92%', maxWidth: 380, borderWidth: 1, borderColor: '#cbd5e1' },
+  uploadModalTitle: { fontSize: 16, fontWeight: '800', color: '#1e293b', marginBottom: 2 },
+  uploadModalRef: { fontSize: 11, fontWeight: '600', color: '#64748b', marginBottom: 12 },
+  uploadModalLabel: { fontSize: 11, fontWeight: '700', color: '#475569', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
+  uploadTypeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  uploadTypeChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1', backgroundColor: '#f8fafc' },
+  uploadTypeChipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  uploadTypeChipText: { fontSize: 12, fontWeight: '700', color: '#475569' },
+  uploadTypeChipTextActive: { color: '#ffffff' },
 });

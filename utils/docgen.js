@@ -1,6 +1,33 @@
 // ============================================================================
 // utils/docgen.js — Document Builder Utility
 // ============================================================================
+import { fmtDate } from './formatIST.js';
+
+// ---- Runtime context (the web used bare globals; the app injects these) ----
+let modesDataMap = new Map();
+let branchDataMap = new Map();
+let b2b2cDataMap = new Map();
+let productDataMap = new Map();
+let multiboxDataMap = new Map();
+let allOrders = [];
+let currentSelectedRef = '';
+let _labelLayout = '2up-landscape';
+
+export function setDocgenContext(ctx = {}) {
+  if (ctx.modesDataMap) modesDataMap = ctx.modesDataMap;
+  if (ctx.branchDataMap) branchDataMap = ctx.branchDataMap;
+  if (ctx.b2b2cDataMap) b2b2cDataMap = ctx.b2b2cDataMap;
+  if (ctx.productDataMap) productDataMap = ctx.productDataMap;
+  if (ctx.multiboxDataMap) multiboxDataMap = ctx.multiboxDataMap;
+  if (ctx.allOrders) allOrders = ctx.allOrders;
+  if (ctx.currentSelectedRef !== undefined) currentSelectedRef = ctx.currentSelectedRef;
+  if (ctx.labelLayout) _labelLayout = ctx.labelLayout;
+}
+
+function _getLabelLayout() {
+  try { return (typeof window !== 'undefined' && window._labelLayout) || _labelLayout; }
+  catch (_) { return _labelLayout; }
+}
 
 function getJsBarcodeSrc() {
     const scripts = document.querySelectorAll('script[src]');
@@ -1088,3 +1115,185 @@ function mailSelectedShipmentDocsAndBox() {
     const awb = order.AWB_NUMBER || order.REFERENCE;
     mailSelectedShipment(_docToAttachment(`DocsAndBox-${awb}`, buildDocsAndBox(order, b2b2cDataMap.get(order.CONSIGNOR), b2b2cDataMap.get(order.CONSIGNEE), productDataMap.get(order.REFERENCE)||[], multiboxDataMap.get(order.REFERENCE)||[])), { DOC_LABEL: 'Docs & Box Labels' });
 }
+
+// ============================================================================
+// React Native port helpers (pure HTML builders + web-open/download + attachment)
+// ============================================================================
+
+// Builds the HTML body for ONE document type (web: printSelectedShipment* body).
+// kind: 'Label' | 'Receipt' | 'POD' | 'OfficeCopy' | 'DocsAndBox' | 'Docs' | 'Multibox'
+export function buildSingleDocHtml(kind, order, ctx = {}) {
+    const cnor = ctx.cnor;
+    const cnee = ctx.cnee;
+    const products = ctx.products || [];
+    const multiboxItems = ctx.multiboxItems || [];
+    const branch = ctx.branch;
+    const layout = ctx.layout || _getLabelLayout();
+    const isPortrait = layout === '4up-portrait';
+    const awb = order.AWB_NUMBER || order.REFERENCE;
+    const pieces = multiboxItems.length > 0 ? multiboxItems.length : (order.PIECS || 1);
+    const k = String(kind || '').toLowerCase();
+
+    if (k === 'label' || k === 'labels') {
+        const pageStyle = `<style>@page{size:A4 ${isPortrait?'portrait':'landscape'};margin:8mm;}
+        body{display:flex;flex-wrap:wrap;justify-content:space-between;align-content:flex-start;gap:0;}
+        .label-wrapper{width:49%;max-width:49%!important;border:1px solid #000!important;box-shadow:none!important;margin:0;padding:0;box-sizing:border-box;page-break-inside:avoid;
+            height:${isPortrait?'138mm':'192mm'}!important;display:flex;flex-direction:column;overflow:hidden;}
+        ${isPortrait ? `
+        .label-logo{font-size:13px!important;}
+        .label-cell{padding:2px 4px!important;font-size:10px!important;}
+        .label-row:nth-child(1) .label-cell{font-size:10px!important;}
+        .label-row:nth-child(2) .label-cell{font-size:11px!important;}
+        .font-xxl{font-size:18px!important;}
+        .label-header-sm{font-size:8px!important;}
+        .barcode-container{padding:2px 6px!important;}
+        .barcode-container svg{height:55px!important;width:100%!important;}
+        .barcode-number{font-size:12px!important;letter-spacing:1px!important;}
+        .label-table td,.label-table th{padding:1px 3px!important;font-size:9px!important;}
+        .consignee-details div:nth-child(2){font-size:20px!important;}
+        .consignee-details div:nth-child(3){font-size:14px!important;}
+        .consignee-details div:nth-child(4){font-size:14px!important;}
+        ` : ''}
+    </style>`;
+        let bodyHtml = pageStyle + getLabelStyles();
+        if (multiboxItems.length > 0) {
+            for (let i = 0; i < pieces; i++) bodyHtml += buildLabel(order, cnor, cnee, products, multiboxItems, { type:'box', index:i });
+            bodyHtml += buildLabel(order, cnor, cnee, products, multiboxItems, { type:'summary' });
+        } else {
+            bodyHtml += buildLabel(order, cnor, cnee, products, [], { type:'box', index:0 });
+        }
+        return bodyHtml;
+    }
+    if (k === 'receipt')    return buildReceipt(order, cnor, cnee, products, branch);
+    if (k === 'pod')        return buildPOD(order, cnor, cnee, products, branch);
+    if (k === 'officecopy') return buildOfficeCopy(order, cnor, cnee, products, branch);
+    if (k === 'docsandbox' || k === 'docs+box') return buildDocsAndBox(order, cnor, cnee, products, multiboxItems);
+    if (k === 'docs')       return buildDocs(order, cnor, cnee, products);
+    if (k === 'multibox')   return buildMultibox(order, cnor, cnee, products, multiboxItems);
+    return buildReceipt(order, cnor, cnee, products, branch);
+}
+
+// Combined "All Docs" body (web: printSelectedShipmentAll)
+export function buildAllDocsHtml(order, ctx = {}) {
+    const cnor = ctx.cnor;
+    const cnee = ctx.cnee;
+    const products = ctx.products || [];
+    const multiboxItems = ctx.multiboxItems || [];
+    const branch = ctx.branch;
+    const layout = ctx.layout || _getLabelLayout();
+    const isPortrait = layout === '4up-portrait';
+    const awb = order.AWB_NUMBER || order.REFERENCE;
+    const pieces = multiboxItems.length > 0 ? multiboxItems.length : (order.PIECS || 1);
+
+    const pageStyle = `<style>
+        @page label-page{size:A4 ${isPortrait?'portrait':'landscape'};margin:8mm;}
+        @page doc-page{size:A4 portrait;margin:8mm;}
+        .label-wrapper{width:49%;max-width:49%!important;border:1px solid #000!important;box-shadow:none!important;margin:0;padding:0;box-sizing:border-box;page-break-inside:avoid;
+            height:${isPortrait?'138mm':'192mm'}!important;display:flex;flex-direction:column;overflow:hidden;}
+        .label-section{display:flex;flex-wrap:wrap;justify-content:space-between;align-content:flex-start;page:label-page;}
+        .receipt-wrapper,.ps-wrapper{page-break-before:always;break-before:always;page:doc-page;}</style>`;
+
+    let labelHtml = pageStyle + getLabelStyles() + '<div class="label-section">';
+    if (multiboxItems.length > 0) {
+        for (let i = 0; i < pieces; i++) labelHtml += buildLabel(order, cnor, cnee, products, multiboxItems, { type:'box', index:i });
+        labelHtml += buildLabel(order, cnor, cnee, products, multiboxItems, { type:'summary' });
+    } else {
+        labelHtml += buildLabel(order, cnor, cnee, products, [], { type:'box', index:0 });
+    }
+    labelHtml += '</div>';
+
+    return labelHtml
+        + buildReceipt(order, cnor, cnee, products, branch)
+        + buildPOD(order, cnor, cnee, products, branch)
+        + buildOfficeCopy(order, cnor, cnee, products, branch)
+        + buildDocsAndBox(order, cnor, cnee, products, multiboxItems);
+}
+
+// Barcode renderer script (web: _openInNewTab/_downloadDoc inline block).
+// Injected into the full HTML doc; gracefully no-ops if JsBarcode is unavailable.
+function _barcodeScript() {
+    let jsSrc = '';
+    try { jsSrc = getJsBarcodeSrc(); } catch (_) { jsSrc = ''; }
+    return `\n<script src="${jsSrc}"><\/script>\n<script>\n    window.addEventListener('load', function() {\n        document.querySelectorAll('svg.barcode-svg[data-value]').forEach(function(el) {\n            try {\n                var val = el.getAttribute('data-value');\n                if (val && typeof JsBarcode !== 'undefined') JsBarcode(el, val, { format:'CODE128', displayValue:true, fontSize:14, margin:5, height:40, width:2 });\n            } catch(e) { console.error('Barcode error:', e); }\n        });\n    });\n<\/script>`;
+}
+
+function _wrapFullDoc(title, bodyHtml) {
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>\n        <style>body{margin:0;padding:1rem;background:#f3f4f6;} @media print{body{padding:0;background:#fff;}}</style>\n    </head><body>${bodyHtml}${_barcodeScript()}</body></html>`;
+}
+
+// UTF-8-safe base64 (Hermes/web both have btoa, but be defensive for Indian-char names)
+function _utf8Bytes(str) {
+    const out = [];
+    for (let i = 0; i < str.length; i++) {
+        let c = str.charCodeAt(i);
+        if (c < 0x80) out.push(c);
+        else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+        else if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) {
+            const c2 = str.charCodeAt(i + 1);
+            if (c2 >= 0xdc00 && c2 <= 0xdfff) {
+                const cp = 0x10000 + ((c - 0xd800) << 10) + (c2 - 0xdc00); i++;
+                out.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 63), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63));
+            } else out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+        }
+        else out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    }
+    return out;
+}
+
+function _toBase64(str) {
+    if (typeof btoa === 'function') {
+        try { return btoa(unescape(encodeURIComponent(str))); } catch (_) {}
+    }
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const bytes = (typeof TextEncoder !== 'undefined') ? new TextEncoder().encode(str) : _utf8Bytes(str);
+    let out = '', i = 0;
+    for (; i < bytes.length; i += 3) {
+        const b0 = bytes[i], b1 = i + 1 < bytes.length ? bytes[i + 1] : 0, b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+        out += chars[b0 >> 2] + chars[((b0 & 3) << 4) | (b1 >> 4)]
+            + (i + 1 < bytes.length ? chars[((b1 & 15) << 2) | (b2 >> 6)] : '=')
+            + (i + 2 < bytes.length ? chars[b2 & 63] : '=');
+    }
+    return out;
+}
+
+// Email attachment (web: _docToAttachment)
+export function docToAttachment(title, bodyHtml) {
+    const html = _wrapFullDoc(title, bodyHtml);
+    return { b64: _toBase64(html), name: `${title}.html` };
+}
+
+// Web-only: open in a new tab (web: _openInNewTab)
+export function openDocInNewTab(title, bodyHtml) {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const html = _wrapFullDoc(title, bodyHtml);
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// Web-only: trigger a .html download (web: _downloadDoc)
+export function downloadDocBlob(title, bodyHtml) {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const html = _wrapFullDoc(title, bodyHtml);
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${title}.html`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+export {
+    formatCarrierName,
+    getLabelStyles,
+    getReceiptStyles,
+    getPackingSlipStyles,
+    _esc,
+    buildLabel,
+    buildReceipt,
+    buildPOD,
+    buildOfficeCopy,
+    buildDocs,
+    buildMultibox,
+    buildDocsAndBox,
+};
