@@ -45,6 +45,9 @@ jobs:
       - name: Prebuild Native Android Project
         run: npx expo prebuild --platform android --no-install
 
+      - name: Remove Duplicate WebP Icons
+        run: find android/app/src/main/res/mipmap-* -name "*.webp" -delete || true
+
       - name: Build Release APK with Gradle
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+UseG1GC'"
