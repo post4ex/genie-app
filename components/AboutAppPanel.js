@@ -1,14 +1,29 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet, Modal, View, Text, TouchableOpacity, ScrollView,
-  ActivityIndicator, Alert, Platform
+  ActivityIndicator, Alert, Linking, Platform
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Updates from 'expo-updates';
 import { COLORS } from '../styles/theme';
 
+const CURRENT_VERSION = 'v1.0.3';
+
 // Updates History / Changelog Timeline
 const UPDATE_HISTORY = [
+  {
+    version: 'v1.0.3',
+    date: '10 Aug 2026',
+    type: 'Native & OTA',
+    tagColor: '#16a34a',
+    tagBg: '#dcfce7',
+    changes: [
+      'High-resolution Genie app launcher icons & splash branding',
+      'Integrated GitHub Releases live API update checker',
+      'Notification-style About App panel with changelog timeline',
+      'Direct 1-tap APK downloader from GitHub Releases',
+    ],
+  },
   {
     version: 'v1.0.1',
     date: '10 Aug 2026',
@@ -25,9 +40,9 @@ const UPDATE_HISTORY = [
   {
     version: 'v1.0.0',
     date: '10 Aug 2026',
-    type: 'Native Release',
-    tagColor: '#16a34a',
-    tagBg: '#dcfce7',
+    type: 'Initial Release',
+    tagColor: '#64748b',
+    tagBg: '#f1f5f9',
     changes: [
       'Initial release of Genie App on Expo SDK 54',
       'Multi-tab navigation (Home, Orders, Book, Track, Menu)',
@@ -40,40 +55,81 @@ const UPDATE_HISTORY = [
 export default function AboutAppPanel({ visible, onClose }) {
   const insets = useSafeAreaInsets();
   const [checking, setChecking] = useState(false);
+  const [latestRelease, setLatestRelease] = useState(null);
   const [statusMsg, setStatusMsg] = useState(null);
+
+  useEffect(() => {
+    if (visible) {
+      checkGitHubReleases();
+    }
+  }, [visible]);
+
+  const checkGitHubReleases = async () => {
+    try {
+      const res = await fetch('https://api.github.com/repos/post4ex/genie-app/releases/latest');
+      if (res.ok) {
+        const data = await res.json();
+        const tag = data.tag_name || 'v1.0.3';
+        const apkAsset = (data.assets || []).find(a => a.name.endsWith('.apk')) || data.assets[0];
+        setLatestRelease({
+          tag,
+          name: data.name || tag,
+          url: apkAsset ? apkAsset.browser_download_url : data.html_url,
+          publishedAt: data.published_at,
+          isNewer: tag !== CURRENT_VERSION,
+        });
+      }
+    } catch (e) {
+      console.log('GitHub Release check error:', e);
+    }
+  };
 
   const handleCheckUpdates = async () => {
     setChecking(true);
     setStatusMsg(null);
     try {
-      if (!Updates.isEnabled) {
-        setStatusMsg({ type: 'info', text: 'App is running in development mode. OTA updates active in production builds.' });
-        return;
-      }
-      const update = await Updates.checkForUpdateAsync();
-      if (update.isAvailable) {
-        Alert.alert(
-          '🚀 New Update Available!',
-          'A new Over-The-Air update has been downloaded. Restart app now to apply changes?',
-          [
-            { text: 'Later', style: 'cancel' },
-            {
-              text: 'Restart & Update',
-              onPress: async () => {
-                await Updates.fetchUpdateAsync();
-                await Updates.reloadAsync();
+      await checkGitHubReleases();
+
+      // Also check Expo OTA updates
+      if (Updates.isEnabled) {
+        const update = await Updates.checkForUpdateAsync();
+        if (update.isAvailable) {
+          Alert.alert(
+            '🚀 New Over-The-Air Update Available!',
+            'An instant update has been downloaded. Restart app now to apply?',
+            [
+              { text: 'Later', style: 'cancel' },
+              {
+                text: 'Restart & Update',
+                onPress: async () => {
+                  await Updates.fetchUpdateAsync();
+                  await Updates.reloadAsync();
+                },
               },
-            },
-          ]
-        );
-        setStatusMsg({ type: 'success', text: 'New update downloaded! Restart required.' });
+            ]
+          );
+          setStatusMsg({ type: 'success', text: 'OTA Update downloaded! Tap restart to apply.' });
+          return;
+        }
+      }
+
+      if (latestRelease && latestRelease.isNewer) {
+        setStatusMsg({ type: 'highlight', text: `New Release ${latestRelease.tag} available on GitHub!` });
       } else {
-        setStatusMsg({ type: 'success', text: 'You are running the latest version of Genie (v1.0.1).' });
+        setStatusMsg({ type: 'success', text: `Genie is running the latest release (${CURRENT_VERSION}).` });
       }
     } catch (err) {
-      setStatusMsg({ type: 'info', text: `Genie v1.0.1 is up to date.` });
+      setStatusMsg({ type: 'info', text: `Genie ${CURRENT_VERSION} is up to date.` });
     } finally {
       setChecking(false);
+    }
+  };
+
+  const handleDownloadRelease = () => {
+    if (latestRelease && latestRelease.url) {
+      Linking.openURL(latestRelease.url);
+    } else {
+      Linking.openURL('https://github.com/post4ex/genie-app/releases/latest');
     }
   };
 
@@ -93,7 +149,7 @@ export default function AboutAppPanel({ visible, onClose }) {
               <Text style={styles.logoBadgeIcon}>🧞</Text>
               <View>
                 <Text style={styles.title}>About Genie App</Text>
-                <Text style={styles.subtitle}>Version 1.0.1 • Expo SDK 54 • OTA Ready</Text>
+                <Text style={styles.subtitle}>Installed: {CURRENT_VERSION} • Expo SDK 54</Text>
               </View>
             </View>
             <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
@@ -102,12 +158,14 @@ export default function AboutAppPanel({ visible, onClose }) {
           </View>
 
           <ScrollView style={styles.contentScroll} showsVerticalScrollIndicator={false}>
-            {/* Update Checker Action Bar */}
+            {/* GitHub Live Release & OTA Action Card */}
             <View style={styles.otaCard}>
               <View style={styles.otaHeaderRow}>
-                <View>
-                  <Text style={styles.otaTitle}>Over-The-Air Updates</Text>
-                  <Text style={styles.otaSubtitle}>Check for instant live updates</Text>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text style={styles.otaTitle}>GitHub & OTA Updates</Text>
+                  <Text style={styles.otaSubtitle}>
+                    {latestRelease ? `Latest GitHub Release: ${latestRelease.tag}` : 'Checking GitHub Releases...'}
+                  </Text>
                 </View>
                 <TouchableOpacity
                   style={[styles.checkBtn, checking && styles.checkBtnDisabled]}
@@ -122,8 +180,21 @@ export default function AboutAppPanel({ visible, onClose }) {
                 </TouchableOpacity>
               </View>
 
+              {/* Direct APK Download Button if New Version Available on GitHub */}
+              {latestRelease && (
+                <TouchableOpacity style={styles.downloadApkBtn} onPress={handleDownloadRelease}>
+                  <Text style={styles.downloadApkBtnText}>
+                    📥 Download APK ({latestRelease.tag}) from GitHub
+                  </Text>
+                </TouchableOpacity>
+              )}
+
               {statusMsg && (
-                <View style={[styles.statusBanner, statusMsg.type === 'success' ? styles.statusSuccess : styles.statusInfo]}>
+                <View style={[
+                  styles.statusBanner,
+                  statusMsg.type === 'success' ? styles.statusSuccess :
+                  statusMsg.type === 'highlight' ? styles.statusHighlight : styles.statusInfo
+                ]}>
                   <Text style={styles.statusBannerText}>{statusMsg.text}</Text>
                 </View>
               )}
@@ -155,8 +226,8 @@ export default function AboutAppPanel({ visible, onClose }) {
 
             {/* Technical Specs Footer */}
             <View style={styles.footerSpecs}>
+              <Text style={styles.footerSpecsText}>Repository: post4ex/genie-app</Text>
               <Text style={styles.footerSpecsText}>Package: com.post4ex.geniereact</Text>
-              <Text style={styles.footerSpecsText}>Channel: Production | Runtime: appVersion</Text>
             </View>
           </ScrollView>
         </View>
@@ -227,7 +298,7 @@ const styles = StyleSheet.create({
   contentScroll: {
     paddingVertical: 12,
   },
-  // OTA Checker Action Bar
+  // OTA & GitHub Release Card
   otaCard: {
     backgroundColor: '#f8fafc',
     borderRadius: 12,
@@ -265,6 +336,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  downloadApkBtn: {
+    backgroundColor: '#16a34a',
+    borderRadius: 8,
+    paddingVertical: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  downloadApkBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   statusBanner: {
     marginTop: 10,
     padding: 8,
@@ -272,6 +356,9 @@ const styles = StyleSheet.create({
   },
   statusSuccess: {
     backgroundColor: '#dcfce7',
+  },
+  statusHighlight: {
+    backgroundColor: '#fef3c7',
   },
   statusInfo: {
     backgroundColor: '#e0f2fe',
