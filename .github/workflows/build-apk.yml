@@ -43,7 +43,9 @@ jobs:
         run: npx expo export --platform android
 
       - name: Prebuild Native Android Project
-        run: npx expo prebuild --platform android --no-install
+        run: |
+          npx expo prebuild --platform android --no-install
+          find android/app/src/main/res/mipmap-* -name "*.webp" -delete || true
 
       - name: Build Release APK with Gradle
         env:

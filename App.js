@@ -67,6 +67,8 @@ function MainApp() {
   const tokenRef = useRef('');
   const syncInProgressRef = useRef(false);
   const deltaChainRef = useRef(Promise.resolve()); // serialize delta writes
+  const lastEventTimeRef = useRef(0);   // web window._lastEventTime parity
+  const reloadTimerRef = useRef(null);  // web _scheduleRefresh debounce timer
 
   useEffect(() => { tokenRef.current = token; }, [token]);
 
@@ -95,6 +97,7 @@ function MainApp() {
     })();
     return () => {
       if (sseRef.current) sseRef.current.stop();
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
     };
   }, []);
 
@@ -229,6 +232,23 @@ function MainApp() {
     setUploadsMap(uploadsLookup);
   };
 
+  // Web _scheduleRefresh parity: coalesce UI refreshes so a burst of deltas
+  // (e.g. booking → ORDERS + MULTIBOX + PRODUCTS + UPLOADS) triggers ONE reload
+  // instead of N full reloads (each reads all 11 sheets). immediate=true forces
+  // a synchronous reload for explicit events (resync).
+  const scheduleReload = (immediate = false) => {
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    if (immediate) {
+      reloadTimerRef.current = null;
+      return reloadLocalState();
+    }
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      reloadLocalState();
+    }, 300);
+    return Promise.resolve();
+  };
+
   // ── Real-time SSE handling (web layout.js _handleSSEMessage + app-api.js _applyDelta parity) ──
   // The server broadcasts deltas with the FULL record data — apply it directly,
   // exactly like the web's _applyDelta, instead of re-fetching events.
@@ -284,9 +304,12 @@ function MainApp() {
 
   const handleSSEEvent = async (authToken, payload) => {
     const type = payload?.type;
+    lastEventTimeRef.current = Date.now(); // web window._lastEventTime parity
     if (type === 'heartbeat' || type === 'system_status') return; // keep-alive — no data work
     if (type === 'logout') { handleLogout(); return; }
     if (type === 'resync') {
+      // Web parity: ignore resync while a full sync is mid-flight
+      if (syncInProgressRef.current) return;
       setSyncStatus('streaming');
       syncInProgressRef.current = true;
       try {
@@ -307,7 +330,7 @@ function MainApp() {
       // buffer until the (possibly long) stream finished — order list never updated.
       deltaChainRef.current = deltaChainRef.current
         .then(() => applyDeltaToStorage(payload))
-        .then(() => reloadLocalState())
+        .then(() => scheduleReload()) // coalesced — web _scheduleRefresh 300ms parity
         .catch(() => {});
       return;
     }
@@ -434,11 +457,24 @@ function MainApp() {
 
   // Online recovery + 5-min safety net (web layout.js visibilitychange / 5min-tick parity)
   useEffect(() => {
+    // Web parity: skip the catch-up pull while SSE is live and recent (< 60s)
+    const isSseRecent = () => sseRef.current?.connected &&
+      lastEventTimeRef.current &&
+      (Date.now() - lastEventTimeRef.current) < 60000;
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active' && tokenRef.current) runDeltaCatchup(tokenRef.current);
+      if (state !== 'active' || !tokenRef.current) return;
+      if (!isSseRecent()) runDeltaCatchup(tokenRef.current);
+      // Web parity (openSSE on visibilitychange): if the listener never connected
+      // or went silent > 45s, restart it rather than waiting for its backoff loop.
+      const stale = !lastEventTimeRef.current || (Date.now() - lastEventTimeRef.current) > 45000;
+      if (stale && sseRef.current && !sseRef.current.connected && !sseRef.current.active) {
+        sseRef.current.stop();
+        sseRef.current.start();
+      }
     });
     const tick = setInterval(() => {
-      if (tokenRef.current) runDeltaCatchup(tokenRef.current);
+      if (!tokenRef.current || isSseRecent()) return;
+      runDeltaCatchup(tokenRef.current);
     }, 5 * 60 * 1000);
     return () => { sub.remove(); clearInterval(tick); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -462,6 +498,12 @@ function MainApp() {
 
   const handleLogout = async () => {
     if (sseRef.current) sseRef.current.stop();
+    // Drop any pending coalesced reload — a debounced reload firing after logout
+    // would flash empty state (web has no equivalent post-logout refresh).
+    if (reloadTimerRef.current) {
+      clearTimeout(reloadTimerRef.current);
+      reloadTimerRef.current = null;
+    }
     // Web parity: notify server the session is done (best effort)
     if (tokenRef.current) {
       fetch(`${API_BASE}/api/logout`, {

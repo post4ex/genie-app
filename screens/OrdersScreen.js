@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, FlatList, TextInput,
-  TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator
+  TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator, Image, Share
 } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { COLORS } from '../styles/theme';
@@ -55,7 +55,7 @@ const EditIcon = ({ size = 14, color = '#64748b' }) => (
 
 const CopyIcon = ({ size = 14, color = '#64748b' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+    <Path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
   </Svg>
 );
 
@@ -118,7 +118,48 @@ const STATE_CONFIG = {
   pending:         { label: 'Pending',          bg: '#f1f5f9', color: '#475569' },
   booked:          { label: 'Booked',           bg: '#e0e7ff', color: '#3730a3' },
   pickup:          { label: 'Pickup',           bg: '#f3e8ff', color: '#6b21a8' },
+  deleted:         { label: 'Deleted',          bg: '#fee2e2', color: '#b91c1c' },
 };
+
+// ── Web-parity helpers (GENIE_WEB jawaS/shipments.js 1-to-1) ──────────────────
+// ORDER_DATE may be unix seconds or milliseconds — normalize (>1e10 → ms).
+const _orderMs = (o) => {
+  const t = parseFloat(o?.ORDER_DATE);
+  if (!t) return 0;
+  return t > 1e10 ? t : t * 1000;
+};
+
+const _isTatDue = (o) => {
+  const tat = parseInt(o?.TAT, 10);
+  if (!tat || !o.ORDER_DATE) return false;
+  const dueMs = _orderMs(o) + tat * 86400000;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const limit = new Date(today); limit.setDate(today.getDate() + 3); limit.setHours(23, 59, 59, 999);
+  return dueMs >= today.getTime() && dueMs <= limit.getTime();
+};
+
+const _isOverdueTat = (o, state) => {
+  const tat = parseInt(o?.TAT, 10);
+  if (!tat || !o.ORDER_DATE) return false;
+  const dueMs = _orderMs(o) + tat * 86400000;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const monthAgo = new Date(today); monthAgo.setDate(today.getDate() - 30);
+  // Overdue = past due date, but not older than 1 month, and not delivered
+  if (!(dueMs < today.getTime() && dueMs >= monthAgo.getTime())) return false;
+  if (state === 'delivered') return false;
+  return true;
+};
+
+const _isNewBooking = (o) => {
+  // New Bookings = no carrier/awb AND order date within 24 hours
+  if (o?.CARRIER && o?.AWB_NUMBER) return false;
+  if (!o?.ORDER_DATE) return false;
+  const msSince = Date.now() - _orderMs(o);
+  return msSince >= 0 && msSince <= 86400000;
+};
+
+const _hasPODUpload = (uploads) =>
+  Array.isArray(uploads) && uploads.some(u => (u.UPLOAD_TYPE || '').toUpperCase() === 'POD');
 
 const CARRIERS_LIST = ['ALL', 'Jetline', 'Trackon', 'Delhivery', 'Shiprocket', 'Airways', 'ST Courier', 'TrackCourier', '17Track'];
 const STATUSES_LIST = ['ALL', 'delivered', 'outfordelivery', 'intransit', 'exception', 'pending'];
@@ -157,51 +198,109 @@ export default function OrdersScreen({
   // Tracking API State
   const [liveTracking, setLiveTracking] = useState(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
+  const [podImageUrl, setPodImageUrl] = useState(null); // POD image viewer modal
+  const [tatQuickFilter, setTatQuickFilter] = useState(null); // 'delivered' | 'outfordelivery' | 'intransit' | null
+
+  // Web parity — state comes from the SHIPMENTS sheet first (shipmentsDataMap),
+  // falling back to the order record (web: `s?.state || s?.STATE || order...`).
+  const getOrderState = (o) => {
+    const s = shipmentsMap[o?.REFERENCE];
+    return (s?.state || s?.STATE || o?.STATE || o?.state || 'pending').toLowerCase();
+  };
+
+  // Web parity (_sortMovements): newest activity_stamp first, then time_stamp.
+  const sortMovements = (movs) => {
+    if (!movs || !movs.length) return [];
+    return movs.map((m, i) => ({ m, i })).sort((a, b) => {
+      const aStamp = a.m.activity_stamp || a.m.ACTIVITY_STAMP || 0;
+      const bStamp = b.m.activity_stamp || b.m.ACTIVITY_STAMP || 0;
+      if (aStamp !== bStamp) return bStamp - aStamp;
+      const aTs = a.m.time_stamp || a.m.TIME_STAMP || 0;
+      const bTs = b.m.time_stamp || b.m.TIME_STAMP || 0;
+      if (aTs !== bTs) return bTs - aTs;
+      return a.i - b.i;
+    }).map(x => x.m);
+  };
+
+  // Web parity (callApi): POST/DELETE to the operations server with the bearer token.
+  const apiCall = async (path, body, method = 'POST') => {
+    const res = await fetch(`${apiBase}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      // Web parity: only POST carries a JSON body (bare DELETE — FastAPI 422s on stray bodies)
+      body: method === 'POST' ? JSON.stringify(body || {}) : undefined,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.status === 'error') throw new Error(json.message || json.detail || `HTTP ${res.status}`);
+    return json;
+  };
+
+  const partyEmails = (o) => [...new Set([b2b2cMap[o?.CONSIGNOR]?.EMAIL, b2b2cMap[o?.CONSIGNEE]?.EMAIL].filter(Boolean))];
+  const partyMobiles = (o) => [b2b2cMap[o?.CONSIGNOR]?.MOBILE, b2b2cMap[o?.CONSIGNEE]?.MOBILE].filter(Boolean).join(',');
 
   const tileCounts = useMemo(() => {
     const counts = { all: orders.length, topay: 0, cod: 0, tat: 0, overduetat: 0, heavy: 0, highvalue: 0, exceptions: 0, 'pending-pod': 0, ofd: 0, 'new-bookings': 0, fov: 0, delivered: 0, 'assign-carrier': 0 };
-    const now = Date.now();
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; // assign-carrier 30-day window
 
     orders.forEach(o => {
-      const state = (o.STATE || o.state || 'pending').toLowerCase();
+      const state = getOrderState(o);
       const isDelivered = state === 'delivered';
       const weight = parseFloat(o.WEIGHT || 0);
       const val = parseFloat(o.VALUE || 0);
 
+      // Exclude delivered from: To Pay, COD, FOV, Heavy, High Value
       if (o.TOPAY === 'Yes' && !isDelivered) counts.topay++;
       if (o.COD && parseFloat(o.COD) > 0 && !isDelivered) counts.cod++;
+      if (_isTatDue(o)) counts.tat++;
+      if (_isOverdueTat(o, state)) counts.overduetat++;
       if (weight > 25 && !isDelivered) counts.heavy++;
       if (val > 100000 && !isDelivered) counts.highvalue++;
       if (state === 'exception') counts.exceptions++;
       if (state === 'outfordelivery') counts.ofd++;
       if (state === 'delivered') counts.delivered++;
+      if (_isNewBooking(o)) counts['new-bookings']++;
       if (o.FOV === 'Yes' && !isDelivered) counts.fov++;
-
-      if (!o.CARRIER || !o.AWB_NUMBER) counts['assign-carrier']++;
-
-      const oDateObj = parseDate(o.ORDER_DATE);
-      const oDateMs = oDateObj ? oDateObj.getTime() : 0;
-      if (!o.CARRIER && !o.AWB_NUMBER && oDateMs && (now - oDateMs <= 86400000)) {
-        counts['new-bookings']++;
-      }
-
-      const tatDays = parseInt(o.TAT || 0);
-      if (tatDays && oDateMs) {
-        const dueMs = oDateMs + tatDays * 86400000;
-        const limitMs = now + 3 * 86400000;
-        if (dueMs >= now && dueMs <= limitMs) counts.tat++;
-        if (dueMs < now && !isDelivered) counts.overduetat++;
-      }
+      if (state === 'delivered' && !_hasPODUpload(uploadsMap[o.REFERENCE])) counts['pending-pod']++;
     });
 
+    // Assign Carrier = no CARRIER/AWB within the last 30 days (web parity)
+    counts['assign-carrier'] = orders.filter(o => {
+      if (o.CARRIER && o.AWB_NUMBER) return false;
+      const orderTs = parseDate(o.ORDER_DATE)?.getTime() || 0;
+      return orderTs >= cutoff;
+    }).length;
+
     return counts;
-  }, [orders]);
+  }, [orders, shipmentsMap, uploadsMap]);
+
+  // Web parity (applyFilters): when NO explicit filters, default the view to the
+  // 1st of the current month (or 1st of the previous month when today ≤ 10th).
+  const implicitDefaultStart = useMemo(() => {
+    const today = new Date();
+    let firstDay;
+    if (today.getDate() <= 10 && today.getMonth() > 0)
+      firstDay = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    else if (today.getDate() <= 10 && today.getMonth() === 0)
+      firstDay = new Date(today.getFullYear() - 1, 11, 1);
+    else
+      firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+    return firstDay.toISOString().split('T')[0];
+  }, []);
+
+  const hasExplicitFilters = filterStatus !== 'ALL' || filterCarrier !== 'ALL' || filterPayMode !== 'ALL' ||
+    filterStartDate !== '' || filterEndDate !== '' || !!searchQuery;
 
   const filteredOrders = useMemo(() => {
+    // Web parity: date bounds — explicit dates, else the implicit month start
+    const effStart = filterStartDate || (!hasExplicitFilters ? implicitDefaultStart : '');
+    const startMs = effStart ? new Date(effStart + 'T00:00:00').getTime() : 0;
+    const endMs = filterEndDate ? new Date(filterEndDate + 'T23:59:59').getTime() : 0;
+
     const list = orders.filter(o => {
-      const state = (o.STATE || o.state || 'pending').toLowerCase();
+      const state = getOrderState(o);
       const isDelivered = state === 'delivered';
 
+      // ── Tile filters (web _tileFilterMatch parity) ──
       if (selectedTile === 'topay' && (o.TOPAY !== 'Yes' || isDelivered)) return false;
       if (selectedTile === 'cod' && (!o.COD || parseFloat(o.COD) <= 0 || isDelivered)) return false;
       if (selectedTile === 'heavy' && (parseFloat(o.WEIGHT || 0) <= 25 || isDelivered)) return false;
@@ -209,46 +308,73 @@ export default function OrdersScreen({
       if (selectedTile === 'exceptions' && state !== 'exception') return false;
       if (selectedTile === 'ofd' && state !== 'outfordelivery') return false;
       if (selectedTile === 'delivered' && state !== 'delivered') return false;
-      if (selectedTile === 'assign-carrier' && (o.CARRIER && o.AWB_NUMBER)) return false;
       if (selectedTile === 'fov' && (o.FOV !== 'Yes' || isDelivered)) return false;
+      if (selectedTile === 'new-bookings' && !_isNewBooking(o)) return false;
+      if (selectedTile === 'pending-pod' && !(state === 'delivered' && !_hasPODUpload(uploadsMap[o.REFERENCE]))) return false;
+      if (selectedTile === 'assign-carrier') {
+        if (o.CARRIER && o.AWB_NUMBER) return false;
+        const orderTs = parseDate(o.ORDER_DATE)?.getTime() || 0;
+        if (orderTs < Date.now() - 30 * 24 * 60 * 60 * 1000) return false; // 30-day window
+      }
+      if (selectedTile === 'tat') {
+        if (!_isTatDue(o)) return false;
+        if (tatQuickFilter) {
+          if (tatQuickFilter === 'intransit') return state && state !== 'delivered' && state !== 'outfordelivery';
+          return state === tatQuickFilter;
+        }
+      }
+      if (selectedTile === 'overduetat') {
+        if (!_isOverdueTat(o, state)) return false;
+        if (tatQuickFilter) {
+          if (tatQuickFilter === 'intransit') return state && state !== 'delivered' && state !== 'outfordelivery';
+          return state === tatQuickFilter;
+        }
+      }
 
+      // ── Advanced filters ──
       if (filterStatus !== 'ALL' && state !== filterStatus) return false;
       if (filterCarrier !== 'ALL' && (o.CARRIER || '').toLowerCase() !== filterCarrier.toLowerCase()) return false;
       if (filterPayMode === 'TOPAY' && o.TOPAY !== 'Yes') return false;
       if (filterPayMode === 'COD' && (!o.COD || parseFloat(o.COD) <= 0)) return false;
       if (filterPayMode === 'PREPAID' && (o.TOPAY === 'Yes' || (o.COD && parseFloat(o.COD) > 0))) return false;
 
-      // Date Range Filtering (GENIE_WEB shipments.js line 466)
+      // ── Date range (web applyFilters parity) ──
       const orderDate = parseDate(o.ORDER_DATE || o.TIME_STAMP);
-      if (filterStartDate) {
-        const startMs = new Date(filterStartDate + 'T00:00:00').getTime();
-        if (!orderDate || orderDate.getTime() < startMs) return false;
-      }
-      if (filterEndDate) {
-        const endMs = new Date(filterEndDate + 'T23:59:59').getTime();
-        if (!orderDate || orderDate.getTime() > endMs) return false;
-      }
+      if (startMs && (!orderDate || orderDate.getTime() < startMs)) return false;
+      if (endMs && (!orderDate || orderDate.getTime() > endMs)) return false;
 
+      // ── Search (web parity: ref/awb/names/cities/pincodes) ──
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
-        const cnor = (b2b2cMap[o.CONSIGNOR]?.NAME || o.CONSIGNOR || '').toLowerCase();
-        const cnee = (b2b2cMap[o.CONSIGNEE]?.NAME || o.CONSIGNEE || '').toLowerCase();
-        const refMatch = (o.REFERENCE || '').toLowerCase().includes(q);
-        const awbMatch = (o.AWB_NUMBER || '').toLowerCase().includes(q);
-        const consMatch = cnee.includes(q) || cnor.includes(q);
-        const origMatch = (o.ORIGIN_CITY || '').toLowerCase().includes(q);
-        const destMatch = (o.DEST_CITY || '').toLowerCase().includes(q);
-        if (!refMatch && !awbMatch && !consMatch && !origMatch && !destMatch) return false;
+        const cnor = b2b2cMap[o.CONSIGNOR] || {};
+        const cnee = b2b2cMap[o.CONSIGNEE] || {};
+        const haystack = [
+          o.REFERENCE, o.AWB_NUMBER, cnor.NAME || o.CONSIGNOR, cnee.NAME || o.CONSIGNEE,
+          cnee.CITY || o.DEST_CITY, cnee.PINCODE || o.DEST_PINCODE, cnor.CITY || o.ORIGIN_CITY,
+        ].filter(Boolean).map(String).join('|').toLowerCase();
+        if (!haystack.includes(q)) return false;
       }
       return true;
     });
 
-    return list.sort((a, b) => {
-      const aTime = parseDate(a.ORDER_DATE || a.TIME_STAMP || a.TRANSIT_DATE)?.getTime() || 0;
-      const bTime = parseDate(b.ORDER_DATE || b.TIME_STAMP || b.TRANSIT_DATE)?.getTime() || 0;
-      return bTime - aTime;
-    });
-  }, [orders, selectedTile, filterStatus, filterCarrier, filterPayMode, filterStartDate, filterEndDate, searchQuery, b2b2cMap]);
+    // ── Web tile-specific sorts (applyFilters parity) ──
+    if (selectedTile === 'tat' || selectedTile === 'overduetat') {
+      list.sort((a, b) => (_orderMs(a) + parseInt(a.TAT || 0, 10) * 86400000) - (_orderMs(b) + parseInt(b.TAT || 0, 10) * 86400000));
+    } else if (selectedTile === 'heavy') {
+      list.sort((a, b) => parseFloat(b.WEIGHT || 0) - parseFloat(a.WEIGHT || 0));
+    } else if (selectedTile === 'highvalue') {
+      list.sort((a, b) => parseFloat(b.VALUE || 0) - parseFloat(a.VALUE || 0));
+    } else {
+      list.sort((a, b) => {
+        const aTime = parseDate(a.ORDER_DATE || a.TIME_STAMP || a.TRANSIT_DATE)?.getTime() || 0;
+        const bTime = parseDate(b.ORDER_DATE || b.TIME_STAMP || b.TRANSIT_DATE)?.getTime() || 0;
+        return bTime - aTime;
+      });
+    }
+    return list;
+  }, [orders, selectedTile, tatQuickFilter, filterStatus, filterCarrier, filterPayMode,
+    filterStartDate, filterEndDate, searchQuery, b2b2cMap, shipmentsMap, uploadsMap,
+    implicitDefaultStart, hasExplicitFilters]);
 
   const activeTileObj = TILES.find(t => t.id === selectedTile) || TILES[0];
   const hasActiveAdvancedFilters = filterStatus !== 'ALL' || filterCarrier !== 'ALL' || filterPayMode !== 'ALL' || filterStartDate !== '' || filterEndDate !== '';
@@ -307,7 +433,11 @@ export default function OrdersScreen({
     if (!ref) return;
     setTrackingLoading(true);
     try {
-      const url = `${apiBase}/api/track?ref=${encodeURIComponent(ref)}${live ? '&live=true' : ''}`;
+      // Web parity (app-api.js): non-live = cached movements via /api/movements,
+      // live = forced carrier scrape via /api/track?live=true
+      const url = live
+        ? `${apiBase}/api/track?ref=${encodeURIComponent(ref)}&live=true`
+        : `${apiBase}/api/movements?ref=${encodeURIComponent(ref)}`;
       const res = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -325,13 +455,165 @@ export default function OrdersScreen({
   useEffect(() => {
     if (currentView === 'detail' && selectedOrder?.REFERENCE) {
       setLiveTracking(null);
+      setPodImageUrl(null); // don't leak a previous order's POD modal into this one
       fetchTrackingHistory(selectedOrder.REFERENCE, false);
     }
   }, [currentView, selectedOrder]);
 
   const handleSelectTile = (tileId) => {
     setSelectedTile(tileId);
+    setTatQuickFilter(null);
     setCurrentView('list');
+  };
+
+  // ── Web-parity Mail / WhatsApp / Delete actions (real API calls) ─────────────
+  const toast = (title, msg) => Alert.alert(title, msg);
+
+  // Escape user fields interpolated into email HTML (harden the mail templates)
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  const resolveFileUrl = (url) => {
+    if (!url) return url;
+    if (/^(https?:|data:|blob:)/.test(url)) return url;
+    return `${apiBase}${url.startsWith('/') ? url : '/' + url}`;
+  };
+
+  const mailShipment = async (o) => {
+    const emails = partyEmails(o);
+    if (!emails.length) { toast('No Email', 'No email address on file for consignor or consignee.'); return; }
+    try {
+      await apiCall('/api/mailOrder', { reference: o.REFERENCE, to: emails.join(','), template: 'SHIPMENT_DETAIL', template_vars: {} });
+      toast('✅ Email sent', `To: ${emails.join(', ')}`);
+    } catch (e) { toast('❌ Mail failed', e.message); }
+  };
+
+  const mailShipmentTracking = async (o) => {
+    const emails = partyEmails(o);
+    if (!emails.length) { toast('No Email', 'No email address on file.'); return; }
+    const s = liveTracking?.shipment || {};
+    const movs = liveTracking?.movements || [];
+    const sc = STATE_CONFIG[(s.state || '').toLowerCase()] || STATE_CONFIG.intransit;
+    const movRows = movs.map(m => `<tr><td style='border:1px solid #ddd;padding:5px'>${esc(m.date)}</td><td style='border:1px solid #ddd;padding:5px'>${esc(m.time)}</td><td style='border:1px solid #ddd;padding:5px'>${esc(m.location)}</td><td style='border:1px solid #ddd;padding:5px'>${esc(m.activity)}</td></tr>`).join('');
+    const movTable = movs.length
+      ? `<table style='border-collapse:collapse;width:100%;font-size:12px'><thead><tr><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Date</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Time</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Location</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Activity</th></tr></thead><tbody>${movRows}</tbody></table>`
+      : '<p style="font-size:12px;color:#999">No movement history available.</p>';
+    try {
+      await apiCall('/api/mailOrder', {
+        reference: o.REFERENCE, to: emails.join(','), template: 'SHIPMENT_TRACKING',
+        template_vars: {
+          STATUS_LABEL: sc.label,
+          STATUS_ROW: s.status_raw ? `<tr><td style='padding:8px 10px;font-weight:bold;background:#f5f5f5'>Status</td><td style='padding:8px 10px'>${esc(s.status_raw)}</td></tr>` : '',
+          ORIGIN_ROW: s.carrier_origin ? `<tr><td style='padding:8px 10px;font-weight:bold'>Origin</td><td style='padding:8px 10px'>${esc(s.carrier_origin)}</td></tr>` : '',
+          DEST_ROW: s.carrier_destination ? `<tr><td style='padding:8px 10px;font-weight:bold;background:#f5f5f5'>Destination</td><td style='padding:8px 10px'>${esc(s.carrier_destination)}</td></tr>` : '',
+          MOV_TABLE: movTable,
+        },
+      });
+      toast('✅ Email sent', `Tracking status to ${emails.join(', ')}`);
+    } catch (e) { toast('❌ Mail failed', e.message); }
+  };
+
+  const mailShipmentUploads = async (o) => {
+    const emails = partyEmails(o);
+    if (!emails.length) { toast('No Email', 'No email address on file.'); return; }
+    const prods = productsMap[o.REFERENCE] || [];
+    const boxes = multiboxMap[o.REFERENCE] || [];
+    const ups = uploadsMap[o.REFERENCE] || uploadsMap[o.AWB_NUMBER] || [];
+    const row = (cells) => `<tr>${cells.map(c => `<td style='border:1px solid #ddd;padding:5px'>${esc(c)}</td>`).join('')}</tr>`;
+    const prodTable = prods.length ? `<h3 style='font-size:13px;color:#1a237e;margin:16px 0 6px'>Products</h3><table style='border-collapse:collapse;width:100%;font-size:12px'><thead><tr><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Product</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Doc#</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>EWay</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Amount</th></tr></thead><tbody>${prods.map(p => row([p.PRODUCT || '', p.DOC_NUMBER || '', p.EWAY_IF || '', parseFloat(p.AMOUNT || 0).toFixed(2)])).join('')}</tbody></table>` : '';
+    const boxTable = boxes.length ? `<h3 style='font-size:13px;color:#1a237e;margin:16px 0 6px'>MultiBox</h3><table style='border-collapse:collapse;width:100%;font-size:12px'><thead><tr><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Box#</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Weight</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>L×B×H</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>ChgWt</th></tr></thead><tbody>${boxes.map(b => row([b.BOX_NUM || '', b.WEIGHT || 0, `${parseFloat(b.LENGTH || 0)}×${parseFloat(b.BREADTH || 0)}×${parseFloat(b.HIGHT || 0)}`, parseFloat(b.CHG_WT || 0).toFixed(2)])).join('')}</tbody></table>` : '';
+    const uplTable = ups.length ? `<h3 style='font-size:13px;color:#1a237e;margin:16px 0 6px'>Uploads</h3><table style='border-collapse:collapse;width:100%;font-size:12px'><thead><tr><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Type</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Doc#/ID</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Details</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Date</th></tr></thead><tbody>${ups.map(u => {
+      const idt = u.AWB_NUMBER || u.KYC_NUMBER || u.REFERENCE || '';
+      let det = u.STATUS_REMARK || '';
+      if (u.UPLOAD_TYPE === 'MultiBox') det = `Child:${u.CHILD_AWB || ''}`;
+      else if (u.UPLOAD_TYPE === 'KYC') det = `${u.CUSTOMER_UID || ''}(${u.KYC_TYPE || ''})`;
+      else if (u.UPLOAD_TYPE === 'Product') det = `${u.DOC_NUMBER || ''}(${u.DOC_TYPE || ''})`;
+      return row([u.UPLOAD_TYPE || '', idt, det, u.TIME_STAMP || '']);
+    }).join('')}</tbody></table>` : '';
+    try {
+      await apiCall('/api/mailOrder', {
+        reference: o.REFERENCE, to: emails.join(','), template: 'SHIPMENT_UPLOADS',
+        template_vars: { PRODUCTS_TABLE: prodTable, MULTIBOX_TABLE: boxTable, UPLOADS_TABLE: uplTable },
+      });
+      toast('✅ Email sent', `Uploads summary to ${emails.join(', ')}`);
+    } catch (e) { toast('❌ Mail failed', e.message); }
+  };
+
+  const waOrder = async (o, payload) => {
+    try {
+      const res = await apiCall('/api/waOrder', { reference: o.REFERENCE, to: partyMobiles(o), audience: 'b2b', ...payload });
+      toast('✅ WhatsApp sent', (res.sent_to || []).join(', ') || 'Message delivered');
+    } catch (e) { toast('❌ WhatsApp failed', e.message); }
+  };
+
+  const waShipment = (o) => waOrder(o, { template: 'SHIPMENT_DETAIL' });
+
+  const waShipmentTracking = (o) => {
+    const s = liveTracking?.shipment || {};
+    const movs = liveTracking?.movements || [];
+    const sc = STATE_CONFIG[(s.state || '').toLowerCase()] || STATE_CONFIG.intransit;
+    const movText = movs.slice(0, 10).map(m => `  ${[m.date, m.time].filter(Boolean).join(' ')} | ${m.location || ''} | ${m.activity || ''}`).join('\n') || 'No history';
+    return waOrder(o, {
+      template: 'SHIPMENT_TRACKING',
+      template_vars: {
+        status: sc.label + (s.status_raw ? ` — ${s.status_raw}` : ''),
+        origin_line: s.carrier_origin ? `Origin: ${s.carrier_origin}\n` : '',
+        dest_line: s.carrier_destination ? `Dest: ${s.carrier_destination}\n` : '',
+        movements: movText,
+      },
+    });
+  };
+
+  const waShipmentUploads = (o) => {
+    const ups = uploadsMap[o.REFERENCE] || uploadsMap[o.AWB_NUMBER] || [];
+    const uploadTypes = [...new Set(ups.map(u => u.UPLOAD_TYPE).filter(Boolean))].join(', ') || 'None';
+    const fileUrls = ups.filter(u => u.FILE_URL).map(u => ({
+      url: u.FILE_URL, caption: `${u.UPLOAD_TYPE} — ${o.AWB_NUMBER || o.REFERENCE}`, filename: u.FILE_URL.split('/').pop(),
+    }));
+    return waOrder(o, { template: 'SHIPMENT_UPLOADS', template_vars: { upload_types: uploadTypes }, file_urls: fileUrls });
+  };
+
+  // Per-doc WhatsApp (web _waSelectedShipmentDoc parity — 'Reciept' is the backend typo)
+  const waDoc = (o, docType) => {
+    const typeMap = { 'Receipt': 'Reciept', 'POD': 'POD', 'Label': null, 'Office Copy': null, 'Docs + Box': null };
+    const uploadType = typeMap[docType];
+    const ups = uploadsMap[o.REFERENCE] || uploadsMap[o.AWB_NUMBER] || [];
+    const relevant = uploadType ? ups.filter(u => u.UPLOAD_TYPE === uploadType && u.FILE_URL) : [];
+    return waOrder(o, {
+      template: 'SHIPMENT_DETAIL',
+      file_urls: relevant.map(u => ({ url: u.FILE_URL, caption: `${docType} — ${o.AWB_NUMBER || o.REFERENCE}`, filename: u.FILE_URL.split('/').pop() })),
+    });
+  };
+
+  const deleteOrder = (o) => {
+    Alert.alert('Delete order', `Delete order ${o.REFERENCE}? This cannot be undone.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive', onPress: async () => {
+          try {
+            await apiCall('/api/deleteOrder', { reference: o.REFERENCE });
+            toast('✅ Deleted', `Order ${o.REFERENCE} deleted`);
+            setCurrentView('tiles');
+            setSelectedOrder(null);
+            if (onRefresh) onRefresh();
+          } catch (e) { toast('❌ Delete failed', e.message); }
+        },
+      },
+    ]);
+  };
+
+  const deleteUpload = (up) => {
+    Alert.alert('Delete upload', 'Permanently remove this upload file?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive', onPress: async () => {
+          try {
+            await apiCall(`/api/upload/${up.UPLOAD_UID}`, {}, 'DELETE');
+            toast('✅ Deleted', 'Upload record removed');
+            if (onRefresh) onRefresh();
+          } catch (e) { toast('❌ Delete failed', e.message); }
+        },
+      },
+    ]);
   };
 
   const handleSelectOrder = (order) => {
@@ -440,6 +722,29 @@ export default function OrdersScreen({
           </View>
         )}
 
+        {/* ── TAT Quick Filters (web _renderTatQuickFilters parity) ── */}
+        {(selectedTile === 'tat' || selectedTile === 'overduetat') && (
+          <View style={styles.tatPillsRow}>
+            {[
+              { key: 'delivered', label: 'Delivered' },
+              { key: 'outfordelivery', label: 'OFD' },
+              { key: 'intransit', label: 'In Transit' },
+            ].map(p => (
+              <TouchableOpacity
+                key={p.key}
+                style={[styles.tatPill, tatQuickFilter === p.key && styles.tatPillActive]}
+                onPress={() => setTatQuickFilter(tatQuickFilter === p.key ? null : p.key)}
+              >
+                <Text style={[styles.tatPillText, tatQuickFilter === p.key && styles.tatPillTextActive]}>{p.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {!hasExplicitFilters && (
+          <Text style={styles.defaultViewNote}>Default view from {implicitDefaultStart} — use filters to widen</Text>
+        )}
+
         <FlatList
           data={filteredOrders}
           keyExtractor={(item, index) => item.REFERENCE || item.id || index.toString()}
@@ -449,6 +754,7 @@ export default function OrdersScreen({
             <WebShipmentListItem
               order={item}
               b2b2cMap={b2b2cMap}
+              shipmentsMap={shipmentsMap}
               isSelected={selectedOrder?.REFERENCE === item.REFERENCE}
               onPress={() => handleSelectOrder(item)}
             />
@@ -652,7 +958,7 @@ export default function OrdersScreen({
   // ────────────────────────────────────────────────────────────────────────────
   if (currentView === 'detail' && selectedOrder) {
     const o = selectedOrder;
-    const stateRaw = (o.STATE || o.state || 'pending').toLowerCase();
+    const stateRaw = getOrderState(o);
     const stateCfg = STATE_CONFIG[stateRaw] || STATE_CONFIG.pending;
 
     const cnorObj = b2b2cMap[o.CONSIGNOR] || {};
@@ -683,7 +989,8 @@ export default function OrdersScreen({
     const boxes     = multiboxMap[o.REFERENCE] || o.multibox || [];
     const uploads   = uploadsMap[o.REFERENCE] || uploadsMap[o.AWB_NUMBER] || o.uploads || o.UPLOADS || [];
     const shipment  = liveTracking?.shipment || shipmentsMap[o.REFERENCE] || {};
-    const movements = liveTracking?.movements || shipment.movements || o.movements || [];
+    // Web parity (_sortMovements): newest activity_stamp first, then time_stamp
+    const movements = sortMovements(liveTracking?.movements || shipment.movements || o.movements || []);
 
     const buildOrderText = () => {
       const totalChgWt = boxes.reduce((s, b) => s + parseFloat(b.CHG_WT || 0), 0);
@@ -716,8 +1023,8 @@ export default function OrdersScreen({
       Alert.alert('✅ Copied', 'Shipment details copied to clipboard!');
     };
 
-    const handleShare = () => {
-      Alert.alert('Share', `Sharing shipment details for Ref: ${o.REFERENCE}`);
+    const handleShare = async () => {
+      try { await Share.share({ message: buildOrderText() }); } catch (e) { /* dismissed */ }
     };
 
     const shipmentDetailsTable = [
@@ -764,10 +1071,10 @@ export default function OrdersScreen({
               <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Download All', 'Download all docs')} title="Download All">
                 <DownloadIcon size={14} color="#64748b" />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Mail All', 'Mail all docs')} title="Mail All">
+              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => mailShipment(o)} title="Mail All">
                 <MailIcon size={14} color="#64748b" />
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => Alert.alert('WhatsApp All', 'Sending WhatsApp')} title="WhatsApp All">
+              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waShipment(o)} title="WhatsApp All">
                 <WhatsAppIcon size={14} color="#25D366" />
               </TouchableOpacity>
             </View>
@@ -781,13 +1088,13 @@ export default function OrdersScreen({
                   <TouchableOpacity style={styles.docItemBtn} onPress={() => Alert.alert('Print', `Print ${item.label}`)}>
                     <PrintIcon size={13} color="#64748b" />
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.docItemBtn} onPress={() => Alert.alert('Mail', `Mail ${item.label}`)}>
+                  <TouchableOpacity style={styles.docItemBtn} onPress={() => mailShipment(o)}>
                     <MailIcon size={13} color="#64748b" />
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.docItemBtn} onPress={() => Alert.alert('Download', `Download ${item.label}`)}>
+                  <TouchableOpacity style={styles.docItemBtn} onPress={() => Alert.alert('Download', `Download ${item.label} — available on web`)}>
                     <DownloadIcon size={13} color="#64748b" />
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.docItemBtn, { backgroundColor: '#dcfce7' }]} onPress={() => Alert.alert('WhatsApp', `WhatsApp ${item.label}`)}>
+                  <TouchableOpacity style={[styles.docItemBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waDoc(o, item.label)}>
                     <WhatsAppIcon size={13} color="#25D366" />
                   </TouchableOpacity>
                 </View>
@@ -812,13 +1119,13 @@ export default function OrdersScreen({
               <TouchableOpacity style={styles.docHeaderActionBtn} onPress={handleShare} title="Share">
                 <ShareIcon size={14} color="#64748b" />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Email', 'Emailing shipment details')} title="Email">
+              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => mailShipment(o)} title="Email">
                 <MailIcon size={14} color="#64748b" />
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => Alert.alert('WhatsApp', 'WhatsApp shipment details')} title="WhatsApp">
+              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waShipment(o)} title="WhatsApp">
                 <WhatsAppIcon size={14} color="#25D366" />
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#fef2f2' }]} onPress={() => Alert.alert('Delete', 'Delete order ' + o.REFERENCE)} title="Delete">
+              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#fef2f2' }]} onPress={() => deleteOrder(o)} title="Delete">
                 <DeleteIcon size={14} color="#ef4444" />
               </TouchableOpacity>
             </View>
@@ -874,10 +1181,10 @@ export default function OrdersScreen({
               </TouchableOpacity>
               {uploads.length > 0 && (
                 <>
-                  <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Mail All', 'Mailing upload documents...')} title="Mail All">
+                  <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => mailShipmentUploads(o)} title="Mail All">
                     <MailIcon size={14} color="#64748b" />
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => Alert.alert('WhatsApp All', 'Sending WhatsApp')} title="WhatsApp All">
+                  <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waShipmentUploads(o)} title="WhatsApp All">
                     <WhatsAppIcon size={14} color="#25D366" />
                   </TouchableOpacity>
                 </>
@@ -976,17 +1283,17 @@ export default function OrdersScreen({
                         <View style={styles.uploadActionRow}>
                           {up.FILE_URL ? (
                             <>
-                              <TouchableOpacity style={styles.uploadActionBtn} onPress={() => Linking.openURL(up.FILE_URL)}>
+                              <TouchableOpacity style={styles.uploadActionBtn} onPress={() => Linking.openURL(resolveFileUrl(up.FILE_URL))}>
                                 <EyeIcon size={13} color="#0284c7" />
                                 <Text style={styles.uploadActionBtnText}>View</Text>
                               </TouchableOpacity>
-                              <TouchableOpacity style={styles.uploadActionBtn} onPress={() => Linking.openURL(up.FILE_URL)}>
+                              <TouchableOpacity style={styles.uploadActionBtn} onPress={() => Linking.openURL(resolveFileUrl(up.FILE_URL))}>
                                 <DownloadIcon size={13} color="#0284c7" />
                                 <Text style={styles.uploadActionBtnText}>Download</Text>
                               </TouchableOpacity>
                             </>
                           ) : null}
-                          <TouchableOpacity style={[styles.uploadActionBtn, { borderColor: '#fca5a5' }]} onPress={() => Alert.alert('Delete', 'Delete upload record')}>
+                          <TouchableOpacity style={[styles.uploadActionBtn, { borderColor: '#fca5a5' }]} onPress={() => deleteUpload(up)}>
                             <DeleteIcon size={13} color="#ef4444" />
                             <Text style={[styles.uploadActionBtnText, { color: '#ef4444' }]}>Delete</Text>
                           </TouchableOpacity>
@@ -1010,15 +1317,24 @@ export default function OrdersScreen({
               </View>
             </View>
             <View style={styles.actionIconGroup}>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => Alert.alert('Mail', 'Mailing tracking status...')} title="Mail">
+              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => mailShipmentTracking(o)} title="Mail">
                 <MailIcon size={14} color="#64748b" />
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => Alert.alert('WhatsApp', 'WhatsApp tracking status...')} title="WhatsApp">
+              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waShipmentTracking(o)} title="WhatsApp">
                 <WhatsAppIcon size={14} color="#25D366" />
               </TouchableOpacity>
               <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => fetchTrackingHistory(o.REFERENCE, true)} title="Refresh Live Tracking">
                 <RefreshIcon size={14} color="#64748b" />
               </TouchableOpacity>
+              {shipment.pod_image ? (
+                <TouchableOpacity
+                  style={[styles.docHeaderActionBtn, { backgroundColor: '#e0e7ff' }]}
+                  onPress={() => setPodImageUrl(shipment.pod_image.startsWith('data:') ? shipment.pod_image : resolveFileUrl(shipment.pod_image))}
+                  title="Show POD Image"
+                >
+                  <EyeIcon size={14} color="#4f46e5" />
+                </TouchableOpacity>
+              ) : null}
             </View>
           </View>
 
@@ -1095,6 +1411,28 @@ export default function OrdersScreen({
                 </View>
               </View>
             ) : null}
+
+            {shipment.booked_date ? (
+              <View style={styles.webTableCellRow}>
+                <View style={styles.webTableCellLabelBox}>
+                  <Text style={styles.webTableCellLabelText}>Booked</Text>
+                </View>
+                <View style={styles.webTableCellValueBox}>
+                  <Text style={styles.webTableCellValueText}>{shipment.booked_date}</Text>
+                </View>
+              </View>
+            ) : null}
+
+            {shipment.additional_info ? (
+              <View style={[styles.webTableCellRow, { width: '100%' }]}>
+                <View style={[styles.webTableCellLabelBox, { width: '25%' }]}>
+                  <Text style={styles.webTableCellLabelText}>Info</Text>
+                </View>
+                <View style={[styles.webTableCellValueBox, { width: '75%' }]}>
+                  <Text style={styles.webTableCellValueText}>{shipment.additional_info}</Text>
+                </View>
+              </View>
+            ) : null}
           </View>
         </View>
 
@@ -1122,6 +1460,23 @@ export default function OrdersScreen({
             ))
           )}
         </View>
+
+        {/* ── POD Image Viewer (web _showPodImage parity) ── */}
+        <Modal
+          visible={podImageUrl !== null}
+          animationType="fade"
+          transparent={true}
+          onRequestClose={() => setPodImageUrl(null)}
+        >
+          <View style={styles.podModalOverlay}>
+            <TouchableOpacity style={styles.podModalClose} onPress={() => setPodImageUrl(null)}>
+              <Text style={styles.podModalCloseText}>✕ Close</Text>
+            </TouchableOpacity>
+            {podImageUrl ? (
+              <Image source={{ uri: podImageUrl }} style={styles.podImage} resizeMode="contain" />
+            ) : null}
+          </View>
+        </Modal>
       </ScrollView>
     );
   }
@@ -1130,7 +1485,7 @@ export default function OrdersScreen({
 }
 
 // ── Web Shipment List Item ─────────────────────────────────────────────────────
-function WebShipmentListItem({ order, b2b2cMap, isSelected, onPress }) {
+function WebShipmentListItem({ order, b2b2cMap, shipmentsMap = {}, isSelected, onPress }) {
   const ref = order.REFERENCE || 'N/A';
   const awb = order.AWB_NUMBER || 'No AWB';
 
@@ -1140,7 +1495,9 @@ function WebShipmentListItem({ order, b2b2cMap, isSelected, onPress }) {
   const cnor = cnorObj.NAME || order.CONSIGNOR || 'Unknown';
   const cnee = cneeObj.NAME || order.CONSIGNEE || 'Unknown';
 
-  const stateRaw = (order.STATE || order.state || 'pending').toLowerCase();
+  // Web parity — state badge from the SHIPMENTS sheet first (shipmentsDataMap)
+  const shipState = shipmentsMap[order.REFERENCE];
+  const stateRaw = (shipState?.state || shipState?.STATE || order.STATE || order.state || 'pending').toLowerCase();
   const stateCfg = STATE_CONFIG[stateRaw] || STATE_CONFIG.pending;
   const dateStr = fmtDate(order.ORDER_DATE || order.TIME_STAMP, 'display');
 
@@ -1307,6 +1664,21 @@ const styles = StyleSheet.create({
   emptyBox: { alignItems: 'center', padding: 30 },
   emptyIcon: { fontSize: 36, marginBottom: 8 },
   emptyTitle: { fontSize: 15, fontWeight: '800', color: '#1e293b' },
+
+  // TAT Quick Filters (web _renderTatQuickFilters parity)
+  tatPillsRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
+  tatPill: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 20, borderWidth: 1, borderColor: '#cbd5e1', backgroundColor: '#ffffff', opacity: 0.7 },
+  tatPillActive: { opacity: 1, borderColor: COLORS.primary, backgroundColor: '#fff8f6' },
+  tatPillText: { fontSize: 11, fontWeight: '700', color: '#475569' },
+  tatPillTextActive: { color: COLORS.primary },
+
+  defaultViewNote: { fontSize: 10.5, color: '#64748b', fontStyle: 'italic', marginBottom: 8 },
+
+  // POD Image Viewer (web _showPodImage parity)
+  podModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
+  podModalClose: { position: 'absolute', top: 46, right: 16, zIndex: 2, backgroundColor: '#ffffff', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
+  podModalCloseText: { fontSize: 13, fontWeight: '800', color: '#b91c1c' },
+  podImage: { width: '94%', height: '72%' },
 
   // Modal Styles
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 },

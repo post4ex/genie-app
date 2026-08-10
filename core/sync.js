@@ -307,9 +307,9 @@ export async function pullDeltaSince(token, sinceMs, retryCount = 0) {
     return true;
   } catch (e) {
     console.warn('[Sync] pullDeltaSince error:', e.message);
-    // Web parity: retry with backoff (up to 3 attempts)
-    if (retryCount < 3) {
-      const delay = Math.min(10000, Math.pow(2, retryCount) * 1000);
+    // Web parity: retry with backoff (up to 5 attempts, min(30s, 2^n·1s + jitter))
+    if (retryCount < 5) {
+      const delay = Math.min(30000, Math.pow(2, retryCount) * 1000 + Math.random() * 1000);
       await new Promise(r => setTimeout(r, delay));
       return pullDeltaSince(token, sinceMs, retryCount + 1);
     }
