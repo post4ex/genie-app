@@ -29,6 +29,14 @@ export async function streamSync(token, completedLayers = [], onProgress = null)
   if (!token) return null;
   if (_streamInProgress) return -1; // already running — distinct from failure
   _streamInProgress = true;
+  // Stall watchdog: if the stream produces no bytes for 60s, abort it so a hung
+  // connection can never hold syncInProgressRef/_streamInProgress forever (which
+  // would otherwise buffer all SSE deltas and gate catch-ups indefinitely).
+  const controller = new AbortController();
+  let lastDataAt = Date.now();
+  const stallTimer = setInterval(() => {
+    if (Date.now() - lastDataAt > 60000) controller.abort();
+  }, 10000);
   try {
     const res = await fetch(`${API_BASE}/api/sync/stream`, {
       method: 'POST',
@@ -36,7 +44,8 @@ export async function streamSync(token, completedLayers = [], onProgress = null)
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ completed_layers: completedLayers })
+      body: JSON.stringify({ completed_layers: completedLayers }),
+      signal: controller.signal
     });
     if (!res.ok) throw new Error(`Stream HTTP ${res.status}`);
     if (!res.body || typeof res.body.getReader !== 'function') {
@@ -63,6 +72,7 @@ export async function streamSync(token, completedLayers = [], onProgress = null)
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      lastDataAt = Date.now();
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();
@@ -99,6 +109,7 @@ export async function streamSync(token, completedLayers = [], onProgress = null)
     console.warn('[Sync] streamSync failed:', e.message);
     return null;
   } finally {
+    clearInterval(stallTimer);
     _streamInProgress = false;
   }
 }

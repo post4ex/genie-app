@@ -23,7 +23,7 @@ import {
   Comfortaa_700Bold,
 } from '@expo-google-fonts/comfortaa';
 
-import { API_BASE, ROLE_LEVELS } from './core/config';
+import { API_BASE, ROLE_LEVELS, SHEET_KEYS } from './core/config';
 import { COLORS } from './styles/theme';
 import {
   saveSession, getSession, removeSession,
@@ -66,7 +66,6 @@ function MainApp() {
   const sseRef = useRef(null);
   const tokenRef = useRef('');
   const syncInProgressRef = useRef(false);
-  const deltaBufferRef = useRef([]);   // deltas deferred while a full sync is mid-flight
   const deltaChainRef = useRef(Promise.resolve()); // serialize delta writes
 
   useEffect(() => { tokenRef.current = token; }, [token]);
@@ -140,9 +139,25 @@ function MainApp() {
     const b2bClientsList = Array.isArray(rawB2b) ? rawB2b : Object.values(rawB2b || {});
     setB2bList(b2bClientsList);
 
-    const ordersList = Array.isArray(rawOrders)
+    const rawOrdersList = Array.isArray(rawOrders)
       ? rawOrders
       : Object.values(rawOrders || {});
+
+    // Collapse duplicates by REFERENCE, keeping the freshest TIME_STAMP. The web's
+    // bulkMerge re-keys every record by keyPath so duplicates can never exist there;
+    // this mirrors that guarantee for any legacy/wrong-key rows in local storage.
+    const seenRefs = new Set();
+    const ordersList = [];
+    [...rawOrdersList]
+      .sort((a, b) => (Number(b?.TIME_STAMP || 0) - Number(a?.TIME_STAMP || 0)))
+      .forEach(o => {
+        const ref = o?.REFERENCE;
+        if (ref != null) {
+          if (seenRefs.has(ref)) return;
+          seenRefs.add(ref);
+        }
+        ordersList.push(o);
+      });
 
     // Build lookup maps by key (UID, CODE, REFERENCE)
     const b2b2cLookup = {};
@@ -222,7 +237,11 @@ function MainApp() {
     if (!collection) return;
     try {
       if (action === 'upsert' || action === 'create' || action === 'update') {
-        const recKey = key || data?.REFERENCE || data?.id || data?.PB_ID;
+        // Web bulkMerge parity: re-key by the sheet's keyPath (e.g. REFERENCE for
+        // ORDERS), ignoring the server's object key — a record can never land under
+        // two keys (duplicate rows). Same rule pullDeltaSince/streamSync use.
+        const keyPath = SHEET_KEYS[collection] || 'id';
+        const recKey = data?.[keyPath] || data?.REFERENCE || data?.id || data?.PB_ID || key;
         // putSheetNewer = web bulkMerge _checkAndPut: never clobber a fresher record
         if (recKey && data) await putSheetNewer(collection, { [recKey]: data });
       } else if (action === 'delete') {
@@ -263,18 +282,6 @@ function MainApp() {
     } catch (_) {}
   };
 
-  // Flush deltas that arrived while a full sync was overwriting sheets (web _sseBuffer).
-  // Runs through the same serialized chain as live deltas to avoid interleaved writes.
-  const flushDeltaBuffer = async (authToken) => {
-    const queued = deltaBufferRef.current.splice(0);
-    if (!queued.length) return;
-    deltaChainRef.current = deltaChainRef.current
-      .then(async () => { for (const d of queued) await applyDeltaToStorage(d); })
-      .then(() => reloadLocalState())
-      .catch(() => {});
-    await deltaChainRef.current;
-  };
-
   const handleSSEEvent = async (authToken, payload) => {
     const type = payload?.type;
     if (type === 'heartbeat' || type === 'system_status') return; // keep-alive — no data work
@@ -287,13 +294,17 @@ function MainApp() {
       } finally {
         syncInProgressRef.current = false;
       }
-      await flushDeltaBuffer(authToken); // also reloads local state
+      await reloadLocalState();
       setSyncStatus('live');
       return;
     }
     if (type === 'delta') {
-      // Defer while a full sync is mid-flight so the sync can't clobber fresh data
-      if (syncInProgressRef.current) { deltaBufferRef.current.push(payload); return; }
+      // Apply immediately — NEVER buffer behind a running sync. Every write here
+      // and in streamSync/fullSync is TIME_STAMP-guarded via putSheetNewer, so a
+      // live delta can't be clobbered by the sync (or vice versa). Buffering behind
+      // syncInProgressRef previously swallowed bookings made mid-sync: the
+      // notification still arrived (ungated) but the ORDERS delta sat in the
+      // buffer until the (possibly long) stream finished — order list never updated.
       deltaChainRef.current = deltaChainRef.current
         .then(() => applyDeltaToStorage(payload))
         .then(() => reloadLocalState())
@@ -391,7 +402,6 @@ function MainApp() {
       syncOk = (await fullSync(authToken)) !== null;
     } finally {
       syncInProgressRef.current = false;
-      await flushDeltaBuffer(authToken);
     }
     await reloadLocalState();
     setSyncStatus(syncOk ? 'live' : 'reconnecting');
@@ -478,7 +488,6 @@ function MainApp() {
       await fullSync(token);
     } finally {
       syncInProgressRef.current = false;
-      await flushDeltaBuffer(token);
     }
     await reloadLocalState();
     setRefreshing(false);
@@ -577,10 +586,16 @@ function MainApp() {
         const list = Array.isArray(rawOrders) ? rawOrders : Object.values(rawOrders || {});
         if (list.some(o => String(o.REFERENCE) === String(ref))) return true;
       } catch (_) {}
-      // Light catch-up so the order lands even if the SSE stream is momentarily down
-      poll += 1;
-      if (poll % 2 === 1 && tokenRef.current) runDeltaCatchup(tokenRef.current);
-      await new Promise(r => setTimeout(r, 500));
+      // Light catch-up so the order lands even if the SSE stream is momentarily down.
+    // Ungated: runDeltaCatchup bails while a sync is mid-flight — exactly when a
+    // booked order's event can be stuck. pullDeltaSince uses TIME_STAMP-guarded
+    // merges, so it is safe to run alongside a sync.
+    poll += 1;
+    if (poll % 2 === 1 && tokenRef.current) {
+      const since = (await getLastEventStamp()) || (await getLastSyncTime());
+      if (since) pullDeltaSince(tokenRef.current, since).catch(() => {});
+    }
+    await new Promise(r => setTimeout(r, 500));
     }
     return false;
   };
