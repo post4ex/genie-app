@@ -2,7 +2,7 @@
   "expo": {
     "name": "Genie",
     "slug": "genie",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -35,6 +35,6 @@
       "fallbackToCacheTimeout": 0,
       "url": "https://raw.githubusercontent.com/post4ex/genie-app/main/dist/android-index.json"
     },
-    "runtimeVersion": "1.0.3"
+    "runtimeVersion": "1.0.4"
   }
 }
