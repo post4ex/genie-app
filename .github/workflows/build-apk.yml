@@ -40,6 +40,8 @@ jobs:
         run: npx expo prebuild --platform android --no-install
 
       - name: Build Release APK with Gradle
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+UseG1GC'"
         run: |
           cd android
           chmod +x gradlew
