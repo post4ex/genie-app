@@ -16,5 +16,6 @@ web-build/
 *.apk
 *.aab
 *.keystore
+!android/app/debug.keystore
 .DS_Store
 *.log
