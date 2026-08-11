@@ -30,8 +30,20 @@ const recordKey = (collection, record, fallback = '') => {
 const recordId = (record) => asString(record?.id);
 const recordPbId = (record) => asString(record?.PB_ID);
 const recordTimestamp = (record) => {
-  const value = Number(record?.TIME_STAMP ?? record?.time_stamp ?? 0);
-  return Number.isFinite(value) ? value : 0;
+  const raw = (
+    record?.TIME_STAMP
+    ?? record?.time_stamp
+    ?? record?.ORDER_DATE
+    ?? record?.TXN_DATE
+    ?? record?.DOX_DATE
+    ?? record?.ATTEN_DATE
+    ?? record?.HOLIDAY_DATE
+    ?? 0
+  );
+  let val = Number(raw);
+  if (!Number.isFinite(val)) return 0;
+  if (val > 0 && val < 1e11) val *= 1000;
+  return val;
 };
 
 const parsePayload = (value) => {

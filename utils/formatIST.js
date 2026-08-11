@@ -27,7 +27,9 @@ export function parseDate(val) {
     if (val instanceof Date) return isNaN(val) ? null : val;
 
     if (typeof val === 'number' || (typeof val === 'string' && /^\d{10,}(\.\d+)?$/.test(val.trim()))) {
-        const d = new Date(Math.trunc(Number(val)));
+        let num = Math.trunc(Number(val));
+        if (num > 0 && num < 1e11) num *= 1000;
+        const d = new Date(num);
         return isNaN(d) ? null : d;
     }
 

@@ -35,7 +35,9 @@ export default function DashboardScreen({ orders, shipmentsMap = {}, refreshing,
       const ts = o.ORDER_DATE || o.TIME_STAMP || o.REQ_TIME;
       if (!ts) return false;
       try {
-        const orderDate = new Date(ts).toISOString().split('T')[0];
+        const num = Number(ts);
+        const validTs = Number.isFinite(num) ? (num < 1e11 ? num * 1000 : num) : ts;
+        const orderDate = new Date(validTs).toISOString().split('T')[0];
         return orderDate === isoDate;
       } catch (e) {
         return false;
