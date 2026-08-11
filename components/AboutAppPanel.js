@@ -13,6 +13,18 @@ const CURRENT_VERSION = `v${packageJson.version}`;
 // Updates History / Changelog Timeline
 const UPDATE_HISTORY = [
   {
+    version: 'v1.0.11',
+    date: '11 Aug 2026',
+    type: 'OTA Update',
+    tagColor: '#3b82f6',
+    tagBg: '#dbeafe',
+    changes: [
+      'Fixed SQLite date parsing to restore all 732 orders',
+      'Enabled automatic 5-minute background count audit & parity recovery',
+      'Instant Over-The-Air bundle auto-update without re-installing APK',
+    ],
+  },
+  {
     version: 'v1.0.9',
     date: '11 Aug 2026',
     type: 'Native & OTA',
