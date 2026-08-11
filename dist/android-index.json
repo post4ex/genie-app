@@ -1,10 +1,10 @@
 {
-  "id": "c05644fedbcc54be29670475832a64dd",
-  "createdAt": "2026-08-11T18:26:56.000Z",
+  "id": "604d275a277eb624994e22f6bd2a7576",
+  "createdAt": "2026-08-11T18:32:39.000Z",
   "runtimeVersion": "1.0.10",
   "launchAsset": {
-    "url": "https://raw.githubusercontent.com/post4ex/genie-app/main/dist/_expo/static/js/android/index-c05644fedbcc54be29670475832a64dd.hbc",
-    "key": "c05644fedbcc54be29670475832a64dd",
+    "url": "https://raw.githubusercontent.com/post4ex/genie-app/main/dist/_expo/static/js/android/index-604d275a277eb624994e22f6bd2a7576.hbc",
+    "key": "604d275a277eb624994e22f6bd2a7576",
     "contentType": "application/javascript"
   },
   "assets": [

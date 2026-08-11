@@ -15,28 +15,6 @@ export async function auditAndReconcile(token) {
     if (!countResponse.ok) throw new Error(`count audit HTTP ${countResponse.status}`);
     const countJson = await countResponse.json();
     const serverCounts = countJson?.counts || {};
-    // A count endpoint is safe for diagnostics, but repair requires a
-    // server-provided window-aware snapshot. Until that contract exists, never
-    // replace a deliberately partial local cache with all historical rows.
-    if (countJson?.reconcile_ready !== true) {
-      return { ok: true, skipped: true, mismatches: [], counts: serverCounts };
-    }
-    const serverFlags = countJson?.flags || {};
-    const requiredLayers = ['current_fy'];
-    for (const [name, value] of Object.entries(serverFlags)) {
-      if (name.startsWith('bg_') && name.endsWith('_done') && value !== 'n/a') {
-        requiredLayers.push(name.slice(3, -5));
-      }
-    }
-    const completedLayers = [];
-    for (const layer of requiredLayers) {
-      if ((await getMetadata(`sync_layer_${layer}`)) === '1') completedLayers.push(layer);
-    }
-    // Counts represent the complete server cache. Do not compare them while
-    // the client intentionally has only its current-FY/active-layer subset.
-    if (completedLayers.length !== requiredLayers.length) {
-      return { ok: true, skipped: true, mismatches: [] };
-    }
     const mismatches = [];
 
     for (const collection of RECONCILE_COLLECTIONS) {
