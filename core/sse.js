@@ -156,7 +156,7 @@ export class SSEListener {
     es.addEventListener('error', (event) => {
       this.connected = false;
       // 401/403 → session dead — logout (web sse-worker broadcasts logout).
-      const status = event?.xhrStatus;
+      const status = Number(event?.xhrStatus ?? event?.status ?? event?.statusCode);
       if (status === 401 || status === 403) {
         this.stop();
         if (this.onError) this.onError('UNAUTHORIZED');

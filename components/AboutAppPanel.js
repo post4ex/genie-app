@@ -5,49 +5,50 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Updates from 'expo-updates';
+import packageJson from '../package.json';
 import { COLORS } from '../styles/theme';
 
-const CURRENT_VERSION = 'v1.0.3';
+const CURRENT_VERSION = `v${packageJson.version}`;
 
 // Updates History / Changelog Timeline
 const UPDATE_HISTORY = [
   {
-    version: 'v1.0.3',
-    date: '10 Aug 2026',
+    version: 'v1.0.9',
+    date: '11 Aug 2026',
     type: 'Native & OTA',
     tagColor: '#16a34a',
     tagBg: '#dcfce7',
+    changes: [
+      'Sub-second SQLite batch upsert optimization (bulk Map pre-fetching)',
+      'Mobile AppState foreground resume event catch-up listener',
+      'Periodic 5-minute client parity audit & targeted recovery',
+      'Dynamic versioning alignment from package.json manifest',
+    ],
+  },
+  {
+    version: 'v1.0.8',
+    date: '11 Aug 2026',
+    type: 'Native Replica',
+    tagColor: '#2563eb',
+    tagBg: '#dbeafe',
+    changes: [
+      'Durable expo-sqlite native database engine (genie_replica.db)',
+      '1-minute overlap safety net catch-up integration',
+      'Account-scoped multi-user cache protection & instant rendering',
+      'Aligned SHIPMENTS primary key field to id across backend & frontend',
+    ],
+  },
+  {
+    version: 'v1.0.3',
+    date: '10 Aug 2026',
+    type: 'Native & OTA',
+    tagColor: '#64748b',
+    tagBg: '#f1f5f9',
     changes: [
       'High-resolution Genie app launcher icons & splash branding',
       'Integrated GitHub Releases live API update checker',
       'Notification-style About App panel with changelog timeline',
       'Direct 1-tap APK downloader from GitHub Releases',
-    ],
-  },
-  {
-    version: 'v1.0.1',
-    date: '10 Aug 2026',
-    type: 'OTA Update',
-    tagColor: '#2563eb',
-    tagBg: '#dbeafe',
-    changes: [
-      'Added About App & Live OTA Update Manager',
-      'Optimized Android Gradle compilation & Hermes bytecode',
-      'Enhanced Dox mode section flex ratios (2:3) & envelope options',
-      'Configured server orchestrator on port 8083 with ASCII QR code',
-    ],
-  },
-  {
-    version: 'v1.0.0',
-    date: '10 Aug 2026',
-    type: 'Initial Release',
-    tagColor: '#64748b',
-    tagBg: '#f1f5f9',
-    changes: [
-      'Initial release of Genie App on Expo SDK 54',
-      'Multi-tab navigation (Home, Orders, Book, Track, Menu)',
-      'Integrated Dox Mode & Box Mode order booking engine',
-      'Live server sync with status indicators',
     ],
   },
 ];

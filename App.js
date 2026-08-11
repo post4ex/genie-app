@@ -98,26 +98,33 @@ function MainApp() {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.status !== 'success' || !json.sessionId || !json.refreshToken) {
-          return false;
+          // A 401/403 is a definitive session rejection; other failures are
+          // transient and should be retried on the next heartbeat.
+          return res.status === 401 || res.status === 403 ? false : null;
         }
 
         const nextToken = json.sessionId;
         const nextRefreshToken = json.refreshToken;
         const nextExpires = Date.now() + Number(json.expiresIn || 8 * 60 * 60) * 1000;
         const nextAbsolute = Number(json.sessionExpiresAt || sessionExpiresAtRef.current || 0);
-        refreshTokenRef.current = nextRefreshToken;
-        sessionExpiresAtRef.current = nextAbsolute;
-        tokenRef.current = nextToken;
-        setToken(nextToken);
-
         const saved = await getSession();
-        await saveSession(
-          json.userData || saved?.user || user,
+        const nextUser = json.userData || saved?.user || user;
+        const persisted = await saveSession(
+          nextUser,
           nextToken,
           nextExpires,
           nextRefreshToken,
           nextAbsolute,
         );
+        // Do not commit a rotated token to memory if durable storage failed:
+        // the server has consumed the old refresh token and a restart would
+        // otherwise be unable to recover this session safely.
+        if (!persisted) return false;
+        refreshTokenRef.current = nextRefreshToken;
+        sessionExpiresAtRef.current = nextAbsolute;
+        tokenRef.current = nextToken;
+        setUser(nextUser);
+        setToken(nextToken);
 
         // The old SSE Authorization header cannot be updated in place.
         // Reconnect immediately with the rotated access token; the listener's
@@ -128,7 +135,9 @@ function MainApp() {
         }
         return true;
       } catch (_) {
-        return false;
+        // null means retryable transport/server failure; false means the
+        // server definitively rejected the refresh or persistence failed.
+        return null;
       } finally {
         refreshPromiseRef.current = null;
       }
@@ -146,13 +155,29 @@ function MainApp() {
   useEffect(() => {
     (async () => {
       await initializeStorage();
-      const saved = await getSession();
-      // Session expiry guard (web app-auth.js): expired session → full logout
-      if (saved && saved.expires && saved.expires < Date.now()) {
-        await removeSession();
-        return;
-      }
+      let saved = await getSession();
       if (saved && saved.user && saved.token) {
+        // Restore refresh metadata before deciding whether the access JWT needs
+        // rotation. A valid absolute session may outlive its 8-hour access token.
+        tokenRef.current = saved.token;
+        refreshTokenRef.current = saved.refreshToken || '';
+        sessionExpiresAtRef.current = Number(saved.sessionExpiresAt || 0);
+        if (sessionExpiresAtRef.current && Date.now() >= sessionExpiresAtRef.current) {
+          await removeSession();
+          return;
+        }
+        if (saved.expires && saved.expires <= Date.now()) {
+          const refreshed = await refreshSessionSilently();
+          if (refreshed !== true) {
+            if (refreshed === false) await removeSession();
+            return;
+          }
+          saved = await getSession();
+          if (!saved?.user || !saved?.token) {
+            await removeSession();
+            return;
+          }
+        }
         const savedId = getAccountKey(saved.user);
         const owner = await getLocalCacheOwner();
         // A persisted session must still pass the same account-isolation check
@@ -170,8 +195,8 @@ function MainApp() {
         setUser(saved.user);
         setToken(saved.token);
         tokenRef.current = saved.token;
-        refreshTokenRef.current = saved.refreshToken || '';
-        sessionExpiresAtRef.current = Number(saved.sessionExpiresAt || 0);
+        refreshTokenRef.current = saved.refreshToken || refreshTokenRef.current || '';
+        sessionExpiresAtRef.current = Number(saved.sessionExpiresAt || sessionExpiresAtRef.current || 0);
         await reloadLocalState();
         startSyncAndSSE(saved.token);
         loadNotifications(true);
@@ -196,15 +221,45 @@ function MainApp() {
           return;
         }
         if (saved?.expires && saved.expires <= Date.now()) {
-          if (!(await refreshSessionSilently())) await handleLogout();
+          const refreshed = await refreshSessionSilently();
+          if (refreshed === false) await handleLogout();
           return;
         }
         if (saved?.expires && (saved.expires - Date.now()) <= 5 * 60 * 1000) {
-          if (!(await refreshSessionSilently())) await handleLogout();
+          const refreshed = await refreshSessionSilently();
+          if (refreshed === false) await handleLogout();
         }
       } catch (_) {}
     }, 60 * 1000);
-    return () => clearInterval(tick);
+
+    // Mobile Foreground Resume: catch events missed while app was backgrounded
+    const handleAppStateChange = (nextAppState) => {
+      if (nextAppState === 'active' && tokenRef.current) {
+        if (sseRef.current && !sseRef.current.connected) {
+          sseRef.current.connect();
+        }
+        runDeltaCatchup(tokenRef.current);
+        auditAndReconcile(tokenRef.current).then((res) => {
+          if (res?.mismatches?.length) reloadLocalState();
+        }).catch(() => {});
+      }
+    };
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    // Periodic 5-minute audit timer while app is actively open
+    const auditInterval = setInterval(() => {
+      if (tokenRef.current) {
+        auditAndReconcile(tokenRef.current).then((res) => {
+          if (res?.mismatches?.length) reloadLocalState();
+        }).catch(() => {});
+      }
+    }, 5 * 60 * 1000);
+
+    return () => {
+      clearInterval(tick);
+      subscription.remove();
+      clearInterval(auditInterval);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -536,7 +591,7 @@ function MainApp() {
         if (err === 'UNAUTHORIZED') {
           // A near-expiry stream can fail while the heartbeat is rotating.
           // Try the serialized refresh once before logging the user out.
-          refreshSessionSilently().then((ok) => { if (!ok) handleLogout(); });
+          refreshSessionSilently().then((ok) => { if (ok === false) handleLogout(); });
         } else setSyncStatus('reconnecting');
       },
       () => { setSyncStatus('live'); runDeltaCatchup(authToken); },
@@ -595,9 +650,26 @@ function MainApp() {
         sseRef.current.start();
       }
     });
-    const tick = setInterval(() => {
-      if (!tokenRef.current || isSseRecent()) return;
-      runDeltaCatchup(tokenRef.current);
+    const tick = setInterval(async () => {
+      if (!tokenRef.current || AppState.currentState !== 'active') return;
+
+      // The backend's inactivity clock is based on authenticated requests. An
+      // open foreground app is active even when its SSE stream has no business
+      // events, so keep that server-side activity marker alive without storing
+      // credentials or changing the 30-day absolute session boundary.
+      try {
+        const ping = await fetch(`${API_BASE}/api/ping`, {
+          headers: { 'Authorization': `Bearer ${tokenRef.current}` },
+          cache: 'no-store',
+        });
+        if (ping.status === 401) {
+          const refreshed = await refreshSessionSilently();
+          if (refreshed === false) await handleLogout();
+          return;
+        }
+      } catch (_) {}
+
+      if (!isSseRecent()) runDeltaCatchup(tokenRef.current);
     }, 5 * 60 * 1000);
     return () => { sub.remove(); clearInterval(tick); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -630,20 +702,26 @@ function MainApp() {
       Alert.alert('Local data error', 'Could not secure local cache ownership. Please try again.');
       return;
     }
-    setUser(userObj);
-    setToken(jwtToken);
-    tokenRef.current = jwtToken;
-    refreshTokenRef.current = refreshToken;
-    sessionExpiresAtRef.current = Number(sessionExpiresAt || 0);
     // Access token is valid for 8 hours; the refresh token is bounded by the
-    // server-provided absolute session expiry.
-    await saveSession(
+    // server-provided absolute session expiry. Persist credentials before
+    // committing in-memory auth state so a storage failure cannot create a
+    // UI-only login that disappears on restart.
+    const persisted = await saveSession(
       userObj,
       jwtToken,
       Date.now() + 8 * 60 * 60 * 1000,
       refreshToken,
       Number(sessionExpiresAt || 0),
     );
+    if (!persisted) {
+      Alert.alert('Login error', 'Could not save the session securely. Please try again.');
+      return;
+    }
+    setUser(userObj);
+    setToken(jwtToken);
+    tokenRef.current = jwtToken;
+    refreshTokenRef.current = refreshToken;
+    sessionExpiresAtRef.current = Number(sessionExpiresAt || 0);
     // Render the durable replica immediately, then let the live sync reconcile
     // it in the background. This is the fast relogin/offline behavior.
     await reloadLocalState();

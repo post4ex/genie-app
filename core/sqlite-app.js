@@ -263,14 +263,12 @@ export async function sqliteGetSheet(collection) {
 export async function sqliteGetCounts(collections = SHEETS) {
   const db = await ensureNativeDatabase();
   if (!db) return {};
+  const rows = await db.getAllAsync(
+    'SELECT collection, COUNT(*) AS count FROM replica_records GROUP BY collection'
+  );
   const result = {};
-  for (const collection of collections) {
-    const row = await db.getFirstAsync(
-      'SELECT COUNT(*) AS count FROM replica_records WHERE collection = ?',
-      collection
-    );
-    result[collection] = Number(row?.count || 0);
-  }
+  for (const c of collections) result[c] = 0;
+  for (const r of rows) result[r.collection] = Number(r.count || 0);
   return result;
 }
 
@@ -280,26 +278,37 @@ export async function sqliteUpsertMany(collection, data, newerOnly = false, supp
   const entries = normalizeEntries(collection, data).filter(([, record]) => record && typeof record === 'object');
   if (!entries.length) return 0;
   let written = 0;
+
+  // Pre-load all existing timestamps for this collection in 1 single fast query
+  // to avoid thousands of individual async SQL queries over the native bridge
+  const existingMap = new Map();
+  if (newerOnly) {
+    const existingRows = await db.getAllAsync(
+      'SELECT record_key, time_stamp FROM replica_records WHERE collection = ?',
+      collection
+    );
+    for (const r of existingRows) {
+      existingMap.set(r.record_key, Number(r.time_stamp || 0));
+    }
+  }
+
   await db.withTransactionAsync(async () => {
     for (const [fallbackKey, rawRecord] of entries) {
       const key = recordKey(collection, rawRecord, fallbackKey);
       if (!key) continue;
       const record = { ...rawRecord };
       const incomingTs = recordTimestamp(record);
-      if (newerOnly) {
-        const existing = await db.getFirstAsync(
-          'SELECT time_stamp FROM replica_records WHERE collection = ? AND record_key = ?',
-          collection,
-          key
-        );
-        const existingTs = Number(existing?.time_stamp || 0);
+
+      if (newerOnly && existingMap.has(key)) {
+        const existingTs = existingMap.get(key);
         // Unknown timestamps are safe for an insert, but must never replace an
         // existing row: otherwise a stale SSE/full-sync payload can erase a
         // fresher database record. A timestamped payload may replace an older
         // row, including an older row whose timestamp is unknown.
-        if (existing && incomingTs <= 0) continue;
+        if (incomingTs <= 0) continue;
         if (existingTs > 0 && incomingTs <= existingTs) continue;
       }
+
       await db.runAsync(
         `INSERT OR REPLACE INTO replica_records
           (collection, record_key, record_id, pb_id, time_stamp, payload)
@@ -311,6 +320,7 @@ export async function sqliteUpsertMany(collection, data, newerOnly = false, supp
         incomingTs,
         JSON.stringify(record)
       );
+      existingMap.set(key, incomingTs);
       written += 1;
     }
   });
