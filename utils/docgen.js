@@ -120,7 +120,8 @@ function buildLabel(order, cnor, cnee, products, multiboxItems, options = { type
     const awb         = order.AWB_NUMBER || ref;
     const carrierName = order.CARRIER || 'CARRIER';
     const modeShort   = order.MODE || 'N/A';
-    const modeName    = modesDataMap.get(modeShort) || modeShort;
+    const modeRecord = modesDataMap.get(modeShort);
+    const modeName = (typeof modeRecord === 'string' ? modeRecord : (modeRecord?.MODE || modeRecord?.NAME)) || modeShort;
 
     const cnorName    = _esc(cnor?.NAME || 'N/A');
     const cnorAddress = _esc(`${cnor?.ADDRESS||''}, ${cnor?.CITY||''}, ${cnor?.STATE||''} - ${cnor?.PINCODE||''}`);
@@ -253,7 +254,8 @@ function _buildReceiptHtml(order, cnor, cnee, products, copyType, branch) {
     const ref         = order.REFERENCE || 'N/A';
     const awb         = order.AWB_NUMBER || ref;
     const carrierName = order.CARRIER || 'CARRIER';
-    const modeName    = modesDataMap.get(order.MODE) || order.MODE || 'N/A';
+    const modeRecord = modesDataMap.get(order.MODE);
+    const modeName = (typeof modeRecord === 'string' ? modeRecord : (modeRecord?.MODE || modeRecord?.NAME)) || order.MODE || 'N/A';
 
     const cnorName    = _esc(cnor?.NAME || 'N/A');
     const cnorAddress = _esc(`${cnor?.ADDRESS||''}, ${cnor?.CITY||''}, ${cnor?.STATE||''} - ${cnor?.PINCODE||''}`);
@@ -491,7 +493,8 @@ function buildDocs(order, cnor, cnee, products) {
     const awb         = order.AWB_NUMBER || ref;
     const orderDate   = fmtDate(order.ORDER_DATE, 'date');
     const carrierName = order.CARRIER || 'N/A';
-    const modeName    = modesDataMap.get(order.MODE) || order.MODE || 'N/A';
+    const modeRecord = modesDataMap.get(order.MODE);
+    const modeName = (typeof modeRecord === 'string' ? modeRecord : (modeRecord?.MODE || modeRecord?.NAME)) || order.MODE || 'N/A';
 
     const cnorName   = _esc(cnor?.NAME   || 'N/A');
     const cnorAddr   = _esc(`${cnor?.ADDRESS||''}, ${cnor?.CITY||''} - ${cnor?.PINCODE||''}`);
@@ -579,7 +582,8 @@ function buildMultibox(order, cnor, cnee, products, multiboxItems) {
     const awb         = order.AWB_NUMBER || ref;
     const orderDate   = fmtDate(order.ORDER_DATE, 'date');
     const carrierName = order.CARRIER || 'N/A';
-    const modeName    = modesDataMap.get(order.MODE) || order.MODE || 'N/A';
+    const modeRecord = modesDataMap.get(order.MODE);
+    const modeName = (typeof modeRecord === 'string' ? modeRecord : (modeRecord?.MODE || modeRecord?.NAME)) || order.MODE || 'N/A';
 
     const cnorName    = _esc(cnor?.NAME    || 'N/A');
     const cnorAddr    = _esc(`${cnor?.ADDRESS||''}, ${cnor?.CITY||''} - ${cnor?.PINCODE||''}`);
@@ -854,7 +858,8 @@ function buildDocsAndBox(order, cnor, cnee, products, multiboxItems) {
     const awb         = order.AWB_NUMBER || ref;
     const orderDate   = fmtDate(order.ORDER_DATE, 'date');
     const carrierName = order.CARRIER || 'N/A';
-    const modeName    = modesDataMap.get(order.MODE) || order.MODE || 'N/A';
+    const modeRecord = modesDataMap.get(order.MODE);
+    const modeName = (typeof modeRecord === 'string' ? modeRecord : (modeRecord?.MODE || modeRecord?.NAME)) || order.MODE || 'N/A';
     const cnorName    = _esc(cnor?.NAME   || 'N/A');
     const cnorAddr    = _esc(`${cnor?.ADDRESS||''}, ${cnor?.CITY||''} - ${cnor?.PINCODE||''}`);
     const cnorMobile  = _esc(cnor?.MOBILE || 'N/A');

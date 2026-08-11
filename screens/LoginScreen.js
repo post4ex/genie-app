@@ -17,6 +17,21 @@ export default function LoginScreen({ onLoginSuccess }) {
   const [loginPass, setLoginPass] = useState('');
   const [showLoginPass, setShowLoginPass] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
+  const loginUserInputRef = React.useRef(null);
+  const loginPassInputRef = React.useRef(null);
+  const regUserInputRef = React.useRef(null);
+  const regEmailInputRef = React.useRef(null);
+  const regMobileInputRef = React.useRef(null);
+  const regNameInputRef = React.useRef(null);
+  const regPassInputRef = React.useRef(null);
+  const regConfirmPassInputRef = React.useRef(null);
+  const regOtpInputRef = React.useRef(null);
+  const forgotIdInputRef = React.useRef(null);
+  const forgotMobileInputRef = React.useRef(null);
+  const forgotOtpInputRef = React.useRef(null);
+  const forgotNewPassInputRef = React.useRef(null);
+  const kycNumberInputRef = React.useRef(null);
+  const kycAddressInputRef = React.useRef(null);
   const [authError, setAuthError] = useState('');
 
   // Register state
@@ -242,12 +257,18 @@ export default function LoginScreen({ onLoginSuccess }) {
               <View style={styles.fieldGroup}>
                 <Text style={styles.labelWeb}>Username</Text>
                 <TextInput
+                  ref={loginUserInputRef}
+                  accessible
+                  accessibilityLabel="Username"
                   style={styles.inputWeb}
                   placeholder="Enter username"
                   placeholderTextColor="#94a3b8"
                   value={loginUser}
                   onChangeText={setLoginUser}
                   autoCapitalize="none"
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => loginPassInputRef.current?.focus?.()}
                 />
               </View>
 
@@ -255,12 +276,17 @@ export default function LoginScreen({ onLoginSuccess }) {
                 <Text style={styles.labelWeb}>Password</Text>
                 <View style={styles.passRowWeb}>
                   <TextInput
+                    ref={loginPassInputRef}
+                    accessible
+                    accessibilityLabel="Password"
                     style={[styles.inputWeb, { flex: 1 }]}
                     placeholder="Enter password"
                     placeholderTextColor="#94a3b8"
                     secureTextEntry={!showLoginPass}
                     value={loginPass}
                     onChangeText={setLoginPass}
+                    returnKeyType="done"
+                    onSubmitEditing={handleLoginSubmit}
                   />
                   <TouchableOpacity style={styles.eyeBtnWeb} onPress={() => setShowLoginPass(!showLoginPass)}>
                     <Text style={styles.eyeIconWeb}>{showLoginPass ? '👁️' : '🙈'}</Text>
@@ -272,7 +298,7 @@ export default function LoginScreen({ onLoginSuccess }) {
                 <Text style={styles.forgotLinkTextWeb}>Forgot Password?</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.btnWeb} onPress={handleLoginSubmit} disabled={authLoading}>
+              <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel="Log in" style={styles.btnWeb} onPress={handleLoginSubmit} disabled={authLoading}>
                 {authLoading ? <ActivityIndicator color={COLORS.primary} /> : <Text style={styles.btnWebText}>LOG IN</Text>}
               </TouchableOpacity>
 
@@ -294,22 +320,22 @@ export default function LoginScreen({ onLoginSuccess }) {
               {regStep === 1 ? (
                 <>
                   <Text style={styles.labelWeb}>Desired Username</Text>
-                  <TextInput style={styles.inputWeb} placeholder="e.g. john_express" placeholderTextColor="#94a3b8" value={regUser} onChangeText={setRegUser} autoCapitalize="none" />
+                  <TextInput ref={regUserInputRef} style={styles.inputWeb} placeholder="e.g. john_express" placeholderTextColor="#94a3b8" value={regUser} onChangeText={setRegUser} autoCapitalize="none" returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => regEmailInputRef.current?.focus?.()} />
 
                   <Text style={styles.labelWeb}>Email Address</Text>
-                  <TextInput style={styles.inputWeb} placeholder="john@example.com" placeholderTextColor="#94a3b8" keyboardType="email-address" value={regEmail} onChangeText={setRegEmail} autoCapitalize="none" />
+                  <TextInput ref={regEmailInputRef} style={styles.inputWeb} placeholder="john@example.com" placeholderTextColor="#94a3b8" keyboardType="email-address" value={regEmail} onChangeText={setRegEmail} autoCapitalize="none" returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => regMobileInputRef.current?.focus?.()} />
 
                   <Text style={styles.labelWeb}>Mobile Number</Text>
-                  <TextInput style={styles.inputWeb} placeholder="9876543210" placeholderTextColor="#94a3b8" keyboardType="phone-pad" value={regMobile} onChangeText={setRegMobile} />
+                  <TextInput ref={regMobileInputRef} style={styles.inputWeb} placeholder="9876543210" placeholderTextColor="#94a3b8" keyboardType="phone-pad" value={regMobile} onChangeText={setRegMobile} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => regNameInputRef.current?.focus?.()} />
 
                   <Text style={styles.labelWeb}>Full Name</Text>
-                  <TextInput style={styles.inputWeb} placeholder="John Doe" placeholderTextColor="#94a3b8" value={regName} onChangeText={setRegName} />
+                  <TextInput ref={regNameInputRef} style={styles.inputWeb} placeholder="John Doe" placeholderTextColor="#94a3b8" value={regName} onChangeText={setRegName} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => regPassInputRef.current?.focus?.()} />
 
                   <Text style={styles.labelWeb}>Password (Min 8 chars, 1 Cap)</Text>
-                  <TextInput style={styles.inputWeb} placeholder="Min 8 chars" placeholderTextColor="#94a3b8" secureTextEntry value={regPass} onChangeText={setRegPass} />
+                  <TextInput ref={regPassInputRef} style={styles.inputWeb} placeholder="Min 8 chars" placeholderTextColor="#94a3b8" secureTextEntry value={regPass} onChangeText={setRegPass} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => regConfirmPassInputRef.current?.focus?.()} />
 
                   <Text style={styles.labelWeb}>Confirm Password</Text>
-                  <TextInput style={styles.inputWeb} placeholder="Re-enter password" placeholderTextColor="#94a3b8" secureTextEntry value={regConfirmPass} onChangeText={setRegConfirmPass} />
+                  <TextInput ref={regConfirmPassInputRef} style={styles.inputWeb} placeholder="Re-enter password" placeholderTextColor="#94a3b8" secureTextEntry value={regConfirmPass} onChangeText={setRegConfirmPass} returnKeyType="done" onSubmitEditing={handleRegisterSubmit} />
                 </>
               ) : (
                 <>
@@ -317,11 +343,11 @@ export default function LoginScreen({ onLoginSuccess }) {
                     <Text style={styles.infoBoxTextWeb}>OTP sent to your email. Valid for 5 minutes.</Text>
                   </View>
                   <Text style={styles.labelWeb}>ENTER OTP</Text>
-                  <TextInput style={[styles.inputWeb, { textAlign: 'center', letterSpacing: 6, fontSize: 20, fontWeight: 'bold' }]} placeholder="••••••" placeholderTextColor="#94a3b8" keyboardType="numeric" value={regOtp} onChangeText={setRegOtp} />
+                  <TextInput ref={regOtpInputRef} style={[styles.inputWeb, { textAlign: 'center', letterSpacing: 6, fontSize: 20, fontWeight: 'bold' }]} placeholder="••••••" placeholderTextColor="#94a3b8" keyboardType="numeric" value={regOtp} onChangeText={setRegOtp} returnKeyType="done" onSubmitEditing={handleRegisterSubmit} />
                 </>
               )}
 
-              <TouchableOpacity style={styles.btnOtpWeb} onPress={handleRegisterSubmit} disabled={authLoading}>
+              <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel={regStep === 1 ? 'Send registration OTP' : 'Confirm registration OTP'} style={styles.btnOtpWeb} onPress={handleRegisterSubmit} disabled={authLoading}>
                 {authLoading ? <ActivityIndicator color="#ea580c" /> : <Text style={styles.btnOtpText}>{regStep === 1 ? 'Send OTP' : 'Confirm OTP'}</Text>}
               </TouchableOpacity>
 
@@ -351,12 +377,12 @@ export default function LoginScreen({ onLoginSuccess }) {
               </View>
 
               <Text style={styles.labelWeb}>Document Number</Text>
-              <TextInput style={styles.inputWeb} placeholder="Enter ID number" placeholderTextColor="#94a3b8" value={kycNumber} onChangeText={setKycNumber} />
+              <TextInput ref={kycNumberInputRef} style={styles.inputWeb} placeholder="Enter ID number" placeholderTextColor="#94a3b8" value={kycNumber} onChangeText={setKycNumber} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => kycAddressInputRef.current?.focus?.()} />
 
               <Text style={styles.labelWeb}>Full Address</Text>
-              <TextInput style={[styles.inputWeb, { height: 70, textAlignVertical: 'top' }]} multiline numberOfLines={3} placeholder="Complete physical address" placeholderTextColor="#94a3b8" value={kycAddress} onChangeText={setKycAddress} />
+              <TextInput ref={kycAddressInputRef} style={[styles.inputWeb, { height: 70, textAlignVertical: 'top' }]} multiline numberOfLines={3} placeholder="Complete physical address" placeholderTextColor="#94a3b8" value={kycAddress} onChangeText={setKycAddress} returnKeyType="done" onSubmitEditing={handleKycSubmit} />
 
-              <TouchableOpacity style={styles.btnWeb} onPress={handleKycSubmit} disabled={authLoading}>
+              <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel="Submit registration" style={styles.btnWeb} onPress={handleKycSubmit} disabled={authLoading}>
                 {authLoading ? <ActivityIndicator color={COLORS.primary} /> : <Text style={styles.btnWebText}>Submit Registration</Text>}
               </TouchableOpacity>
 
@@ -374,10 +400,10 @@ export default function LoginScreen({ onLoginSuccess }) {
               {forgotStep === 1 && (
                 <>
                   <Text style={styles.labelWeb}>Username / Email</Text>
-                  <TextInput style={styles.inputWeb} placeholder="Registered username or email" placeholderTextColor="#94a3b8" value={forgotId} onChangeText={setForgotId} autoCapitalize="none" />
+                  <TextInput ref={forgotIdInputRef} style={styles.inputWeb} placeholder="Registered username or email" placeholderTextColor="#94a3b8" value={forgotId} onChangeText={setForgotId} autoCapitalize="none" returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => forgotMobileInputRef.current?.focus?.()} />
 
                   <Text style={styles.labelWeb}>Registered Mobile</Text>
-                  <TextInput style={styles.inputWeb} placeholder="10-digit mobile number" placeholderTextColor="#94a3b8" keyboardType="phone-pad" value={forgotMobile} onChangeText={setForgotMobile} />
+                  <TextInput ref={forgotMobileInputRef} style={styles.inputWeb} placeholder="10-digit mobile number" placeholderTextColor="#94a3b8" keyboardType="phone-pad" value={forgotMobile} onChangeText={setForgotMobile} returnKeyType="done" onSubmitEditing={handleForgotSubmit} />
                 </>
               )}
 
@@ -387,18 +413,18 @@ export default function LoginScreen({ onLoginSuccess }) {
                     <Text style={styles.infoBoxTextWeb}>OTP sent! Check your email.</Text>
                   </View>
                   <Text style={styles.labelWeb}>Enter OTP</Text>
-                  <TextInput style={[styles.inputWeb, { textAlign: 'center', letterSpacing: 6, fontSize: 20, fontWeight: 'bold' }]} placeholder="••••••" placeholderTextColor="#94a3b8" keyboardType="numeric" value={forgotOtp} onChangeText={setForgotOtp} />
+                  <TextInput ref={forgotOtpInputRef} style={[styles.inputWeb, { textAlign: 'center', letterSpacing: 6, fontSize: 20, fontWeight: 'bold' }]} placeholder="••••••" placeholderTextColor="#94a3b8" keyboardType="numeric" value={forgotOtp} onChangeText={setForgotOtp} returnKeyType="done" onSubmitEditing={handleForgotSubmit} />
                 </>
               )}
 
               {forgotStep === 3 && (
                 <>
                   <Text style={styles.labelWeb}>New Password</Text>
-                  <TextInput style={styles.inputWeb} placeholder="Min 8 chars, 1 Cap" placeholderTextColor="#94a3b8" secureTextEntry value={forgotNewPass} onChangeText={setForgotNewPass} />
+                  <TextInput ref={forgotNewPassInputRef} style={styles.inputWeb} placeholder="Min 8 chars, 1 Cap" placeholderTextColor="#94a3b8" secureTextEntry value={forgotNewPass} onChangeText={setForgotNewPass} returnKeyType="done" onSubmitEditing={handleForgotSubmit} />
                 </>
               )}
 
-              <TouchableOpacity style={styles.btnOtpWeb} onPress={handleForgotSubmit} disabled={authLoading}>
+              <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel={forgotStep === 1 ? 'Request password reset OTP' : forgotStep === 2 ? 'Verify password reset OTP' : 'Reset password'} style={styles.btnOtpWeb} onPress={handleForgotSubmit} disabled={authLoading}>
                 {authLoading ? <ActivityIndicator color="#ea580c" /> : <Text style={styles.btnOtpText}>{forgotStep === 1 ? 'Request OTP' : forgotStep === 2 ? 'Verify OTP' : 'Reset Password'}</Text>}
               </TouchableOpacity>
 

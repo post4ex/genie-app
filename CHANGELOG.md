@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.0.13] — 2026-08-11
+
+### Fixed
+- **Carrier & Mode maps now store full records** (`App.js`): `carriersMap` and
+  `modesMap` were reduced to plain strings (display name only) — this broke
+  `BookOrderScreen` which needs `COMPANY_CODE`, `VOL_INGR`, `MIN_WT`, zone flags etc.
+  Both maps now carry the complete object; display name is derived at point of use.
+- **Mode name resolution hardened** (`OrdersScreen.js`, `docgen.js`): fixed a crash
+  when `modesMap[key]` is an object instead of a string — now safely reads `.MODE`
+  or `.NAME` field with a string fallback.
+- **Rates lookup key unified** (`App.js`): `ratesLookup` was keyed by `RATE_UID`
+  (legacy) which mismatched `UID` (server authoritative) — rates now keyed strictly
+  by `UID`, eliminating silent rate-card misses during booking.
+
+### Added
+- **Booking confirmation wait** (`App.js`): after a successful `POST /api/bookOrder`,
+  the app now waits up to 15 s for the ORDERS row to land in the local SQLite replica
+  (via bounded `pullDeltaSince` with `AbortController`) before showing success. This
+  matches web behavior and prevents a false "booked" state when SSE is momentarily down.
+- **AbortSignal support in `pullDeltaSince`** (`core/sync.js`): accepts an optional
+  `abortSignal` so bounded callers (booking confirmation) can cancel the fetch without
+  affecting the regular background catch-up path's retry behavior.
+- **Keyboard handling in `BookOrderScreen`** (`screens/BookOrderScreen.js`):
+  `KeyboardAvoidingView` + `softwareKeyboardLayoutMode: resize` in `app.json` — form
+  fields no longer hidden behind the software keyboard on Android.
+- **Input accessibility** (`BookOrderScreen.js`, `LoginScreen.js`): `accessibilityRole`,
+  `accessibilityLabel`, `accessibilityState` added to checkboxes and buttons;
+  `returnKeyType` + `onSubmitEditing` wired for keyboard tab-through on all login flows.
+- **SSE gap-fill polling** (`core/sse.js`): when SSE disconnects, a 15-second interval
+  fires `onFallback` → `runDeltaCatchup` until SSE reconnects. Cuts worst-case missed-
+  event delay from ~5 min (safety-net tick) to 15 s.
+
+### Changed
+- `runtimeVersion` updated to `1.0.13`.
+- `versionCode` bumped from 13 to 14.
+- `softwareKeyboardLayoutMode: "resize"` added to Android config in `app.json`.
+
+---
+
 ## [1.0.12] — 2026-08-11
 
 ### Fixed

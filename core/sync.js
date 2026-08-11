@@ -231,14 +231,19 @@ function _resolveDeleteKeys(sheet, keyPath, pbIds) {
 // ── Delta catch-up (web app-api.js pullDeltaSince parity) ───────────────────
 // fetchEvents → getRecords upserts (guarded merge) + resolved deletes, with
 // cascaded ORDERS child deletes (MULTIBOX/PRODUCTS/UPLOADS) and retry backoff.
-export async function pullDeltaSince(token, sinceMs, retryCount = 0) {
+export async function pullDeltaSince(token, sinceMs, retryCount = 0, abortSignal = null) {
   if (!token || !sinceMs) return null;
+  // Confirmation waits pass retryCount=5 and an AbortSignal so a slow network
+  // request cannot outlive the bounded booking wait. Normal catch-up calls keep
+  // their existing retry behavior and do not need a caller-owned signal.
+  const requestSignal = abortSignal || null;
   // 1-minute safety net overlap (60,000 ms) to catch in-flight boundary transactions
   const querySince = Math.max(0, sinceMs - 60000);
   try {
     const res = await fetch(`${API_BASE}/api/fetchEvents?since_ms=${querySince}`, {
       method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` }
+      headers: { 'Authorization': `Bearer ${token}` },
+      ...(requestSignal ? { signal: requestSignal } : {})
     });
     if (!res.ok) throw new Error(`fetchEvents ${res.status}`);
     const result = await res.json();
@@ -276,6 +281,7 @@ export async function pullDeltaSince(token, sinceMs, retryCount = 0) {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           },
+            ...(requestSignal ? { signal: requestSignal } : {}),
             body: JSON.stringify({ collection: col, ids: idBatch })
           });
           if (!recRes.ok) throw new Error(`getRecords ${col} HTTP ${recRes.status}`);
@@ -325,7 +331,7 @@ export async function pullDeltaSince(token, sinceMs, retryCount = 0) {
     if (retryCount < 5) {
       const delay = Math.min(30000, Math.pow(2, retryCount) * 1000 + Math.random() * 1000);
       await new Promise(r => setTimeout(r, delay));
-      return pullDeltaSince(token, sinceMs, retryCount + 1);
+      return pullDeltaSince(token, sinceMs, retryCount + 1, abortSignal);
     }
   }
   return null;

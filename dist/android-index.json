@@ -1,10 +1,10 @@
 {
-  "id": "4de93bbfafd7546ac64682d3eb6a4aaa",
-  "createdAt": "2026-08-11T19:13:28.000Z",
-  "runtimeVersion": "1.0.12",
+  "id": "fb0789499eb03d9b3b9cbc0232e7c919",
+  "createdAt": "2026-08-11T21:45:53.000Z",
+  "runtimeVersion": "1.0.13",
   "launchAsset": {
-    "url": "https://raw.githubusercontent.com/post4ex/genie-app/main/dist/_expo/static/js/android/index-4de93bbfafd7546ac64682d3eb6a4aaa.hbc",
-    "key": "4de93bbfafd7546ac64682d3eb6a4aaa",
+    "url": "https://raw.githubusercontent.com/post4ex/genie-app/main/dist/_expo/static/js/android/index-fb0789499eb03d9b3b9cbc0232e7c919.hbc",
+    "key": "fb0789499eb03d9b3b9cbc0232e7c919",
     "contentType": "application/javascript"
   },
   "assets": [
@@ -215,7 +215,7 @@
     }
   ],
   "metadata": {
-    "version": "1.0.12",
-    "bundleHash": "4de93bbfafd7546ac64682d3eb6a4aaa"
+    "version": "1.0.13",
+    "bundleHash": "fb0789499eb03d9b3b9cbc0232e7c919"
   }
 }

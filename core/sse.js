@@ -31,6 +31,9 @@ const DEFAULT_BACKOFF = 3000;
 const MAX_BACKOFF = 30000;
 const WATCHDOG_MS = 45000;         // web fetch path — bytes reset it, incl. keep-alives
 const WATCHDOG_NATIVE_MS = 70000;  // native — keep-alives are invisible to the lib
+// While SSE is known-down, poll for missed events every 15s so users never
+// wait the full 5-min safety net for a delivery that SSE dropped.
+const GAP_FILL_INTERVAL_MS = 15000;
 
 export class SSEListener {
   constructor(token, onEvent, onError, onReconnect = null, onFallback = null) {
@@ -47,6 +50,7 @@ export class SSEListener {
     this.watchdog = null;
     this.reconnectTimer = null;
     this.pollTimer = null;
+    this.gapFillTimer = null; // active polling while SSE is down
     this.isNative = Platform.OS !== 'web';
   }
 
@@ -74,6 +78,27 @@ export class SSEListener {
     this.reconnectTimer = null;
     clearInterval(this.pollTimer);
     this.pollTimer = null;
+    this._stopGapFill();
+  }
+
+  // ── Gap-fill polling: active when SSE is known-down ──────────────────────
+  // Fires onFallback every GAP_FILL_INTERVAL_MS so the caller can run a
+  // pullDeltaSince and pick up any events that SSE dropped. Stops the moment
+  // SSE reconnects (called from the open handler).
+  _startGapFill() {
+    if (this.gapFillTimer) return; // already running
+    this.gapFillTimer = setInterval(() => {
+      if (!this.active) { this._stopGapFill(); return; }
+      if (this.connected) { this._stopGapFill(); return; } // SSE is live — stop
+      if (this.onFallback) this.onFallback();
+    }, GAP_FILL_INTERVAL_MS);
+  }
+
+  _stopGapFill() {
+    if (this.gapFillTimer) {
+      clearInterval(this.gapFillTimer);
+      this.gapFillTimer = null;
+    }
   }
 
   // Web parity — no data for the window means the connection is dead: drop and retry.
@@ -96,6 +121,9 @@ export class SSEListener {
     clearTimeout(this.watchdog);
     this.watchdog = null;
     clearTimeout(this.reconnectTimer);
+    // Start gap-fill polling immediately when we know SSE is down,
+    // so events are never delayed more than GAP_FILL_INTERVAL_MS.
+    this._startGapFill();
     const delay = this.backoff;
     this.backoff = Math.min(this.backoff * 2, MAX_BACKOFF);
     this.reconnectTimer = setTimeout(() => {
@@ -138,9 +166,10 @@ export class SSEListener {
     this.es = es;
 
     es.addEventListener('open', () => {
-      // Connected — reset backoff, arm watchdog, signal catch-up.
+      // Connected — reset backoff, stop gap-fill, arm watchdog, signal catch-up.
       this.backoff = DEFAULT_BACKOFF;
       this.connected = true;
+      this._stopGapFill(); // SSE is live — stop the gap-fill polling
       this._resetWatchdog();
       if (this.onReconnect) this.onReconnect();
     });
@@ -163,7 +192,7 @@ export class SSEListener {
         return;
       }
       if (this.onError) this.onError(event?.message || 'SSE error');
-      this._scheduleReconnect();
+      this._scheduleReconnect(); // starts gap-fill + schedules retry
     });
 
     es.addEventListener('close', () => {
@@ -203,9 +232,10 @@ export class SSEListener {
         return;
       }
 
-      // Connected — reset backoff, arm watchdog, signal catch-up.
+      // Connected — reset backoff, stop gap-fill, arm watchdog, signal catch-up.
       this.backoff = DEFAULT_BACKOFF;
       this.connected = true;
+      this._stopGapFill(); // SSE is live — stop the gap-fill polling
       this._resetWatchdog();
       if (this.onReconnect) this.onReconnect();
 

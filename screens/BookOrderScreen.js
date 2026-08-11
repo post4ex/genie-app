@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, TextInput, TouchableOpacity,
-  ActivityIndicator, Alert, Switch, Modal
+  ActivityIndicator, Alert, Switch, Modal, useWindowDimensions,
+  KeyboardAvoidingView, Platform, Keyboard, BackHandler, findNodeHandle
 } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { COLORS } from '../styles/theme';
@@ -13,6 +14,7 @@ import { generateInvoiceId } from '../utils/invoice-utils';
 import { detectCarrierFromAWB, detectProductFromAWB, detectProductCode } from '../utils/awb-detect';
 import { searchPin } from '../utils/searchpin';
 import { getMetadata, setMetadata } from '../core/storage';
+import { InputValidator } from '../utils/input-validator';
 
 const RefreshIcon = ({ size = 14, color = '#64748b' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -33,16 +35,21 @@ const CalendarIcon = ({ size = 14, color = '#64748b' }) => (
   </Svg>
 );
 
-const WebCheckbox = ({ value, onValueChange, label, title }) => (
+const WebCheckbox = ({ value, onValueChange, label, title, disabled = false }) => (
   <TouchableOpacity
-    style={styles.checkboxContainer}
+    accessible
+    accessibilityRole="checkbox"
+    accessibilityLabel={title || label}
+    accessibilityState={{ checked: value, disabled }}
+    disabled={disabled}
+    style={[styles.checkboxContainer, disabled && styles.checkboxDisabled]}
     onPress={() => onValueChange(!value)}
     activeOpacity={0.7}
   >
-    <View style={[styles.checkboxSquare, value && styles.checkboxSquareChecked]}>
+    <View style={[styles.checkboxSquare, value && styles.checkboxSquareChecked, disabled && styles.checkboxSquareDisabled]}>
       {value && <Text style={styles.checkmarkText}>✓</Text>}
     </View>
-    <Text style={styles.checkboxLabel}>{label}</Text>
+    <Text style={[styles.checkboxLabel, disabled && styles.textDisabled]}>{label}</Text>
   </TouchableOpacity>
 );
 
@@ -68,6 +75,22 @@ const DOX_SIZES = {
   BG: { l: 40, b: 30 }
 };
 
+// Web rate tables and mode availability flags use the canonical Z1…Z14
+// column names. Contacts may contain a numeric or padded legacy value, so
+// normalize it once at the screen boundary before lookup, validation, or send.
+const normalizeZone = (value) => {
+  if (value == null || String(value).trim() === '') return '';
+  const raw = String(value).trim().toUpperCase();
+  const match = raw.match(/^Z?(\d+)$/);
+  if (!match) return '';
+  const number = Number(match[1]);
+  // Only the backend's defined rate columns are valid. Treat Z15+ (or Z0)
+  // as unresolved instead of allowing an invalid column into lookup/payloads.
+  return number >= 1 && number <= 14 ? `Z${number}` : '';
+};
+
+const uppercaseText = (value) => String(value ?? '').toUpperCase();
+
 export default function BookOrderScreen({
   bookForm = {}, setBookForm, onBookOrder, bookingLoading,
   b2b2cMap = {}, b2bList = [], carriersMap = {}, modesMap = {}, ratesMap = {}, branchesMap = {},
@@ -85,12 +108,18 @@ export default function BookOrderScreen({
 
   const [modeModalVisible, setModeModalVisible] = useState(false);
   const [carrierModalVisible, setCarrierModalVisible] = useState(false);
+  const { width: windowWidth } = useWindowDimensions();
+  const isCompactMobile = windowWidth < 640;
 
+  // Web starts both selectors empty. In particular, do not treat App's legacy
+  // display-only `bookForm.carrier` default as a real carrier selection.
   const [selectedMode, setSelectedMode] = useState(bookForm.mode || '');
-  const [selectedCarrier, setSelectedCarrier] = useState(bookForm.carrier || '');
+  const [selectedCarrier, setSelectedCarrier] = useState('');
 
-  // Form Locking state (GENIE_WEB isBookingLocked)
+  // Form Locking state (GENIE_WEB isBookingLocked / wasModeUnlocked)
   const [isFormLocked, setIsFormLocked] = useState(false);
+  const [modeTemporarilyUnlocked, setModeTemporarilyUnlocked] = useState(false);
+  const [needsModeSelection, setNeedsModeSelection] = useState(false);
   const [lastBookedOrder, setLastBookedOrder] = useState(null);
 
   // Normalize B2B Customers Array
@@ -184,6 +213,14 @@ export default function BookOrderScreen({
   const [acForm, setAcForm] = useState({ name: '', mobile: '', pincode: '', address: '', email: '', gstin: '', carrier: '' });
   const [acPinResult, setAcPinResult] = useState(null); // { found, city, state, stateCode, gstCode, zone, oda, tat fields, manualZone }
   const [acPinStatus, setAcPinStatus] = useState(''); // '' | '…' | '✔' | '✖' | '⚠'
+  const acNameInputRef = useRef(null);
+  const acMobileInputRef = useRef(null);
+  const acPincodeInputRef = useRef(null);
+  const acZoneInputRef = useRef(null);
+  const acAddressInputRef = useRef(null);
+  const acEmailInputRef = useRef(null);
+  const acGstinInputRef = useRef(null);
+  const acCarrierInputRef = useRef(null);
 
   // --- Handle Customer Selection (Web: handleCustomerSelectionChange) ---
   const handleSelectClient = (client) => {
@@ -199,15 +236,28 @@ export default function BookOrderScreen({
     const matchingSender = b2bName ? contactsList.find(c => c.NAME === b2bName && c.CODE === code) : null;
     if (matchingSender) {
       setSelectedSender(matchingSender);
-      setSenderQuery(matchingSender.NAME || '');
+      setSenderQuery(uppercaseText(matchingSender.NAME || ''));
       if (matchingSender.PINCODE) setOriginPincodeInput(String(matchingSender.PINCODE));
-      if (matchingSender.CITY) setOriginCityInput(matchingSender.CITY);
+      if (matchingSender.CITY) setOriginCityInput(uppercaseText(matchingSender.CITY));
+      // A client with an auto-selected consignor goes directly to consignee.
+      focusInput(receiverInputRef);
     } else {
       setSelectedSender(null);
       setSenderQuery('');
       setOriginPincodeInput('');
       setOriginCityInput('');
+      focusInput(senderInputRef);
     }
+
+    // Contacts are scoped to the selected client. Do not carry a receiver from
+    // the previous client into a new booking.
+    setSelectedReceiver(null);
+    setReceiverQuery('');
+    setDestCityInput('');
+    setDestPincodeInput('');
+    setSelectedCarrier('');
+    setModeTemporarilyUnlocked(false);
+    setUserMadeInitialModeChoice(false);
 
     // Web parity (handleCustomerSelectionChange): default mode = Express when not editing
     if (!editRef) {
@@ -215,28 +265,28 @@ export default function BookOrderScreen({
       if (expressOption) setSelectedMode(expressOption.code);
       else if (!selectedMode) setSelectedMode('E');
     }
-    if (!selectedCarrier && CARRIER_OPTIONS_LIST.length > 0) setSelectedCarrier(CARRIER_OPTIONS_LIST[0].code);
   };
 
   // Web parity (setupAutocomplete sender): selecting a sender fills origin pincode
   const handleSelectSender = (contact) => {
     setSelectedSender(contact);
-    setSenderQuery(contact.NAME || '');
+    setSenderQuery(uppercaseText(contact.NAME || ''));
     if (contact.PINCODE) setOriginPincodeInput(String(contact.PINCODE));
-    if (contact.CITY) setOriginCityInput(contact.CITY);
+    if (contact.CITY) setOriginCityInput(uppercaseText(contact.CITY));
+    focusInput(receiverInputRef);
   };
 
   // Web parity (populateModeDropdown(zone)): mode is available only when zone key === 'Y'
   // (exactly like web's `!zone || mode[zone] === 'Y'` — missing zone key means unavailable)
   const isModeAvailableForZone = (modeObj) => {
-    const zone = selectedReceiver?.ZONE;
+    const zone = normalizeZone(selectedReceiver?.ZONE);
     if (!zone || !modeObj || !modeObj.rawObj) return true;
     return modeObj.rawObj[zone] === 'Y';
   };
 
   // Web parity (transportTypeSelect change): changing mode recalculates all box weights
-  // with the NEW mode's VOL_INGR (renderMultiboxTable). Shared by manual selection and the
-  // auto-switch effects below — the web calls renderMultiboxTable() in BOTH paths.
+  // with the NEW mode's VOL_INGR (renderMultiboxTable). This is invoked only after
+  // the user explicitly chooses a mode.
   const recomputeBoxesForMode = (volIngr) => {
     if (boxes.length === 0) return;
     const mapped = boxes.map(b => ({ actualWeight: b.WEIGHT, length: b.LENGTH, breadth: b.BREADTH, height: b.HIGHT }));
@@ -256,9 +306,17 @@ export default function BookOrderScreen({
   // and marks the mode as user-chosen so revalidation stops auto-switching it
   const handleSelectMode = (modeObj) => {
     setSelectedMode(modeObj.code);
+    // Any explicit choice is remembered, including a choice made during the
+    // web-style temporary unlock after zone revalidation. It must not later be
+    // auto-reverted by weight revalidation.
     setUserMadeInitialModeChoice(true);
+    setModeTemporarilyUnlocked(false);
+    setNeedsModeSelection(false);
     setModeModalVisible(false);
     recomputeBoxesForMode(modeObj.volIngr);
+    // Carrier selection is user-initiated only. Do not interrupt box/product
+    // entry with a second popup after a mode choice.
+    if (selectedCarrier) focusInput(boxWeightInputRef);
   };
 
   // Calendar Days Grid Calculator
@@ -296,17 +354,31 @@ export default function BookOrderScreen({
   // Handle Receiver Selection (Web: autofill carrier, city, pincode, zone modes)
   const handleSelectReceiver = (contact) => {
     setSelectedReceiver(contact);
-    setReceiverQuery(contact.NAME || '');
+    setReceiverQuery(uppercaseText(contact.NAME || ''));
     if (contact.PINCODE) setDestPincodeInput(String(contact.PINCODE));
-    if (contact.CITY) setDestCityInput(contact.CITY);
-    if (contact.CARRIER) setSelectedCarrier(contact.CARRIER);
+    if (contact.CITY) setDestCityInput(uppercaseText(contact.CITY));
+    // Web assigns the receiver's carrier value, including blank. Do not retain
+    // a carrier from a previous receiver when the selected receiver has none.
+    setSelectedCarrier(contact.CARRIER || '');
+    setModeTemporarilyUnlocked(false);
+    setNeedsModeSelection(false);
+    // Destination city/pincode are derived and hidden. Continue directly to
+    // box entry only when it is actually editable. If the receiver has no
+    // carrier, the carrier selector remains available for an explicit choice;
+    // never try to focus a disabled weight input.
+    const receiverCarrier = contact.CARRIER || '';
+    if (clientCode && selectedSender?.UID && selectedMode && receiverCarrier) {
+      focusInput(boxWeightInputRef);
+    }
   };
 
   // Check if main details are complete (Web: areMainDetailsComplete)
   const isMainDetailsComplete = useMemo(() => {
     const hasClient = !!clientCode;
-    const hasSender = !!selectedSender || !!senderQuery;
-    const hasReceiver = !!selectedReceiver || !!receiverQuery;
+    // Match the web's areMainDetailsComplete(): typed text alone is not a
+    // valid contact selection and must not be sent as a booked contact.
+    const hasSender = !!selectedSender?.UID;
+    const hasReceiver = !!selectedReceiver?.UID;
     const hasMode = !!selectedMode;
     const hasCarrier = !!selectedCarrier;
     return hasClient && hasSender && hasReceiver && hasMode && hasCarrier;
@@ -316,7 +388,9 @@ export default function BookOrderScreen({
   const MODE_OPTIONS_LIST = useMemo(() => {
     if (modesMap && Object.keys(modesMap).length > 0) {
       return Object.entries(modesMap).map(([k, v]) => ({
-        code: k,
+        // MODES is keyed by SHORT in the web. Prefer the record's SHORT field
+        // so a legacy storage key cannot change the rate UID or freight mode.
+        code: typeof v === 'object' && v?.SHORT ? String(v.SHORT).trim() : String(k).trim(),
         name: typeof v === 'string' ? v : (v.MODE || v.NAME || k),
         volIngr: parseFloat(v.VOL_INGR) || 5000,
         minWt: parseFloat(v.MIN_WT) || 0,
@@ -328,9 +402,10 @@ export default function BookOrderScreen({
 
   const CARRIER_OPTIONS_LIST = useMemo(() => {
     if (carriersMap && Object.keys(carriersMap).length > 0) {
-      return Object.entries(carriersMap).map(([k, v]) => ({
+      return Object.entries(carriersMap).map(([k]) => ({
+        // Web populateCarrierDropdown displays COMPANY_CODE as both value and label.
         code: k,
-        name: typeof v === 'string' ? v : (v.COMPANY_NAME || v.NAME || k)
+        name: k
       }));
     }
     return DEFAULT_CARRIERS;
@@ -346,7 +421,6 @@ export default function BookOrderScreen({
 
   const [flagTopay, setFlagTopay] = useState(bookForm.topay === 'Yes');
   const [flagCod, setFlagCod] = useState(false);
-  const [codAmount, setCodAmount] = useState(bookForm.cod || '');
   const [flagFov, setFlagFov] = useState(false);
   const [flagSav, setFlagSav] = useState(false);
 
@@ -356,6 +430,99 @@ export default function BookOrderScreen({
   const [boxBreadth, setBoxBreadth] = useState('');
   const [boxHeight, setBoxHeight] = useState('');
   const [boxes, setBoxes] = useState([]);
+
+  // Keyboard navigation follows the web booking form's Enter sequence. Native Tab
+  // navigation remains intact; these refs only handle deliberate Enter actions.
+  const senderInputRef = useRef(null);
+  const receiverInputRef = useRef(null);
+  const doxWeightInputRef = useRef(null);
+  const pcsCountInputRef = useRef(null);
+  const boxWeightInputRef = useRef(null);
+  const boxLengthInputRef = useRef(null);
+  const boxBreadthInputRef = useRef(null);
+  const boxHeightInputRef = useRef(null);
+  const productNameInputRef = useRef(null);
+  const productDocNoInputRef = useRef(null);
+  const productEwayInputRef = useRef(null);
+  const productAmountInputRef = useRef(null);
+  const awbInputRef = useRef(null);
+  const clientSearchInputRef = useRef(null);
+  const keyboardScrollRef = useRef(null);
+  const focusTimerRef = useRef(null);
+  const delayedActionTimersRef = useRef(new Set());
+
+  const scheduleDelayedAction = (callback, delay = 120) => {
+    const timer = setTimeout(() => {
+      delayedActionTimersRef.current.delete(timer);
+      callback();
+    }, delay);
+    delayedActionTimersRef.current.add(timer);
+    return timer;
+  };
+
+  // Keep the active field above the native keyboard. Refs may point to
+  // composite/web wrappers, so use only the guarded ScrollView responder on
+  // native and the DOM scrolling API on React Native Web.
+  const ensureInputVisible = (ref, needsDropdownRoom = false) => {
+    const node = ref?.current;
+    if (!node) return;
+
+    if (focusTimerRef.current) {
+      clearTimeout(focusTimerRef.current);
+    }
+
+    focusTimerRef.current = setTimeout(() => {
+      focusTimerRef.current = null;
+
+      const scroll = keyboardScrollRef.current;
+      const responder = scroll?.getScrollResponder?.() || scroll;
+      const handle = findNodeHandle(node);
+      // A larger offset places autocomplete/dropdown inputs nearer the upper
+      // edge, leaving room for their results below the field and above the
+      // keyboard. No native measurement call is used here.
+      const keyboardOffset = needsDropdownRoom ? 300 : 120;
+
+      if (
+        responder &&
+        handle &&
+        typeof responder.scrollResponderScrollNativeHandleToKeyboard === 'function'
+      ) {
+        try {
+          responder.scrollResponderScrollNativeHandleToKeyboard(handle, keyboardOffset, true);
+        } catch (_) {
+          // KeyboardAvoidingView still handles the native resize.
+        }
+      }
+
+      if (Platform.OS === 'web') {
+        const domNode = node.getScrollableNode?.() || node;
+        if (typeof domNode?.scrollIntoView === 'function') {
+          // Keep the upper-edge position below the fixed app header while
+          // leaving room for autocomplete/dropdown results.
+          if (needsDropdownRoom && domNode.style) {
+            domNode.style.scrollMarginTop = '96px';
+          }
+          domNode.scrollIntoView({
+            block: needsDropdownRoom ? 'start' : 'center',
+            behavior: 'smooth'
+          });
+        }
+      }
+    }, 260);
+  };
+
+  const focusInput = (ref, needsDropdownRoom = false) => {
+    scheduleDelayedAction(() => {
+      ref?.current?.focus?.();
+      ensureInputVisible(ref, needsDropdownRoom);
+    }, 120);
+  };
+
+  // Enter must never silently skip an empty entry field.
+  const focusNextIfFilled = (value, ref) => {
+    if (String(value ?? '').trim() === '') return;
+    focusInput(ref);
+  };
 
   // Product Adder State
   const [prodName, setProdName] = useState('');
@@ -383,14 +550,24 @@ export default function BookOrderScreen({
     const size = DOX_SIZES[doxType] || DOX_SIZES.DL;
     const h = wgt <= 0.1 ? 0.5 : wgt <= 0.5 ? 1 : wgt <= 1.0 ? 2 : 3;
 
+    const modeObj = MODE_OPTIONS_LIST.find(m => m.code === selectedMode);
+    const volDivisor = modeObj?.volIngr || 5000;
+    // Match web _doxRenderEntry exactly: DOX uses the shared volumetric
+    // recalculation, so CHG_WT is max(actual, volumetric), not always actual.
+    const [doxComputed] = recalculateAllBoxWeights([{
+      actualWeight: wgt,
+      length: size.l,
+      breadth: size.b,
+      height: h
+    }], volDivisor);
     const doxBox = {
       BOX_NUM: 1,
       WEIGHT: wgt,
       LENGTH: size.l,
       BREADTH: size.b,
       HIGHT: h,
-      VOLUME: (size.l * size.b * h) / 5000,
-      CHG_WT: wgt
+      VOLUME: doxComputed.volWeight,
+      CHG_WT: doxComputed.chargeWeight
     };
     const doxProd = {
       PRODUCT: 'Documents/Papers',
@@ -418,7 +595,10 @@ export default function BookOrderScreen({
       amt += p.AMOUNT || 0;
     });
     const modeObj = MODE_OPTIONS_LIST.find(m => m.code === selectedMode);
-    const minWt = modeObj && modeObj.minWt ? parseFloat(modeObj.minWt) : 0;
+    // Match web updateSummaryDisplay(): MIN_WT applies whenever the
+    // consignment has a box OR product. It is zero only for an empty form.
+    const hasConsignment = boxes.length > 0 || products.length > 0;
+    const minWt = hasConsignment && modeObj && modeObj.minWt ? parseFloat(modeObj.minWt) : 0;
     const finalTotalChgWt = Math.max(chg, minWt);
     return {
       totalWgt: wgt,
@@ -432,8 +612,24 @@ export default function BookOrderScreen({
   // Exact Web Helper Table & Rate Lookup — now delegated to the SHARED engine
   // (GENIE_WEB/GENIE_REACT utils/calculations.js getHelperTableData + calculateFreight)
   const helperTableData = useMemo(() => {
+    // Match the web's empty tables: no box/product means no billable weight,
+    // no rate lookup, and no freight. This prevents stale customer rates from
+    // appearing before the first consignment row is entered.
+    const hasConsignment = boxes.length > 0 || products.length > 0;
+    if (!hasConsignment) {
+      return {
+        weightCeiling: 0,
+        weightZone: '---',
+        rateUid: '---',
+        rate: null,
+        addRate: null,
+        fright: 0
+      };
+    }
     const client = activeClient || {};
-    const receiverZone = selectedReceiver?.ZONE || null;
+    // RATES columns and MODES availability flags use Z1…Z14. Keep the
+    // receiver value in that exact canonical form for both paths.
+    const receiverZone = normalizeZone(selectedReceiver?.ZONE) || null;
     const helper = getHelperTableData(
       summaryTotals.totalChgWt || 0,
       client,
@@ -446,7 +642,16 @@ export default function BookOrderScreen({
     const weightCeiling = parseFloat(helper.weight_ceiling) || 0;
     // weight_zone is 0.5 (E/P), a number threshold, or '---' — pass through exactly like web
     const weightZone = helper.weight_zone;
-    const fright = calculateFreight(selectedMode, isNaN(rate) ? 0 : rate, isNaN(addRate) ? 0 : addRate, weightCeiling, weightZone);
+    // Preserve the web's NaN sentinel for missing rate/add-rate cells. A
+    // missing base rate must produce zero; a missing ADD_RATE must use the
+    // standard-mode fallback (weightCeiling * rate), not silently become 0.
+    const fright = calculateFreight(
+      selectedMode,
+      isNaN(rate) ? NaN : rate,
+      isNaN(addRate) ? NaN : addRate,
+      weightCeiling,
+      weightZone
+    );
     return {
       weightCeiling: weightCeiling,
       weightZone: weightZone,
@@ -455,12 +660,23 @@ export default function BookOrderScreen({
       addRate: isNaN(addRate) ? null : addRate,
       fright: Math.max(0, fright)
     };
-  }, [summaryTotals, activeClient, clientCode, selectedMode, selectedReceiver, ratesMap]);
+  }, [boxes.length, products.length, summaryTotals, activeClient, clientCode, selectedMode, selectedReceiver, ratesMap]);
 
   // Exact Web Calculation Engine — delegated to SHARED calculateAllCharges
   // (includes within-state SGST+CGST 9/9 vs inter-state IGST 18% split via branchesMap,
   //  GST_INC inclusive pricing, COD/TOPAY/FOV/EWay/AWB/Packing/Dev charges)
   const calculatedCharges = useMemo(() => {
+    // Do not show customer-level AWB/fuel/packing/GST charges while the
+    // multibox/product tables are empty. The web starts with a blank estimate.
+    if (boxes.length === 0 && products.length === 0) {
+      return {
+        fright: '0.00', otherCharges: '0.00', gstTotal: '0.00', total: '0.00',
+        taxable: '0.00', fuelChg: '0.00', codChg: '0.00', topayChg: '0.00',
+        fovChg: '0.00', ewayChg: '0.00', awbChg: '0.00', packChg: '0.00',
+        devChg: '0.00', sgst: '0.00', cgst: '0.00', igst: '0.00',
+        taxMode: 'No GST'
+      };
+    }
     const client = activeClient || {};
     const frightValue = helperTableData.fright || 0;
     // Web expects products as { type, amount, ewayBill } (lowercase keys)
@@ -496,7 +712,7 @@ export default function BookOrderScreen({
       igst: charges.igst,
       taxMode: igst > 0 ? 'IGST (Inter-state 18%)' : ((sgst > 0 || cgst > 0) ? 'SGST + CGST (Within-state 9%+9%)' : 'No GST')
     };
-  }, [helperTableData, summaryTotals, activeClient, flagCod, flagTopay, flagFov, products, branchesMap]);
+  }, [boxes.length, products.length, helperTableData, summaryTotals, activeClient, flagCod, flagTopay, flagFov, branchesMap]);
 
   // --- Mode revalidation (Web: revalidateMode) ---
   // 1) Express weight limit: exceed customer's WEIGHT_CHANGE → switch away from Express;
@@ -507,22 +723,33 @@ export default function BookOrderScreen({
 
   useEffect(() => {
     if (editRef) return; // editing — user controls the mode
-    if (userMadeInitialModeChoice) return; // user explicitly chose a mode — don't fight them
+    // A manually chosen mode is always respected. Validation can still expose
+    // a message/unlock state, but it must never interrupt entry by opening a
+    // selection popup on its own.
+    if (userMadeInitialModeChoice) return;
     if (!expressModeObj) return;
     const weightChangeLimit = parseFloat(activeClient?.WEIGHT_CHANGE);
     if (isNaN(weightChangeLimit)) return;
     let msg = '';
     // Web revalidateMode compares summaryTotals.totalChgWt (MIN_WT-adjusted), not raw box weight
     if (summaryTotals.totalChgWt > weightChangeLimit && selectedMode === expressModeObj.code) {
-      const newMode = selectedReceiver?.MODE;
+      const receiverModeRaw = String(selectedReceiver?.MODE || '').trim();
+      const newModeObj = MODE_OPTIONS_LIST.find(m => m.code === receiverModeRaw)
+        || MODE_OPTIONS_LIST.find(m => String(m.name || '').trim().toUpperCase() === receiverModeRaw.toUpperCase());
+      const newMode = newModeObj?.code || '';
       if (newMode && newMode !== selectedMode) {
-        const newModeObj = MODE_OPTIONS_LIST.find(m => m.code === newMode);
         setSelectedMode(newMode);
+        // Keep the selector available for an explicit user change, but do not
+        // open a modal automatically while the user is entering boxes/products.
+        setModeTemporarilyUnlocked(true);
+        setNeedsModeSelection(true);
         // Web renderMultiboxTable() after auto-switch — CHG_WT follows the new mode's VOL_INGR
         if (newModeObj) recomputeBoxesForMode(newModeObj.volIngr);
         msg = `Mode auto-switched to ${newMode} based on weight.`;
       } else {
         msg = `Weight exceeds Express limit (${weightChangeLimit}kg). Please select a new mode.`;
+        setModeTemporarilyUnlocked(true);
+        setNeedsModeSelection(true);
       }
     } else if (summaryTotals.totalChgWt <= weightChangeLimit && selectedMode && selectedMode !== expressModeObj.code) {
       setSelectedMode(expressModeObj.code);
@@ -531,27 +758,39 @@ export default function BookOrderScreen({
       msg = 'Weight is within limit. Mode reverted to Express.';
     }
     setModeChangeMsg(msg);
-  }, [summaryTotals.totalChgWt, selectedMode, selectedReceiver?.MODE, activeClient?.WEIGHT_CHANGE, expressModeObj, MODE_OPTIONS_LIST, editRef, userMadeInitialModeChoice]);
+  }, [summaryTotals.totalChgWt, selectedMode, selectedReceiver?.MODE, activeClient?.WEIGHT_CHANGE, expressModeObj, MODE_OPTIONS_LIST, editRef, userMadeInitialModeChoice, needsModeSelection]);
 
   // 2) Zone availability: current mode not available for receiver zone → auto-switch to Surface
   useEffect(() => {
     if (editRef) return;
-    if (userMadeInitialModeChoice) return;
-    const zone = selectedReceiver?.ZONE;
+    if (userMadeInitialModeChoice && !modeTemporarilyUnlocked) return;
+    const zone = normalizeZone(selectedReceiver?.ZONE);
     if (!zone) return;
     const modeData = MODE_OPTIONS_LIST.find(m => m.code === selectedMode);
     if (modeData && modeData.rawObj && modeData.rawObj[zone] === 'N') {
       const surface = MODE_OPTIONS_LIST.find(m => (m.name || '').toUpperCase() === 'SURFACE' || (m.rawObj?.MODE || '').toUpperCase() === 'SURFACE');
       if (surface && surface.code !== selectedMode) {
         setSelectedMode(surface.code);
+        // Web revalidateMode temporarily unlocks the selector so the user can
+        // choose another available mode; adding the next row re-locks it.
+        setModeTemporarilyUnlocked(true);
         // Web renderMultiboxTable() after mode change — CHG_WT follows Surface VOL_INGR
         recomputeBoxesForMode(surface.volIngr);
         setModeChangeMsg(`Mode ${modeData.name} not available for ${zone}. Switched to Surface. Select another mode if needed.`);
       }
     }
-  }, [selectedReceiver?.ZONE, selectedMode, MODE_OPTIONS_LIST, editRef, userMadeInitialModeChoice]);
+  }, [selectedReceiver?.ZONE, selectedMode, MODE_OPTIONS_LIST, editRef, userMadeInitialModeChoice, modeTemporarilyUnlocked]);
 
   // AWB Input
+  // Web input-validator parity: keep numeric fields numeric at the boundary,
+  // rather than allowing malformed text into calculations/payloads.
+  const digitsOnly = (value, maxLength) => String(value || '').replace(/\D/g, '').slice(0, maxLength);
+  const decimalOnly = (value) => {
+    const cleaned = String(value || '').replace(/[^0-9.]/g, '');
+    const [whole, ...fraction] = cleaned.split('.');
+    return fraction.length ? `${whole}.${fraction.join('')}` : whole;
+  };
+
   const [awbNumber, setAwbNumber] = useState(bookForm.awb || '');
 
   // Add Box Handler (Web: addMultiboxEntry -> requires Wgt+L+B+H, considers Pcs multiplier,
@@ -559,7 +798,7 @@ export default function BookOrderScreen({
   const handleAddBox = () => {
     if (!isMainDetailsComplete) {
       Alert.alert('Required Fields Missing', 'Please select Customer, Consignor, Consignee, Mode and Carrier first.');
-      return;
+      return false;
     }
     const w = parseFloat(boxWgt) || 0;
     const l = parseFloat(boxLength) || 0;
@@ -569,7 +808,7 @@ export default function BookOrderScreen({
     // Web parity: all four of Wgt, L, B and H must be filled
     if (!w || !l || !b || !h) {
       Alert.alert('Error', 'Please fill all Wgt, L, B, and H fields to add a box.');
-      return;
+      return false;
     }
     const pcsMultiplier = flagPcs ? (parseInt(pcsCount) || 1) : 1;
     const modeObj = MODE_OPTIONS_LIST.find(m => m.code === selectedMode);
@@ -592,11 +831,22 @@ export default function BookOrderScreen({
     }
     setBoxes([...boxes, ...addedBoxes]);
     setIsFormLocked(true);
+    setModeTemporarilyUnlocked(false);
     setBoxWgt('');
     setBoxLength('');
     setBoxBreadth('');
     setBoxHeight('');
     setPcsCount('1');
+    Alert.alert(
+      'Box Added',
+      'Do you want to add another box?',
+      [
+        { text: 'No', onPress: () => focusInput(productNameInputRef) },
+        { text: 'Yes', onPress: () => focusInput(boxWeightInputRef) }
+      ],
+      { cancelable: false }
+    );
+    return true;
   };
 
   const handleRemoveBox = (index) => {
@@ -615,20 +865,20 @@ export default function BookOrderScreen({
   const handleAddProduct = () => {
     if (!isMainDetailsComplete) {
       Alert.alert('Required Fields Missing', 'Please select Customer, Consignor, Consignee, Mode and Carrier first.');
-      return;
+      return false;
     }
     if (!prodName.trim() || !prodDocNo.trim() || !prodAmount.trim()) {
       Alert.alert('Error', 'Product, DocNo and Amount fields are required.');
-      return;
+      return false;
     }
     const amt = parseFloat(prodAmount) || 0;
     if (amt >= 50000 && !prodEway) {
       Alert.alert('EWay Required', 'EWay Bill is mandatory for invoice value ₹50,000 and above.');
-      return;
+      return false;
     }
     if (prodEway && !/^\d{12}$/.test(prodEway.trim())) {
       Alert.alert('Invalid EWay Bill', 'EWay bill must be a 12-digit numeric number.');
-      return;
+      return false;
     }
     const newProd = {
       PRODUCT: prodName,
@@ -639,11 +889,23 @@ export default function BookOrderScreen({
     };
     setProducts([...products, newProd]);
     setIsFormLocked(true);
-    setProdName('');
+    setModeTemporarilyUnlocked(false);
+    // Preserve the previous product name so the next product can reuse it or
+    // edit it, matching the requested rapid-entry workflow.
     setProdDocNo('');
     setProdEway('');
     setProdAmount('');
     setProdDocType('INV');
+    Alert.alert(
+      'Product Added',
+      'Do you want to enter another product?',
+      [
+        { text: 'No', onPress: () => focusInput(awbInputRef) },
+        { text: 'Yes', onPress: () => focusInput(productNameInputRef) }
+      ],
+      { cancelable: false }
+    );
+    return true;
   };
 
   const handleRemoveProduct = (index) => {
@@ -682,11 +944,12 @@ export default function BookOrderScreen({
     }
   };
 
-  // Auto Generate AWB (web "Get AWB" button — this app generates instead of the web stub)
+  // Match the web button: AWB allocation is not implemented by the client.
+  // Never synthesize an AWB locally; staff/carrier allocation or the server must
+  // provide it. A blank field must remain blank in the booking payload.
   const handleGenerateAwb = () => {
-    const gen = 'JTL' + Math.floor(10000000 + Math.random() * 90000000);
-    setAwbNumber(gen);
-    validateAwbPattern(gen);
+    showBookingMessage('AWB fetch logic is not implemented yet. Enter an AWB manually if one was assigned.', 'info', 6000);
+    awbInputRef.current?.focus?.();
   };
 
   // --- Payment flag helper (Web: Dox unchecks Pcs/Topay/COD/FOV; those uncheck Dox;
@@ -733,8 +996,8 @@ export default function BookOrderScreen({
     const modeObj = MODE_OPTIONS_LIST.find(m => m.code === selectedMode);
     const modeName = (modeObj?.name || selectedMode || '').toUpperCase().replace(/ /g, '_');
     const tat = selectedReceiver ? (selectedReceiver[`${modeName}_TAT`] || '') : '';
-    const consignorUid = selectedSender ? (selectedSender.UID || selectedSender.NAME) : (senderQuery.trim() || '');
-    const consigneeUid = selectedReceiver ? (selectedReceiver.UID || selectedReceiver.NAME) : (receiverQuery.trim() || '');
+    const consignorUid = selectedSender?.UID || '';
+    const consigneeUid = selectedReceiver?.UID || '';
     const invoiceId = generateInvoiceId(activeClient?.CODE || clientCode, activeClient?.BILL_CYCLE, unixDate, flagTopay);
 
     const order = {
@@ -743,9 +1006,9 @@ export default function BookOrderScreen({
       BRANCH: activeClient?.BRANCH || '',
       ORDER_DATE: unixDate,
       CARRIER: selectedCarrier,
-      // Web sends the AWB as typed; keep the previous auto-generate fallback so the
-      // reference/messaging never shows an empty AWB
-      AWB_NUMBER: awbNumber.trim() || ('JTL' + Math.floor(10000000 + Math.random() * 90000000)),
+      // Web sends exactly what is in the AWB field. In particular, blank stays
+      // blank; do not invent a client-side JTL value.
+      AWB_NUMBER: awbNumber.trim(),
       TRANSIT_DATE: unixDate,
       CONSIGNOR: consignorUid,
       ORIGIN_CITY: originCityInput || selectedSender?.CITY || '',
@@ -754,7 +1017,7 @@ export default function BookOrderScreen({
       DEST_CITY: destCityInput || selectedReceiver?.CITY || '',
       DEST_PINCODE: destPincodeInput || '',
       TAT: tat,
-      ZONE: selectedReceiver?.ZONE || '',
+      ZONE: normalizeZone(selectedReceiver?.ZONE),
       MODE: selectedMode,
       GLOBAL: flagDox ? 'Yes' : 'No',
       COD: flagCod ? 'Yes' : 'No',
@@ -806,11 +1069,13 @@ export default function BookOrderScreen({
     setProducts([]);
     setAwbNumber('');
     setAwbHint(null);
-    setCodAmount('');
     setFlagCod(false);
     setFlagTopay(false);
     setFlagPcs(false);
     setModeChangeMsg('');
+    // The web resets the mode for every next booking, even when SAV preserves
+    // the customer/sender context.
+    setSelectedMode('');
     if (!sav) {
       setSelectedReceiver(null);
       setReceiverQuery('');
@@ -821,6 +1086,7 @@ export default function BookOrderScreen({
     if (!(sav && dox)) setFlagDox(false);
     else { setDoxWeight('0.1'); setDoxType('DL'); }
     setUserMadeInitialModeChoice(false);
+    setModeTemporarilyUnlocked(false);
     setIsFormLocked(false);
   };
 
@@ -938,8 +1204,21 @@ export default function BookOrderScreen({
       setAcError('Name, Mobile, Address and Pincode are required.');
       return;
     }
-    if (mobile.length !== 10) {
+    if (mobile.length !== 10 || !InputValidator.mobile(`91${mobile}`)) {
       setAcError('Mobile number must be exactly 10 digits.');
+      return;
+    }
+    if (!InputValidator.pin(pincode)) {
+      setAcError('Pincode must be exactly 6 digits.');
+      return;
+    }
+    if (acForm.email.trim() && !InputValidator.email(acForm.email.trim())) {
+      setAcError('Enter a valid email address.');
+      return;
+    }
+    const gstin = acForm.gstin.trim().toUpperCase();
+    if (gstin && !InputValidator.gstin(gstin)) {
+      setAcError('Enter a valid GSTIN.');
       return;
     }
     if (!acPinResult?.found || !acPinResult.city) {
@@ -958,7 +1237,7 @@ export default function BookOrderScreen({
         ADDRESS: address,
         PINCODE: pincode,
         EMAIL: acForm.email.trim() || null,
-        GSTIN: acForm.gstin.trim().toUpperCase() || null,
+        GSTIN: gstin || null,
         PAN: null,
         AADHAAR: null,
         CARRIER: acForm.carrier.trim() || null,
@@ -1012,7 +1291,52 @@ export default function BookOrderScreen({
 
   useEffect(() => () => {
     if (bookingMsgTimerRef.current) clearTimeout(bookingMsgTimerRef.current);
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    delayedActionTimersRef.current.forEach(timer => clearTimeout(timer));
+    delayedActionTimersRef.current.clear();
+    Keyboard.dismiss();
   }, []);
+
+  // While BookOrder is mounted, Android Back never leaves the booking page.
+  // An open popup gets first priority and is dismissed before the event is
+  // consumed; with no popup open, the form remains exactly where it is.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !BackHandler?.addEventListener) return undefined;
+    const handleBookOrderBack = () => {
+      // Cancel delayed focus/modal actions first. Otherwise a queued carrier,
+      // focus, or mode opener could act just after Back dismissed a popup.
+      if (focusTimerRef.current) {
+        clearTimeout(focusTimerRef.current);
+        focusTimerRef.current = null;
+      }
+      delayedActionTimersRef.current.forEach(timer => clearTimeout(timer));
+      delayedActionTimersRef.current.clear();
+      if (addContactVisible) {
+        setAddContactVisible(false);
+        return true;
+      }
+      if (clientModalVisible) {
+        setClientModalVisible(false);
+        return true;
+      }
+      if (carrierModalVisible) {
+        setCarrierModalVisible(false);
+        return true;
+      }
+      if (modeModalVisible) {
+        setModeModalVisible(false);
+        return true;
+      }
+      if (orderDateModalVisible) {
+        setOrderDateModalVisible(false);
+        return true;
+      }
+      return true;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleBookOrderBack);
+    return () => subscription?.remove?.();
+  }, [addContactVisible, clientModalVisible, carrierModalVisible, modeModalVisible, orderDateModalVisible]);
 
   // Submit Handler (Web: book_button click — edit → PUT /api/editOrder, new → POST /api/bookOrder,
   // waits for server confirmation, then renders the last-booked card)
@@ -1103,7 +1427,6 @@ export default function BookOrderScreen({
     setProducts([]);
     setAwbNumber('');
     setAwbHint(null);
-    setCodAmount('');
     setFlagCod(false);
     setFlagTopay(false);
     setFlagDox(false);
@@ -1116,11 +1439,25 @@ export default function BookOrderScreen({
     setBookingMessage('');
     setModeChangeMsg('');
     setUserMadeInitialModeChoice(false);
+    setNeedsModeSelection(false);
+    setModeTemporarilyUnlocked(false);
     setIsFormLocked(false);
   };
 
   return (
-    <ScrollView style={styles.scrollPage} contentContainerStyle={{ paddingBottom: 40 }}>
+    <KeyboardAvoidingView
+      style={styles.keyboardPage}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 72 : 0}
+    >
+      <ScrollView
+        ref={keyboardScrollRef}
+        style={[styles.scrollPage, isCompactMobile && styles.scrollPageCompact]}
+        contentContainerStyle={{ flexGrow: 1, paddingBottom: 180 }}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+      >
       <Text style={styles.pageTitle}>Book Order</Text>
 
       {/* ── EDIT BANNER (Web: prefillEditOrder banner) ── */}
@@ -1141,12 +1478,15 @@ export default function BookOrderScreen({
       ) : null}
 
       {/* ── SECTION 1: Top Controls (Order Date Calendar & Client Dropdown 2:3 Ratio) ── */}
-      <View style={[styles.cardWeb, isFormLocked && styles.cardLocked]}>
+      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, isFormLocked && styles.cardLocked]}>
         <Text style={styles.sectionHeaderTitle}>1. Order Info & Client</Text>
-        <View style={styles.rowGrid}>
+        <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
           <View style={{ flex: 2 }}>
             <Text style={styles.labelWeb}>ORDER DATE</Text>
             <TouchableOpacity
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="Choose order date"
               disabled={isFormLocked}
               style={[styles.calendarTriggerBtn, isFormLocked && styles.btnDisabled]}
               onPress={() => setOrderDateModalVisible(true)}
@@ -1161,6 +1501,9 @@ export default function BookOrderScreen({
           <View style={{ flex: 3 }}>
             <Text style={styles.labelWeb}>CLIENT NAME</Text>
             <TouchableOpacity
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="Select client or customer"
               disabled={isFormLocked}
               style={[styles.clientSelectorBtn, isFormLocked && styles.btnDisabled]}
               onPress={() => setClientModalVisible(true)}
@@ -1175,23 +1518,27 @@ export default function BookOrderScreen({
       </View>
 
       {/* ── SECTION 2: Consignor (Sender) Details ── */}
-      <View style={[styles.cardWeb, isFormLocked && styles.cardLocked]}>
+      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, isFormLocked && styles.cardLocked]}>
         <Text style={styles.sectionHeaderTitle}>2. Consignor (Sender) Details</Text>
         <Text style={styles.labelWeb}>SEARCH SENDER (NAME / MOBILE)</Text>
-        <TextInput
+        <TextInput          ref={senderInputRef}
+          onFocus={() => ensureInputVisible(senderInputRef, true)}
           editable={!isFormLocked}
           style={[styles.inputWeb, isFormLocked && styles.inputDisabled]}
           placeholder="Type consignor name or phone..."
           placeholderTextColor="#94a3b8"
-          value={senderQuery}
-          onChangeText={(text) => {
-            setSenderQuery(text);
+          value={senderQuery}              onChangeText={(text) => {
+            setSenderQuery(uppercaseText(text));
             if (selectedSender) setSelectedSender(null);
           }}
-          returnKeyType="done"
+          returnKeyType="next"
+          blurOnSubmit={false}
           onSubmitEditing={() => {
             if (filteredSenders.length > 0) {
               handleSelectSender(filteredSenders[0]);
+              receiverInputRef.current?.focus?.();
+            } else {
+              receiverInputRef.current?.focus?.();
             }
           }}
         />
@@ -1201,6 +1548,9 @@ export default function BookOrderScreen({
             {filteredSenders.map((c, idx) => (
               <TouchableOpacity
                 key={idx}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel={`Select sender ${c.NAME || ''}`}
                 style={styles.autocompleteItem}
                 onPress={() => handleSelectSender(c)}
               >
@@ -1208,7 +1558,7 @@ export default function BookOrderScreen({
                 <Text style={styles.autocompleteSub}>{c.CITY || 'City N/A'} | Ph: {c.MOBILE || 'N/A'}</Text>
               </TouchableOpacity>
             ))}
-            <TouchableOpacity style={styles.autocompleteAddNew} onPress={() => { openAddContact('sender'); }}>
+            <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel="Add new sender contact" style={styles.autocompleteAddNew} onPress={() => { openAddContact('sender'); }}>
               <Text style={styles.autocompleteAddNewText}>+ Add New Contact</Text>
             </TouchableOpacity>
           </View>
@@ -1228,24 +1578,29 @@ export default function BookOrderScreen({
       </View>
 
       {/* ── SECTION 3: Consignee (Receiver) Details ── */}
-      <View style={[styles.cardWeb, isFormLocked && styles.cardLocked]}>
+      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, isFormLocked && styles.cardLocked]}>
         <Text style={styles.sectionHeaderTitle}>3. Consignee (Receiver) Details</Text>
         <Text style={styles.labelWeb}>SEARCH RECEIVER (NAME / MOBILE)</Text>
         <TextInput
+          ref={receiverInputRef}
+          onFocus={() => ensureInputVisible(receiverInputRef, true)}
           editable={!isFormLocked}
           style={[styles.inputWeb, isFormLocked && styles.inputDisabled]}
           placeholder="Type consignee name or phone..."
           placeholderTextColor="#94a3b8"
-          value={receiverQuery}
-          onChangeText={(text) => {
-            setReceiverQuery(text);
+          value={receiverQuery}              onChangeText={(text) => {
+            setReceiverQuery(uppercaseText(text));
             if (selectedReceiver) setSelectedReceiver(null);
           }}
-          returnKeyType="done"
+          returnKeyType="next"
+          blurOnSubmit={false}
           onSubmitEditing={() => {
             if (filteredReceivers.length > 0) {
-              const top = filteredReceivers[0];
-              handleSelectReceiver(top);
+              handleSelectReceiver(filteredReceivers[0]);
+            } else {
+              // Do not open mode/carrier popups from Enter. Leave the user in
+              // the receiver field until a selector is chosen explicitly.
+              receiverInputRef.current?.focus?.();
             }
           }}
         />
@@ -1255,6 +1610,9 @@ export default function BookOrderScreen({
             {filteredReceivers.map((c, idx) => (
               <TouchableOpacity
                 key={idx}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel={`Select receiver ${c.NAME || ''}`}
                 style={styles.autocompleteItem}
                 onPress={() => handleSelectReceiver(c)}
               >
@@ -1262,7 +1620,7 @@ export default function BookOrderScreen({
                 <Text style={styles.autocompleteSub}>{c.CITY || 'City N/A'} | Ph: {c.MOBILE || 'N/A'}</Text>
               </TouchableOpacity>
             ))}
-            <TouchableOpacity style={styles.autocompleteAddNew} onPress={() => { openAddContact('receiver'); }}>
+            <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel="Add new receiver contact" style={styles.autocompleteAddNew} onPress={() => { openAddContact('receiver'); }}>
               <Text style={styles.autocompleteAddNewText}>+ Add New Contact</Text>
             </TouchableOpacity>
           </View>
@@ -1277,46 +1635,23 @@ export default function BookOrderScreen({
           </View>
         )}
 
-        <View style={styles.rowGrid}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.labelWeb}>DESTINATION CITY</Text>
-            <TextInput
-              editable={!isFormLocked}
-              style={[styles.inputWeb, isFormLocked && styles.inputDisabled]}
-              placeholder="e.g. MUMBAI"
-              placeholderTextColor="#94a3b8"
-              value={destCityInput}
-              onChangeText={setDestCityInput}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.labelWeb}>PINCODE</Text>
-            <TextInput
-              editable={!isFormLocked}
-              style={[styles.inputWeb, isFormLocked && styles.inputDisabled]}
-              placeholder="e.g. 400001"
-              keyboardType="numeric"
-              maxLength={6}
-              placeholderTextColor="#94a3b8"
-              value={destPincodeInput}
-              onChangeText={setDestPincodeInput}
-            />
-          </View>
-        </View>
       </View>
 
       {/* ── SECTION 4: Mode & Carrier Selection (Side-by-side Dropdowns) ── */}
-      <View style={[styles.cardWeb, isFormLocked && styles.cardLocked]}>
+      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, isFormLocked && styles.cardLocked]}>
         <Text style={styles.sectionHeaderTitle}>4. Mode & Carrier</Text>
-        <View style={styles.rowGrid}>
+        <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
           <View style={{ flex: 1 }}>
             <Text style={styles.labelWeb}>MODE</Text>
             <TouchableOpacity
-              disabled={isFormLocked}
-              style={[styles.clientSelectorBtn, isFormLocked && styles.btnDisabled]}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="Select transport mode"
+              disabled={false}
+              style={styles.clientSelectorBtn}
               onPress={() => setModeModalVisible(true)}
             >
-              <Text style={[styles.clientSelectorText, isFormLocked && styles.textDisabled]} numberOfLines={1}>
+              <Text style={styles.clientSelectorText} numberOfLines={1}>
                 {(MODE_OPTIONS_LIST.find(m => m.code === selectedMode) || {}).name || selectedMode || 'Select Mode'}
               </Text>
               <Text style={styles.clientSelectorArrow}>▼</Text>
@@ -1326,11 +1661,14 @@ export default function BookOrderScreen({
           <View style={{ flex: 1 }}>
             <Text style={styles.labelWeb}>CARRIER</Text>
             <TouchableOpacity
-              disabled={isFormLocked}
-              style={[styles.clientSelectorBtn, isFormLocked && styles.btnDisabled]}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="Select carrier"
+              disabled={false}
+              style={styles.clientSelectorBtn}
               onPress={() => setCarrierModalVisible(true)}
             >
-              <Text style={[styles.clientSelectorText, isFormLocked && styles.textDisabled]} numberOfLines={1}>
+              <Text style={styles.clientSelectorText} numberOfLines={1}>
                 {(CARRIER_OPTIONS_LIST.find(c => c.code === selectedCarrier) || {}).name || selectedCarrier || 'Select Carrier'}
               </Text>
               <Text style={styles.clientSelectorArrow}>▼</Text>
@@ -1345,11 +1683,17 @@ export default function BookOrderScreen({
       <View style={styles.cardWeb}>
         <Text style={styles.sectionHeaderTitle}>5. Payment Type & Options</Text>
         <View style={styles.webPaymentRow}>
-          <WebCheckbox label="Dox" value={flagDox} onValueChange={(v) => setPaymentFlag('dox', v)} />
+          {/* Web setBookingFieldsLocked/togglePaymentModeLock parity: once a
+              consignment row exists, these booking choices cannot change. SAV
+              intentionally remains available because it only affects the next
+              booking reset. */}
+          <WebCheckbox label="Dox" value={flagDox} disabled={isFormLocked} onValueChange={(v) => setPaymentFlag('dox', v)} />
+          {/* Web togglePaymentModeLock intentionally keeps Pcs available after
+              boxes exist so the next box can still use a pieces multiplier. */}
           <WebCheckbox label="Pcs" value={flagPcs} onValueChange={(v) => setPaymentFlag('pcs', v)} />
-          <WebCheckbox label="Topay" value={flagTopay} onValueChange={(v) => setPaymentFlag('topay', v)} />
-          <WebCheckbox label="COD" value={flagCod} onValueChange={(v) => setPaymentFlag('cod', v)} />
-          <WebCheckbox label="FOV" value={flagFov} onValueChange={(v) => setPaymentFlag('fov', v)} />
+          <WebCheckbox label="Topay" value={flagTopay} disabled={isFormLocked} onValueChange={(v) => setPaymentFlag('topay', v)} />
+          <WebCheckbox label="COD" value={flagCod} disabled={isFormLocked} onValueChange={(v) => setPaymentFlag('cod', v)} />
+          <WebCheckbox label="FOV" value={flagFov} disabled={isFormLocked} onValueChange={(v) => setPaymentFlag('fov', v)} />
           <WebCheckbox label="SAV" value={flagSav} onValueChange={(v) => setPaymentFlag('sav', v)} title="Preserve customer/consignor/consignee for next booking" />
         </View>
 
@@ -1360,12 +1704,16 @@ export default function BookOrderScreen({
             <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', marginBottom: 8 }}>
               <View style={{ flex: 1.2 }}>
                 <TextInput
+                  ref={doxWeightInputRef}
+                  onFocus={() => ensureInputVisible(doxWeightInputRef)}
                   style={[styles.inputWeb, { marginBottom: 0, paddingHorizontal: 8 }]}
                   value={doxWeight}
                   keyboardType="numeric"
-                  onChangeText={setDoxWeight}
+                  onChangeText={(t) => setDoxWeight(decimalOnly(t))}
                   placeholder="Wgt (kg)"
                   placeholderTextColor="#94a3b8"
+                  returnKeyType="done"
+                  onSubmitEditing={handleAddDoxEnvelope}
                 />
               </View>
               {['DL', 'A4', 'BG'].map(env => (
@@ -1395,33 +1743,23 @@ export default function BookOrderScreen({
         {flagPcs && (
           <View style={{ marginTop: 10 }}>
             <Text style={styles.labelWeb}>PIECES COUNT MULTIPLIER</Text>
-            <TextInput
-              style={styles.inputWeb}
+            <TextInput                ref={pcsCountInputRef}
+                onFocus={() => ensureInputVisible(pcsCountInputRef)}
+                style={styles.inputWeb}
               value={pcsCount}
               keyboardType="numeric"
-              onChangeText={setPcsCount}
+              onChangeText={(t) => setPcsCount(digitsOnly(t, 4))}
               placeholder="1"
+              returnKeyType="done"
+              onSubmitEditing={() => boxWeightInputRef.current?.focus?.()}
             />
           </View>
         )}
 
-        {flagCod && (
-          <View style={{ marginTop: 10 }}>
-            <Text style={styles.labelWeb}>COD AMOUNT (₹)</Text>
-            <TextInput
-              style={styles.inputWeb}
-              placeholder="e.g. 1500"
-              keyboardType="numeric"
-              placeholderTextColor="#94a3b8"
-              value={codAmount}
-              onChangeText={setCodAmount}
-            />
-          </View>
-        )}
       </View>
 
       {/* ── SECTION 6: Consignment Box Adder (Web: toggleWeightProductEntry) ── */}
-      <View style={[styles.cardWeb, !isMainDetailsComplete && styles.cardDisabled]}>
+      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, !isMainDetailsComplete && styles.cardDisabled]}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <Text style={[styles.sectionHeaderTitle, { marginBottom: 0 }]}>6. Consignment Boxes ({boxes.length})</Text>
           {boxes.length > 0 && (
@@ -1437,53 +1775,72 @@ export default function BookOrderScreen({
 
         {!flagDox && (
           <>
-            <View style={styles.rowGrid}>
+            <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.labelWeb}>WEIGHT (KG)</Text>
                 <TextInput
+                  ref={boxWeightInputRef}
+                  onFocus={() => ensureInputVisible(boxWeightInputRef)}
                   editable={isMainDetailsComplete}
                   style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
                   placeholder="Weight"
                   keyboardType="numeric"
                   placeholderTextColor="#94a3b8"
                   value={boxWgt}
-                  onChangeText={setBoxWgt}
+                  onChangeText={(t) => setBoxWgt(decimalOnly(t))}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => focusNextIfFilled(boxWgt, boxLengthInputRef)}
                 />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.labelWeb}>LENGTH (CM)</Text>
                 <TextInput
+                  ref={boxLengthInputRef}
+                  onFocus={() => ensureInputVisible(boxLengthInputRef)}
                   editable={isMainDetailsComplete}
                   style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
                   placeholder="L"
                   keyboardType="numeric"
                   placeholderTextColor="#94a3b8"
                   value={boxLength}
-                  onChangeText={setBoxLength}
+                  onChangeText={(t) => setBoxLength(decimalOnly(t))}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => focusNextIfFilled(boxLength, boxBreadthInputRef)}
                 />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.labelWeb}>BREADTH (CM)</Text>
                 <TextInput
+                  ref={boxBreadthInputRef}
+                  onFocus={() => ensureInputVisible(boxBreadthInputRef)}
                   editable={isMainDetailsComplete}
                   style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
                   placeholder="B"
                   keyboardType="numeric"
                   placeholderTextColor="#94a3b8"
                   value={boxBreadth}
-                  onChangeText={setBoxBreadth}
+                  onChangeText={(t) => setBoxBreadth(decimalOnly(t))}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => focusNextIfFilled(boxBreadth, boxHeightInputRef)}
                 />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.labelWeb}>HEIGHT (CM)</Text>
                 <TextInput
+                  ref={boxHeightInputRef}
+                  onFocus={() => ensureInputVisible(boxHeightInputRef)}
                   editable={isMainDetailsComplete}
                   style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
                   placeholder="H"
                   keyboardType="numeric"
                   placeholderTextColor="#94a3b8"
                   value={boxHeight}
-                  onChangeText={setBoxHeight}
+                  onChangeText={(t) => setBoxHeight(decimalOnly(t))}
+                  returnKeyType="done"
+                  onSubmitEditing={() => { handleAddBox(); }}
                 />
               </View>
             </View>
@@ -1518,7 +1875,7 @@ export default function BookOrderScreen({
       </View>
 
       {/* ── SECTION 7: Product Adder (Web: toggleWeightProductEntry) ── */}
-      <View style={[styles.cardWeb, !isMainDetailsComplete && styles.cardDisabled]}>
+      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, !isMainDetailsComplete && styles.cardDisabled]}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <Text style={[styles.sectionHeaderTitle, { marginBottom: 0 }]}>7. Product & Invoice Details ({products.length})</Text>
           {products.length > 0 && (
@@ -1536,24 +1893,34 @@ export default function BookOrderScreen({
           <>
             <Text style={styles.labelWeb}>PRODUCT NAME</Text>
             <TextInput
+              ref={productNameInputRef}
+              onFocus={() => ensureInputVisible(productNameInputRef)}
               editable={isMainDetailsComplete}
               style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
               placeholder="e.g. Spare Parts"
               placeholderTextColor="#94a3b8"
               value={prodName}
-              onChangeText={setProdName}
+              onChangeText={(text) => setProdName(uppercaseText(text))}
+              returnKeyType="next"
+              blurOnSubmit={false}
+              onSubmitEditing={() => focusNextIfFilled(prodName, productDocNoInputRef)}
             />
 
-            <View style={styles.rowGrid}>
+            <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
               <View style={{ flex: 2 }}>
                 <Text style={styles.labelWeb}>DOC NO</Text>
                 <TextInput
+                  ref={productDocNoInputRef}
+                  onFocus={() => ensureInputVisible(productDocNoInputRef)}
                   editable={isMainDetailsComplete}
                   style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
                   placeholder="Doc #"
                   placeholderTextColor="#94a3b8"
                   value={prodDocNo}
-                  onChangeText={setProdDocNo}
+                  onChangeText={(text) => setProdDocNo(uppercaseText(text))}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => focusNextIfFilled(prodDocNo, productEwayInputRef)}
                 />
               </View>
 
@@ -1574,10 +1941,12 @@ export default function BookOrderScreen({
               </View>
             </View>
 
-            <View style={styles.rowGrid}>
+            <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.labelWeb}>EWAY BILL</Text>
                 <TextInput
+                  ref={productEwayInputRef}
+                  onFocus={() => ensureInputVisible(productEwayInputRef)}
                   editable={isMainDetailsComplete}
                   style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
                   placeholder="12 digit EWay"
@@ -1585,19 +1954,26 @@ export default function BookOrderScreen({
                   maxLength={12}
                   placeholderTextColor="#94a3b8"
                   value={prodEway}
-                  onChangeText={setProdEway}
+                  onChangeText={(t) => setProdEway(digitsOnly(t, 12))}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => focusNextIfFilled(prodEway, productAmountInputRef)}
                 />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.labelWeb}>AMOUNT (₹)</Text>
                 <TextInput
-                  editable={isMainDetailsComplete}
+                ref={productAmountInputRef}
+                onFocus={() => ensureInputVisible(productAmountInputRef)}
+                editable={isMainDetailsComplete}
                   style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
                   placeholder="Amount"
                   keyboardType="numeric"
                   placeholderTextColor="#94a3b8"
                   value={prodAmount}
-                  onChangeText={setProdAmount}
+                  onChangeText={(t) => setProdAmount(decimalOnly(t))}
+                  returnKeyType="done"
+                  onSubmitEditing={() => { handleAddProduct(); }}
                 />
               </View>
             </View>
@@ -1713,11 +2089,14 @@ export default function BookOrderScreen({
         <Text style={styles.labelWeb}>AWB NUMBER</Text>
         <View style={styles.awbInputRow}>
           <TextInput
-            style={[styles.inputWeb, { flex: 1, marginBottom: 0 }]}
+          ref={awbInputRef}
+          onFocus={() => ensureInputVisible(awbInputRef)}
+          style={[styles.inputWeb, { flex: 1, marginBottom: 0 }]}
             placeholder="Enter AWB or tap Auto Get"
             placeholderTextColor="#94a3b8"
-            value={awbNumber}
-            onChangeText={(t) => { setAwbNumber(t); validateAwbPattern(t); }}
+            value={awbNumber}              onChangeText={(t) => { const value = uppercaseText(t); setAwbNumber(value); validateAwbPattern(value); }}
+            returnKeyType="done"
+            onSubmitEditing={handleSubmit}
           />
           <TouchableOpacity style={styles.getAwbBtn} onPress={handleGenerateAwb}>
             <RefreshIcon size={14} color="#0284c7" />
@@ -1738,11 +2117,11 @@ export default function BookOrderScreen({
         )}
 
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
-          <TouchableOpacity style={styles.clearBtn} onPress={handleClearAll}>
+          <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel="Clear booking form" style={styles.clearBtn} onPress={handleClearAll}>
             <Text style={styles.clearBtnText}>Clear All</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={bookingLoading}>
+          <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel={editRef ? 'Update order' : 'Book order'} style={styles.submitBtn} onPress={handleSubmit} disabled={bookingLoading}>
             {bookingLoading ? (
               <ActivityIndicator color="#ffffff" />
             ) : (
@@ -1844,11 +2223,13 @@ export default function BookOrderScreen({
             </View>
 
             <TextInput
+              ref={clientSearchInputRef}
+              onFocus={() => ensureInputVisible(clientSearchInputRef, true)}
               style={styles.searchInput}
               placeholder="Search Client Name or Code..."
               placeholderTextColor="#94a3b8"
               value={clientSearchQuery}
-              onChangeText={setClientSearchQuery}
+              onChangeText={(text) => setClientSearchQuery(uppercaseText(text))}
             />
 
             <ScrollView style={{ maxHeight: 350 }}>
@@ -1858,6 +2239,9 @@ export default function BookOrderScreen({
                 filteredClients.map((client, ci) => (
                   <TouchableOpacity
                     key={ci}
+                    accessible
+                    accessibilityRole="button"
+                    accessibilityLabel={`Select client ${client.B2B_NAME || client.NAME || client.CODE || ''}`}
                     style={styles.clientModalItem}
                     onPress={() => handleSelectClient(client)}
                   >
@@ -1892,6 +2276,9 @@ export default function BookOrderScreen({
                 return (
                   <TouchableOpacity
                     key={mi}
+                    accessible
+                    accessibilityRole="button"
+                    accessibilityLabel={`Select mode ${m.name}${!available ? ', unavailable' : ''}`}
                     disabled={!available}
                     style={[styles.clientModalItem, !available && styles.clientModalItemDisabled]}
                     onPress={() => handleSelectMode(m)}
@@ -1927,10 +2314,14 @@ export default function BookOrderScreen({
               {CARRIER_OPTIONS_LIST.map((c, ci) => (
                 <TouchableOpacity
                   key={ci}
+                  accessible
+                  accessibilityRole="button"
+                  accessibilityLabel={`Select carrier ${c.name || c.code}`}
                   style={styles.clientModalItem}
                   onPress={() => {
                     setSelectedCarrier(c.code);
                     setCarrierModalVisible(false);
+                    focusInput(boxWeightInputRef);
                   }}
                 >
                   <Text style={styles.clientModalName}>{c.name}</Text>
@@ -2029,30 +2420,40 @@ export default function BookOrderScreen({
             </View>
 
             <Text style={styles.labelWeb}>NAME *</Text>
-            <TextInput style={styles.inputWeb} placeholder="Full name" placeholderTextColor="#94a3b8" value={acForm.name} onChangeText={(t) => setAcForm(f => ({ ...f, name: t }))} />
+            <TextInput ref={acNameInputRef} onFocus={() => ensureInputVisible(acNameInputRef)} style={styles.inputWeb} placeholder="Full name" placeholderTextColor="#94a3b8" value={acForm.name} onChangeText={(t) => setAcForm(f => ({ ...f, name: uppercaseText(t) }))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acMobileInputRef.current?.focus?.()} />
 
             <Text style={styles.labelWeb}>MOBILE (10 DIGITS) *</Text>
             <TextInput
+              ref={acMobileInputRef}
+              onFocus={() => ensureInputVisible(acMobileInputRef)}
               style={styles.inputWeb}
               placeholder="10-digit mobile"
               keyboardType="numeric"
               maxLength={10}
               placeholderTextColor="#94a3b8"
               value={acForm.mobile}
-              onChangeText={(t) => setAcForm(f => ({ ...f, mobile: t.replace(/\D/g, '') }))}
+              onChangeText={(t) => setAcForm(f => ({ ...f, mobile: t.replace(/\D/g, '').slice(0, 10) }))}
+              returnKeyType="next"
+              blurOnSubmit={false}
+              onSubmitEditing={() => acPincodeInputRef.current?.focus?.()}
             />
 
-            <View style={styles.rowGrid}>
+            <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
               <View style={{ flex: 2 }}>
                 <Text style={styles.labelWeb}>PINCODE *</Text>
                 <TextInput
+                  ref={acPincodeInputRef}
+                  onFocus={() => ensureInputVisible(acPincodeInputRef)}
                   style={styles.inputWeb}
                   placeholder="6-digit pincode"
                   keyboardType="numeric"
                   maxLength={6}
                   placeholderTextColor="#94a3b8"
                   value={acForm.pincode}
-                  onChangeText={handleAcPincodeChange}
+                  onChangeText={(t) => handleAcPincodeChange(digitsOnly(t, 6))}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => acZoneInputRef.current?.focus?.()}
                 />
               </View>
               <View style={{ flex: 1, justifyContent: 'center', paddingBottom: 10 }}>
@@ -2072,24 +2473,24 @@ export default function BookOrderScreen({
             ) : null}
 
             <Text style={styles.labelWeb}>ZONE *</Text>
-            <TextInput style={styles.inputWeb} placeholder="Zone (e.g. NORTH, WEST)" placeholderTextColor="#94a3b8" value={acPinResult?.zone || ''} onChangeText={(t) => setAcPinResult(r => (r ? { ...r, zone: t.toUpperCase() } : r))} />
+            <TextInput ref={acZoneInputRef} onFocus={() => ensureInputVisible(acZoneInputRef)} style={styles.inputWeb} placeholder="Zone (e.g. NORTH, WEST)" placeholderTextColor="#94a3b8" value={acPinResult?.zone || ''} onChangeText={(t) => setAcPinResult(r => (r ? { ...r, zone: uppercaseText(t) } : r))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acAddressInputRef.current?.focus?.()} />
 
             <Text style={styles.labelWeb}>ADDRESS *</Text>
-            <TextInput style={styles.inputWeb} placeholder="Full address" placeholderTextColor="#94a3b8" value={acForm.address} onChangeText={(t) => setAcForm(f => ({ ...f, address: t }))} />
+            <TextInput ref={acAddressInputRef} onFocus={() => ensureInputVisible(acAddressInputRef)} style={styles.inputWeb} placeholder="Full address" placeholderTextColor="#94a3b8" value={acForm.address} onChangeText={(t) => setAcForm(f => ({ ...f, address: uppercaseText(t) }))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acEmailInputRef.current?.focus?.()} />
 
-            <View style={styles.rowGrid}>
+            <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.labelWeb}>EMAIL</Text>
-                <TextInput style={styles.inputWeb} placeholder="Email" placeholderTextColor="#94a3b8" value={acForm.email} onChangeText={(t) => setAcForm(f => ({ ...f, email: t }))} />
+                <TextInput ref={acEmailInputRef} onFocus={() => ensureInputVisible(acEmailInputRef)} style={styles.inputWeb} placeholder="Email" placeholderTextColor="#94a3b8" value={acForm.email} onChangeText={(t) => setAcForm(f => ({ ...f, email: t }))} keyboardType="email-address" autoCapitalize="none" returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acGstinInputRef.current?.focus?.()} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.labelWeb}>GSTIN</Text>
-                <TextInput style={styles.inputWeb} placeholder="GSTIN" maxLength={15} placeholderTextColor="#94a3b8" value={acForm.gstin} onChangeText={(t) => setAcForm(f => ({ ...f, gstin: t }))} />
+                <TextInput ref={acGstinInputRef} onFocus={() => ensureInputVisible(acGstinInputRef)} style={styles.inputWeb} placeholder="GSTIN" maxLength={15} placeholderTextColor="#94a3b8" value={acForm.gstin} onChangeText={(t) => setAcForm(f => ({ ...f, gstin: uppercaseText(t) }))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acCarrierInputRef.current?.focus?.()} />
               </View>
             </View>
 
             <Text style={styles.labelWeb}>CARRIER</Text>
-            <TextInput style={styles.inputWeb} placeholder="Carrier company code" placeholderTextColor="#94a3b8" value={acForm.carrier} onChangeText={(t) => setAcForm(f => ({ ...f, carrier: t }))} />
+            <TextInput ref={acCarrierInputRef} onFocus={() => ensureInputVisible(acCarrierInputRef)} style={styles.inputWeb} placeholder="Carrier company code" placeholderTextColor="#94a3b8" value={acForm.carrier} onChangeText={(t) => setAcForm(f => ({ ...f, carrier: uppercaseText(t) }))} returnKeyType="done" onSubmitEditing={handleAcSave} />
 
             {acError ? <Text style={styles.acError}>{acError}</Text> : null}
 
@@ -2104,12 +2505,15 @@ export default function BookOrderScreen({
           </ScrollView>
         </View>
       </Modal>
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  keyboardPage: { flex: 1, minHeight: 0 },
   scrollPage: { flex: 1, padding: 14, backgroundColor: '#f8fafc' },
+  scrollPageCompact: { padding: 8 },
   pageTitle: { color: '#1e293b', fontSize: 24, fontWeight: '800', marginBottom: 14 },
 
   // Last Booked Card
@@ -2121,6 +2525,7 @@ const styles = StyleSheet.create({
   lastBookedChip: { fontSize: 10.5, fontWeight: '700', color: '#4338ca', backgroundColor: '#ffffff', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4 },
 
   cardWeb: { backgroundColor: '#ffffff', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 14 },
+  cardMobile: { borderRadius: 8, padding: 10, marginBottom: 8 },
   cardLocked: { backgroundColor: '#f8fafc', borderColor: '#cbd5e1' },
   cardDisabled: { opacity: 0.6, backgroundColor: '#f1f5f9' },
   lockNoticeText: { fontSize: 11, fontWeight: '700', color: '#b45309', marginBottom: 10, backgroundColor: '#fef3c7', padding: 6, borderRadius: 6 },
@@ -2131,6 +2536,7 @@ const styles = StyleSheet.create({
   btnDisabled: { backgroundColor: '#e2e8f0', borderColor: '#cbd5e1' },
   textDisabled: { color: '#94a3b8' },
   rowGrid: { flexDirection: 'row', gap: 10 },
+  rowGridMobile: { gap: 6 },
 
   placeholderTextItalic: { fontSize: 11.5, fontStyle: 'italic', color: '#94a3b8', paddingVertical: 6 },
 
@@ -2228,8 +2634,10 @@ const styles = StyleSheet.create({
   // Web Payment Checkboxes (L276-300)
   webPaymentRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#ffffff', borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1', paddingVertical: 8, paddingHorizontal: 6, marginBottom: 10 },
   checkboxContainer: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  checkboxDisabled: { opacity: 0.55 },
   checkboxSquare: { width: 16, height: 16, borderRadius: 3, borderWidth: 1.5, borderColor: '#94a3b8', backgroundColor: '#ffffff', justifyContent: 'center', alignItems: 'center' },
   checkboxSquareChecked: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
+  checkboxSquareDisabled: { backgroundColor: '#e2e8f0', borderColor: '#cbd5e1' },
   checkmarkText: { color: '#ffffff', fontSize: 10, fontWeight: '900' },
   checkboxLabel: { fontSize: 12, fontWeight: '600', color: '#334155' },
 

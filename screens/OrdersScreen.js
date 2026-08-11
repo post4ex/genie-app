@@ -1112,8 +1112,10 @@ export default function OrdersScreen({
     const cneeAddr = cneeObj.ADDRESS || o.CONSIGNEE_ADDRESS || '';
     const cneeMob  = cneeObj.MOBILE || o.CONSIGNEE_MOBILE || '';
 
-    const carrierName = carriersMap[o.CARRIER] || o.CARRIER || 'N/A';
-    const modeName    = modesMap[o.MODE] || o.MODE || 'N/A';
+    const carrierRecord = carriersMap[o.CARRIER];
+    const carrierName = (typeof carrierRecord === 'string' ? carrierRecord : (carrierRecord?.COMPANY_NAME || carrierRecord?.NAME)) || o.CARRIER || 'N/A';
+    const modeRecord = modesMap[o.MODE];
+    const modeName = (typeof modeRecord === 'string' ? modeRecord : (modeRecord?.MODE || modeRecord?.NAME)) || o.MODE || 'N/A';
 
     const formattedOrderDate   = fmtDate(o.ORDER_DATE, 'date');
     const formattedTransitDate = fmtDate(o.TRANSIT_DATE, 'date');

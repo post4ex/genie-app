@@ -322,19 +322,28 @@ function MainApp() {
     const carriersLookup = {};
     (Array.isArray(rawCarriers) ? rawCarriers : Object.values(rawCarriers || {})).forEach(item => {
       const k = item.COMPANY_CODE || item.CODE;
-      if (k) carriersLookup[k] = item.COMPANY_NAME || item.NAME || k;
+      // Preserve the complete carrier record. BookOrder needs COMPANY_CODE,
+      // while other screens can still derive the display name from COMPANY_NAME.
+      if (k) carriersLookup[k] = item;
     });
 
     const modesLookup = {};
     (Array.isArray(rawModes) ? rawModes : Object.values(rawModes || {})).forEach(item => {
       const k = item.SHORT || item.CODE;
-      if (k) modesLookup[k] = item.MODE || item.NAME || k;
+      // Preserve VOL_INGR, MIN_WT, and zone availability flags for the
+      // BookOrder mode picker; reducing this to a label breaks web parity.
+      if (k) modesLookup[k] = item;
     });
 
     const ratesLookup = {};
     (Array.isArray(rawRates) ? rawRates : Object.values(rawRates || {})).forEach(item => {
-      const k = item.RATE_UID || item.UID;
-      if (k) ratesLookup[k] = item;
+      // RATES is keyed by UID in the web IndexedDB and in FastAPI's RateEntry.
+      // UID is authoritative; RATE_UID is only a legacy/display field and must
+      // never make the same row addressable under a different rate key.
+      const k = item?.UID || item?.RATE_UID;
+      if (k != null && String(k).trim() !== '') {
+        ratesLookup[String(k).trim()] = item;
+      }
     });
 
     const branchesLookup = {};
@@ -861,19 +870,42 @@ function MainApp() {
       try {
         const rawOrders = await getSheet('ORDERS');
         const list = Array.isArray(rawOrders) ? rawOrders : Object.values(rawOrders || {});
-        if (list.some(o => String(o.REFERENCE) === String(ref))) return true;
+        if (list.some(o => String(o.REFERENCE) === String(ref))) {
+          // The delta may already be in SQLite while React state is still stale.
+          // Reload immediately so Orders/Dashboard reflect the confirmed booking.
+          await reloadLocalState();
+          return true;
+        }
       } catch (_) {}
-      // Light catch-up so the order lands even if the SSE stream is momentarily down.
-    // Ungated: runDeltaCatchup bails while a sync is mid-flight — exactly when a
-    // booked order's event can be stuck. pullDeltaSince uses TIME_STAMP-guarded
-    // merges, so it is safe to run alongside a sync.
-    poll += 1;
-    if (poll % 2 === 1 && tokenRef.current) {
-      const since = (await getLastEventStamp()) || (await getLastSyncTime());
-      if (since) pullDeltaSince(tokenRef.current, since).catch(() => {});
+
+      // Web parity: catch up from the event cursor while waiting. Await the pull
+      // (rather than fire-and-forget) so the next check sees the merged record.
+      // putSheetNewer makes this safe alongside an active SSE/full sync.
+      poll += 1;
+      if (poll % 2 === 1 && tokenRef.current) {
+        const since = (await getLastEventStamp()) || (await getLastSyncTime());
+        if (since) {
+          // pullDeltaSince has its own retry backoff. Do not let those retries
+          // extend the booking confirmation wait beyond its deadline; continue
+          // the bounded poll and let the normal SSE/safety-net retry in parallel.
+          const remaining = Math.max(1, timeoutMs - (Date.now() - start));
+          const controller = new AbortController();
+          const abortTimer = setTimeout(() => controller.abort(), remaining);
+          try {
+            // retryCount=5 means one bounded request here; the regular
+            // foreground/background catch-up path retains its normal retries.
+            await pullDeltaSince(tokenRef.current, since, 5, controller.signal).catch(() => {});
+          } finally {
+            clearTimeout(abortTimer);
+          }
+          if (Date.now() - start < timeoutMs) await reloadLocalState().catch(() => {});
+        }
+      }
+      await new Promise(r => setTimeout(r, 500));
     }
-    await new Promise(r => setTimeout(r, 500));
-    }
+    // Keep the visible list current even when confirmation timed out; the
+    // caller will show the web-style pending state instead of false success.
+    await reloadLocalState().catch(() => {});
     return false;
   };
 
@@ -910,15 +942,13 @@ function MainApp() {
         return { ok: false, message: json.message || json.detail || 'Booking failed' };
       }
       const reference = json.reference || json.data?.REFERENCE || json.order?.REFERENCE || order.REFERENCE || order.AWB_NUMBER || null;
-      // Web parity: the successful POST IS the server confirmation. Show the
-      // success message immediately. The SSE delta will land in the background
-      // and update local state. No blocking wait, no full-state reload — both
-      // were the main reason booking felt slower than the web.
-      if (reference && !isEdit) {
-        // Fire-and-forget: background SSE catch-up (doesn't block the UI)
-        waitForRefInOrders(reference, 4000).catch(() => {});
-      }
-      return { ok: true, reference, confirmed: true };
+      // Match the web: HTTP success starts a short local-replica confirmation
+      // wait. This prevents a false "booked" state when the POST succeeded but
+      // SSE/delta has not yet delivered the ORDERS row to this device.
+      const confirmed = reference
+        ? await waitForRefInOrders(reference, 15000)
+        : false;
+      return { ok: true, reference, confirmed };
     } catch (e) {
       return { ok: false, message: e.message || 'Booking API request failed' };
     } finally {
