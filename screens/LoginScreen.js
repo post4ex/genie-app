@@ -58,7 +58,12 @@ export default function LoginScreen({ onLoginSuccess }) {
       });
       const data = await res.json();
       if (data.status === 'success' && data.sessionId) {
-        onLoginSuccess(data.userData || { username: loginUser, role: 'CLIENT' }, data.sessionId);
+        onLoginSuccess(
+          data.userData || { USER: loginUser.trim(), ROLE: 'CLIENT' },
+          data.sessionId,
+          data.refreshToken || '',
+          data.sessionExpiresAt || 0,
+        );
       } else {
         setAuthError(data.message || data.detail || 'Invalid username or password');
       }

@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SHEETS } from './config';
+import { SHEETS, SHEET_KEYS } from './config';
 import {
   isNativeSQLite,
   initializeLocalDatabase,
@@ -12,16 +12,66 @@ import {
 } from './sqlite-app';
 
 const useSQLite = () => isNativeSQLite();
+let eventStampWrite = Promise.resolve();
+
+const asString = (value) => value == null ? '' : String(value);
+
+// Keep the browser fallback byte-for-byte compatible with SQLite: every sheet
+// is exposed as an object keyed by its configured business key, while id/PB_ID
+// remain fields used for event deletes.
+const canonicalEntries = (sheetName, data) => {
+  const keyField = SHEET_KEYS[sheetName] || 'id';
+  const entries = Array.isArray(data)
+    ? data.map((record, index) => [String(index), record])
+    : Object.entries(data || {});
+  const result = {};
+  for (const [fallback, raw] of entries) {
+    if (!raw || typeof raw !== 'object') continue;
+    const key = asString(raw[keyField] ?? raw.id ?? raw.PB_ID ?? fallback);
+    if (key) result[key] = raw;
+  }
+  return result;
+};
+
+const findDeleteKeys = (sheetName, current, keys) => {
+  const wanted = new Set((Array.isArray(keys) ? keys : [keys])
+    .filter((key) => key != null).map(asString));
+  const found = [];
+  for (const [storedKey, record] of Object.entries(current || {})) {
+    const candidates = [
+      storedKey,
+      record?.id,
+      record?.PB_ID,
+      record?.[SHEET_KEYS[sheetName] || 'id'],
+      record?.REFERENCE,
+    ].filter((value) => value != null).map(asString);
+    if (candidates.some((candidate) => wanted.has(candidate))) found.push(storedKey);
+  }
+  return found;
+};
 
 export const initializeStorage = async () => {
   if (useSQLite()) await initializeLocalDatabase();
 };
 
-export const saveSession = async (user, token, expires = 0) => {
+export const getAccountKey = (user) => {
+  const value = user?.USER ?? user?.username ?? user?.id;
+  return value == null || String(value).trim() === '' ? '' : String(value).trim();
+};
+
+export const saveSession = async (user, token, expires = 0, refreshToken = '', sessionExpiresAt = 0) => {
   try {
-    await AsyncStorage.setItem('user_session', JSON.stringify({ user, token, expires }));
+    await AsyncStorage.setItem('user_session', JSON.stringify({
+      user,
+      token,
+      expires,
+      refreshToken,
+      sessionExpiresAt,
+    }));
+    return true;
   } catch (e) {
     console.warn('[Storage] saveSession error:', e.message);
+    return false;
   }
 };
 
@@ -35,8 +85,12 @@ export const getLocalCacheOwner = async () => {
 
 export const setLocalCacheOwner = async (ownerId) => {
   try {
-    if (ownerId) await AsyncStorage.setItem('local_cache_owner', String(ownerId));
-  } catch (_) {}
+    if (!ownerId) return false;
+    await AsyncStorage.setItem('local_cache_owner', String(ownerId));
+    return (await AsyncStorage.getItem('local_cache_owner')) === String(ownerId);
+  } catch (_) {
+    return false;
+  }
 };
 
 export const getSession = async () => {
@@ -76,8 +130,10 @@ export const clearLocalReplica = async () => {
       if (removable.length) await AsyncStorage.multiRemove(removable);
     }
     await AsyncStorage.multiRemove(['last_sync_time', 'last_event_stamp', 'local_cache_owner']);
+    return true;
   } catch (e) {
     console.warn('[Storage] clearLocalReplica error:', e.message);
+    return false;
   }
 };
 
@@ -88,7 +144,7 @@ export const putSheet = async (sheetName, data) => {
       return;
     }
     const current = await getSheet(sheetName);
-    const merged = { ...current, ...data };
+    const merged = { ...current, ...canonicalEntries(sheetName, data) };
     await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(merged));
   } catch (e) {
     console.warn(`[Storage] putSheet error for ${sheetName}:`, e.message);
@@ -101,7 +157,7 @@ export const setSheet = async (sheetName, data) => {
       await sqliteReplaceSheet(sheetName, data);
       return;
     }
-    await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(data));
+    await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(canonicalEntries(sheetName, data)));
   } catch (e) {
     console.warn(`[Storage] setSheet error for ${sheetName}:`, e.message);
   }
@@ -111,7 +167,7 @@ export const getSheet = async (sheetName) => {
   try {
     if (useSQLite()) return await sqliteGetSheet(sheetName);
     const val = await AsyncStorage.getItem(`sheet_${sheetName}`);
-    return val ? JSON.parse(val) : {};
+    return val ? canonicalEntries(sheetName, JSON.parse(val)) : {};
   } catch (e) {
     return {};
   }
@@ -148,9 +204,17 @@ export const getLastEventStamp = async () => {
 };
 
 export const setLastEventStamp = async (timestamp) => {
-  try {
-    await AsyncStorage.setItem('last_event_stamp', String(timestamp));
-  } catch (e) {}
+  const incoming = Number(timestamp) || 0;
+  eventStampWrite = eventStampWrite
+    .catch(() => {})
+    .then(async () => {
+      if (!incoming) return;
+      const current = Number(await getLastEventStamp()) || 0;
+      if (incoming > current) {
+        await AsyncStorage.setItem('last_event_stamp', String(incoming));
+      }
+    });
+  return eventStampWrite;
 };
 
 // Generic metadata remains small and is intentionally kept in AsyncStorage.
@@ -171,9 +235,10 @@ export const setMetadata = async (key, value) => {
 
 const _isNewer = (incoming, existing) => {
   if (!existing) return true;
-  const inTs = Number(incoming?.TIME_STAMP);
-  const exTs = Number(existing?.TIME_STAMP);
-  if (!inTs || !exTs) return true;
+  const inTs = Number(incoming?.TIME_STAMP ?? incoming?.time_stamp ?? 0);
+  const exTs = Number(existing?.TIME_STAMP ?? existing?.time_stamp ?? 0);
+  if (!inTs) return false;
+  if (!exTs) return true;
   return inTs > exTs;
 };
 
@@ -185,7 +250,7 @@ export const putSheetNewer = async (sheetName, data) => {
     }
     const current = await getSheet(sheetName);
     const merged = { ...current };
-    for (const [key, record] of Object.entries(data || {})) {
+    for (const [key, record] of Object.entries(canonicalEntries(sheetName, data))) {
       if (record && typeof record === 'object' && _isNewer(record, current[key])) {
         merged[key] = record;
       }
@@ -203,9 +268,8 @@ export const deleteFromSheet = async (sheetName, keys) => {
       return;
     }
     const current = await getSheet(sheetName);
-    const list = Array.isArray(keys) ? keys : [keys];
     const next = { ...current };
-    for (const key of list) delete next[key];
+    for (const key of findDeleteKeys(sheetName, current, keys)) delete next[key];
     await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(next));
   } catch (e) {
     console.warn(`[Storage] deleteFromSheet error for ${sheetName}:`, e.message);

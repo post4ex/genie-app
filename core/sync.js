@@ -213,7 +213,9 @@ function _resolveDeleteKeys(sheet, keyPath, pbIds) {
     // Direct hit (sheet keyed by the PB_ID)
     if (pbId in sheet) { resolved.push(pbId); continue; }
     // Secondary lookup via the record's id / PB_ID field
-    const hit = entries.find(([, rec]) => String(rec?.id ?? rec?.PB_ID ?? '') === String(pbId));
+    const hit = entries.find(([, rec]) => [rec?.id, rec?.PB_ID]
+      .filter((value) => value != null)
+      .some((value) => String(value) === String(pbId)));
     if (hit) {
       resolved.push(keyPath !== 'id' ? (hit[1]?.[keyPath] || hit[0]) : hit[0]);
     } else {

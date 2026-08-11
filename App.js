@@ -27,7 +27,7 @@ import { API_BASE, ROLE_LEVELS, SHEET_KEYS } from './core/config';
 import { COLORS } from './styles/theme';
 import {
   saveSession, getSession, removeSession, clearLocalReplica,
-  getLocalCacheOwner, setLocalCacheOwner,
+  getLocalCacheOwner, setLocalCacheOwner, getAccountKey,
   getSheet, putSheet, putSheetNewer, deleteFromSheet, getAppData, getLastSyncTime,
   getLastEventStamp, setLastEventStamp, initializeStorage
 } from './core/storage';
@@ -69,12 +69,72 @@ function MainApp() {
   const [editOrder, setEditOrder] = useState(null);
   const sseRef = useRef(null);
   const tokenRef = useRef('');
+  const refreshTokenRef = useRef('');
+  const sessionExpiresAtRef = useRef(0);
+  const refreshPromiseRef = useRef(null);
   const syncInProgressRef = useRef(false);
   const deltaChainRef = useRef(Promise.resolve()); // serialize delta writes
   const lastEventTimeRef = useRef(0);   // web window._lastEventTime parity
   const reloadTimerRef = useRef(null);  // web _scheduleRefresh debounce timer
 
   useEffect(() => { tokenRef.current = token; }, [token]);
+
+  // Rotate the short-lived access JWT without storing the user's password.
+  // One promise serializes simultaneous heartbeat/SSE/API refresh attempts.
+  const refreshSessionSilently = async () => {
+    if (refreshPromiseRef.current) return refreshPromiseRef.current;
+    const refreshToken = refreshTokenRef.current;
+    if (!refreshToken || !tokenRef.current) return false;
+
+    refreshPromiseRef.current = (async () => {
+      try {
+        if (sessionExpiresAtRef.current && Date.now() >= sessionExpiresAtRef.current) {
+          return false;
+        }
+        const res = await fetch(`${API_BASE}/api/refreshSession`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.status !== 'success' || !json.sessionId || !json.refreshToken) {
+          return false;
+        }
+
+        const nextToken = json.sessionId;
+        const nextRefreshToken = json.refreshToken;
+        const nextExpires = Date.now() + Number(json.expiresIn || 8 * 60 * 60) * 1000;
+        const nextAbsolute = Number(json.sessionExpiresAt || sessionExpiresAtRef.current || 0);
+        refreshTokenRef.current = nextRefreshToken;
+        sessionExpiresAtRef.current = nextAbsolute;
+        tokenRef.current = nextToken;
+        setToken(nextToken);
+
+        const saved = await getSession();
+        await saveSession(
+          json.userData || saved?.user || user,
+          nextToken,
+          nextExpires,
+          nextRefreshToken,
+          nextAbsolute,
+        );
+
+        // The old SSE Authorization header cannot be updated in place.
+        // Reconnect immediately with the rotated access token; the listener's
+        // onReconnect callback performs event-delta catch-up.
+        if (sseRef.current) {
+          sseRef.current.stop();
+          startSSEOnly(nextToken);
+        }
+        return true;
+      } catch (_) {
+        return false;
+      } finally {
+        refreshPromiseRef.current = null;
+      }
+    })();
+    return refreshPromiseRef.current;
+  };
 
   // ── Notifications + sync-status UI state ─────────────────────────────────
   const [notifications, setNotifications] = useState([]);
@@ -93,8 +153,25 @@ function MainApp() {
         return;
       }
       if (saved && saved.user && saved.token) {
+        const savedId = getAccountKey(saved.user);
+        const owner = await getLocalCacheOwner();
+        // A persisted session must still pass the same account-isolation check
+        // as a fresh login before any cached row is rendered.
+        if (!savedId) return;
+        if (owner && owner !== savedId) {
+          // A known owner mismatch is a different account: clear before any
+          // cached row is rendered. A missing owner is a legacy/upgrade case;
+          // preserve the durable replica for the already persisted session and
+          // establish ownership instead of discarding the user's cache.
+          const cleared = await clearLocalReplica();
+          if (!cleared) return;
+        }
+        if (!(await setLocalCacheOwner(savedId))) return;
         setUser(saved.user);
         setToken(saved.token);
+        tokenRef.current = saved.token;
+        refreshTokenRef.current = saved.refreshToken || '';
+        sessionExpiresAtRef.current = Number(saved.sessionExpiresAt || 0);
         await reloadLocalState();
         startSyncAndSSE(saved.token);
         loadNotifications(true);
@@ -106,14 +183,25 @@ function MainApp() {
     };
   }, []);
 
-  // Session expiry heartbeat (web app-auth.js initHeartbeat parity): auto-logout
-  // once the 8-hour token expires.
+  // Session heartbeat: refresh the access token shortly before its 8-hour
+  // expiry, while still enforcing the server's 30-day absolute boundary.
   useEffect(() => {
     const tick = setInterval(async () => {
       if (!tokenRef.current) return;
       try {
         const saved = await getSession();
-        if (saved?.expires && saved.expires < Date.now()) handleLogout();
+        const absolute = Number(sessionExpiresAtRef.current || saved?.sessionExpiresAt || 0);
+        if (absolute && absolute <= Date.now()) {
+          await handleLogout();
+          return;
+        }
+        if (saved?.expires && saved.expires <= Date.now()) {
+          if (!(await refreshSessionSilently())) await handleLogout();
+          return;
+        }
+        if (saved?.expires && (saved.expires - Date.now()) <= 5 * 60 * 1000) {
+          if (!(await refreshSessionSilently())) await handleLogout();
+        }
       } catch (_) {}
     }, 60 * 1000);
     return () => clearInterval(tick);
@@ -132,6 +220,8 @@ function MainApp() {
   const [b2bList, setB2bList] = useState([]);
 
   const reloadLocalState = async () => {
+    // All maps are hydrated from the storage adapter; native reads SQLite and
+    // web reads the canonicalized fallback with the same object shape.
     const rawOrders = await getSheet('ORDERS');
     const rawShipments = await getSheet('SHIPMENTS');
     const rawB2b = await getSheet('B2B');
@@ -226,7 +316,14 @@ function MainApp() {
     });
 
     setOrders(ordersList);
-    setShipmentsMap(rawShipments || {});
+    // SHIPMENTS is keyed by REFERENCE in both SQLite and the web adapter. Keep
+    // a defensive re-key for rows created by an older build or server payload.
+    const shipmentsLookup = {};
+    Object.values(rawShipments || {}).forEach((shipment) => {
+      const ref = shipment?.REFERENCE || shipment?.reference || shipment?.ORDER_REFERENCE;
+      if (ref) shipmentsLookup[String(ref)] = shipment;
+    });
+    setShipmentsMap(shipmentsLookup);
     setB2b2cMap(b2b2cLookup);
     setCarriersMap(carriersLookup);
     setModesMap(modesLookup);
@@ -258,7 +355,7 @@ function MainApp() {
   // The server broadcasts deltas with the FULL record data — apply it directly,
   // exactly like the web's _applyDelta, instead of re-fetching events.
   const applyDeltaToStorage = async (delta) => {
-    const { collection, action, key, data, id, ts } = delta || {};
+    const { collection, action, key, data, id, PB_ID, pb_id, ts } = delta || {};
     if (!collection) return;
     try {
       if (action === 'upsert' || action === 'create' || action === 'update') {
@@ -266,16 +363,22 @@ function MainApp() {
         // ORDERS), ignoring the server's object key — a record can never land under
         // two keys (duplicate rows). Same rule pullDeltaSince/streamSync use.
         const keyPath = SHEET_KEYS[collection] || 'id';
-        const recKey = data?.[keyPath] || data?.REFERENCE || data?.id || data?.PB_ID || key;
+        const recKey = data?.[keyPath] || data?.id || data?.PB_ID || key;
         // putSheetNewer = web bulkMerge _checkAndPut: never clobber a fresher record
         if (recKey && data) await putSheetNewer(collection, { [recKey]: data });
       } else if (action === 'delete') {
         const current = await getSheet(collection);
         const dels = [];
         if (key) dels.push(key);
-        if (id && id !== key) {
-          const hit = Object.keys(current).find(k => String(current[k]?.id ?? current[k]?.PB_ID ?? '') === String(id));
+        for (const identity of [id, PB_ID, pb_id, data?.id, data?.PB_ID, data?.pb_id]) {
+          if (!identity || identity === key || dels.includes(identity)) continue;
+          const hit = Object.keys(current).find(k => [current[k]?.id, current[k]?.PB_ID]
+            .filter((value) => value != null)
+            .some((value) => String(value) === String(identity)));
           if (hit && !dels.includes(hit)) dels.push(hit);
+          // Pass the identity through as well. SQLite matches record_id/pb_id
+          // directly, and the web fallback resolves it from the record fields.
+          if (!dels.includes(identity)) dels.push(identity);
         }
         if (dels.length) await deleteFromSheet(collection, dels);
         // Cascaded deletes for ORDERS — remove child records (web app-api.js parity)
@@ -423,6 +526,25 @@ function MainApp() {
     await loadNotifications(false);
   };
 
+  const startSSEOnly = (authToken) => {
+    if (!authToken) return;
+    if (sseRef.current) sseRef.current.stop();
+    sseRef.current = new SSEListener(
+      authToken,
+      (eventPayload) => { handleSSEEvent(authToken, eventPayload); },
+      (err) => {
+        if (err === 'UNAUTHORIZED') {
+          // A near-expiry stream can fail while the heartbeat is rotating.
+          // Try the serialized refresh once before logging the user out.
+          refreshSessionSilently().then((ok) => { if (!ok) handleLogout(); });
+        } else setSyncStatus('reconnecting');
+      },
+      () => { setSyncStatus('live'); runDeltaCatchup(authToken); },
+      () => { setSyncStatus('live'); runDeltaCatchup(authToken); }
+    );
+    sseRef.current.start();
+  };
+
   const startSyncAndSSE = async (authToken) => {
     // A. Perform Fast Initial Sync (~1 sec)
     setSyncStatus('streaming');
@@ -453,18 +575,7 @@ function MainApp() {
     }).catch(() => {});
 
     // C. Start Real-time SSE Stream Listener (web openSSE parity)
-    if (sseRef.current) sseRef.current.stop();
-    sseRef.current = new SSEListener(
-      authToken,
-      (eventPayload) => { handleSSEEvent(authToken, eventPayload); },
-      (err) => {
-        if (err === 'UNAUTHORIZED') handleLogout();
-        else setSyncStatus('reconnecting');
-      },
-      () => { setSyncStatus('live'); runDeltaCatchup(authToken); }, // onReconnect — catch events missed while down
-      () => { setSyncStatus('live'); runDeltaCatchup(authToken); }  // onFallback — native polling tick
-    );
-    sseRef.current.start();
+    startSSEOnly(authToken);
   };
 
   // Online recovery + 5-min safety net (web layout.js visibilitychange / 5min-tick parity)
@@ -492,24 +603,47 @@ function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleLoginSuccess = async (userObj, jwtToken) => {
+  const handleLoginSuccess = async (userObj, jwtToken, refreshToken = '', sessionExpiresAt = 0) => {
     // User-switch guard (web login.js): wipe local data when a DIFFERENT user
     // logs in, so nobody sees another account's cached sheets.
     const saved = await getSession();
-    const prevId = saved?.user?.USER || saved?.user?.username || saved?.user?.id;
-    const newId = userObj?.USER || userObj?.username || userObj?.id;
+    const prevId = getAccountKey(saved?.user);
+    const newId = getAccountKey(userObj);
+    if (!newId) {
+      Alert.alert('Login error', 'The server did not return a stable account identity.');
+      return;
+    }
     const cachedOwner = await getLocalCacheOwner();
+    const hasLocalReplica = !cachedOwner && !saved?.token;
     if ((cachedOwner && cachedOwner !== String(newId)) ||
+        (hasLocalReplica && newId) ||
         (saved && saved.token && prevId && prevId !== newId)) {
       // A local replica is account-scoped. Preserve it across logout/login for
       // the same user, but never expose one user's cached records to another.
-      await clearLocalReplica();
+      const cleared = await clearLocalReplica();
+      if (!cleared) {
+        Alert.alert('Local data error', 'Could not safely reset data for this account. Please try again.');
+        return;
+      }
     }
-    await setLocalCacheOwner(newId);
+    if (!(await setLocalCacheOwner(newId))) {
+      Alert.alert('Local data error', 'Could not secure local cache ownership. Please try again.');
+      return;
+    }
     setUser(userObj);
     setToken(jwtToken);
-    // Web parity: session token valid for 8 hours from login
-    await saveSession(userObj, jwtToken, Date.now() + 8 * 60 * 60 * 1000);
+    tokenRef.current = jwtToken;
+    refreshTokenRef.current = refreshToken;
+    sessionExpiresAtRef.current = Number(sessionExpiresAt || 0);
+    // Access token is valid for 8 hours; the refresh token is bounded by the
+    // server-provided absolute session expiry.
+    await saveSession(
+      userObj,
+      jwtToken,
+      Date.now() + 8 * 60 * 60 * 1000,
+      refreshToken,
+      Number(sessionExpiresAt || 0),
+    );
     // Render the durable replica immediately, then let the live sync reconcile
     // it in the background. This is the fast relogin/offline behavior.
     await reloadLocalState();
@@ -533,6 +667,9 @@ function MainApp() {
     }
     setUser(null);
     setToken('');
+    tokenRef.current = '';
+    refreshTokenRef.current = '';
+    sessionExpiresAtRef.current = 0;
     setOrders([]);
     setTrackResult(null);
     setNotifications([]);

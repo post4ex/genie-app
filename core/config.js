@@ -25,7 +25,9 @@ export const SHEET_KEYS = {
   'NOTIFICATIONS': 'NOTIF_ID',
   'HOLIDAYS':      'HOLIDAY_ID',
   'LEDGER':        'TXN_ID',
-  'SHIPMENTS':     'id',
+  // Shipments are joined to ORDERS and UI lookups by REFERENCE, exactly like
+  // the FastAPI KEY_FIELDS map and the web IndexedDB adapter.
+  'SHIPMENTS':     'REFERENCE',
   'HEADER':        'DOX_KEY',
 };
 
