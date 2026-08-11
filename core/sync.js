@@ -1,5 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_BASE, SHEET_KEYS } from './config';
+import { API_BASE, SHEET_KEYS, SHEETS } from './config';
+
+// Set of collections the client can fetch via getRecords (must match server SYNC_CONFIG)
+const _FETCHABLE_SHEETS = new Set(SHEETS);
 import {
   putSheetNewer, deleteFromSheet, getSheet, setLastSyncTime,
   setLastEventStamp, getMetadata, setMetadata
@@ -248,7 +251,9 @@ export async function pullDeltaSince(token, sinceMs, retryCount = 0) {
     for (const ev of events) {
       const { COLLECTION: col, ACTION: rawAction, PB_ID: pb_id } = ev;
       const action = String(rawAction || '').toLowerCase();
-      if (!col || !pb_id) continue;
+      // Skip collections the client cannot fetch (USERS, MOVEMENTS, REGISTRATIONS etc.)
+      // — sending getRecords for unknown collections causes 400 Bad Request
+      if (!col || !pb_id || !_FETCHABLE_SHEETS.has(col)) continue;
       if (action === 'create' || action === 'insert' || action === 'update') {
         (upserts[col] = upserts[col] || []).push(pb_id);
       } else if (action === 'delete' || action === 'remove') {

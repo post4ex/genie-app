@@ -2,6 +2,14 @@
 // APP-API.JS — Network, Data Engine & Date Utilities
 // ============================================================================
 
+// Collections the client can fetch via /api/getRecords — must match server SYNC_CONFIG.
+// Events for USERS, MOVEMENTS, REGISTRATIONS etc. are silently skipped to avoid 400s.
+const _FETCHABLE_SHEETS = new Set([
+  'ORDERS', 'B2B', 'B2B2C', 'RATES', 'STAFF', 'ATTENDANCE',
+  'BRANCHES', 'MODES', 'CARRIERS', 'MULTIBOX', 'PRODUCTS',
+  'UPLOADS', 'NOTIFICATIONS', 'HOLIDAYS', 'LEDGER', 'SHIPMENTS', 'HEADER'
+]);
+
 async function fetchClientIP() {
     // IP detection removed — was calling external api.ipify.org but value was never used
 }
@@ -139,6 +147,8 @@ async function pullDeltaSince(since_ms, retryCount) {
         for (const ev of events) {
             const { COLLECTION: col, ACTION: action, PB_ID: pb_id } = ev;
             if (!col || !pb_id) continue;
+            // Skip collections the client cannot fetch (USERS, MOVEMENTS etc.) — prevents 400s
+            if (!_FETCHABLE_SHEETS.has(col)) continue;
             if (action === 'create' || action === 'update') {
                 (upserts[col] = upserts[col] || []).push(pb_id);
             } else if (action === 'delete') {
