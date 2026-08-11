@@ -25,7 +25,7 @@ export const SHEET_KEYS = {
   'NOTIFICATIONS': 'NOTIF_ID',
   'HOLIDAYS':      'HOLIDAY_ID',
   'LEDGER':        'TXN_ID',
-  'SHIPMENTS':     'REFERENCE',
+  'SHIPMENTS':     'id',
   'HEADER':        'DOX_KEY',
 };
 

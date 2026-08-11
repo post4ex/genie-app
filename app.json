@@ -2,7 +2,7 @@
   "expo": {
     "name": "Genie",
     "slug": "genie",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -19,7 +19,8 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0f172a"
       },
-      "package": "com.post4ex.geniereact"
+      "package": "com.post4ex.geniereact",
+      "versionCode": 8
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -27,7 +28,8 @@
     "plugins": [
       "expo-asset",
       "expo-font",
-      "expo-splash-screen"
+      "expo-splash-screen",
+      "expo-sqlite"
     ],
     "updates": {
       "enabled": true,
@@ -35,6 +37,6 @@
       "fallbackToCacheTimeout": 0,
       "url": "https://raw.githubusercontent.com/post4ex/genie-app/main/dist/android-index.json"
     },
-    "runtimeVersion": "1.0.6"
+    "runtimeVersion": "1.0.7"
   }
 }

@@ -1,5 +1,21 @@
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SHEETS } from './config';
+import {
+  isNativeSQLite,
+  initializeLocalDatabase,
+  sqliteGetSheet,
+  sqliteUpsertMany,
+  sqliteReplaceSheet,
+  sqliteDeleteMany,
+  sqliteClearReplica,
+} from './sqlite-app';
+
+const useSQLite = () => isNativeSQLite();
+
+export const initializeStorage = async () => {
+  if (useSQLite()) await initializeLocalDatabase();
+};
 
 export const saveSession = async (user, token, expires = 0) => {
   try {
@@ -7,6 +23,20 @@ export const saveSession = async (user, token, expires = 0) => {
   } catch (e) {
     console.warn('[Storage] saveSession error:', e.message);
   }
+};
+
+export const getLocalCacheOwner = async () => {
+  try {
+    return await AsyncStorage.getItem('local_cache_owner');
+  } catch (_) {
+    return null;
+  }
+};
+
+export const setLocalCacheOwner = async (ownerId) => {
+  try {
+    if (ownerId) await AsyncStorage.setItem('local_cache_owner', String(ownerId));
+  } catch (_) {}
 };
 
 export const getSession = async () => {
@@ -18,25 +48,45 @@ export const getSession = async () => {
   }
 };
 
+// Logout removes credentials only. The local replica and sync cursors are
+// deliberately retained so the next login can render cached data immediately
+// and resume from the last processed event.
 export const removeSession = async () => {
   try {
     await AsyncStorage.removeItem('user_session');
-    await AsyncStorage.removeItem('last_sync_time');
-    await AsyncStorage.removeItem('last_event_stamp');
-    // sync-layer flags + other meta keys
-    for (const key of Object.keys(await AsyncStorage.getAllKeys())) {
-      if (key.startsWith('meta_')) await AsyncStorage.removeItem(key);
-    }
-    for (const sheet of SHEETS) {
-      await AsyncStorage.removeItem(`sheet_${sheet}`);
-    }
   } catch (e) {
     console.warn('[Storage] removeSession error:', e.message);
   }
 };
 
+// Explicit destructive operation used only when a different user signs in or
+// when the user deliberately requests a local-data reset.
+export const clearLocalReplica = async () => {
+  try {
+    if (useSQLite()) {
+      await sqliteClearReplica();
+    } else {
+      const keys = await AsyncStorage.getAllKeys();
+      const removable = keys.filter((key) =>
+        key.startsWith('sheet_') ||
+        key === 'last_sync_time' ||
+        key === 'last_event_stamp' ||
+        key.startsWith('meta_')
+      );
+      if (removable.length) await AsyncStorage.multiRemove(removable);
+    }
+    await AsyncStorage.multiRemove(['last_sync_time', 'last_event_stamp', 'local_cache_owner']);
+  } catch (e) {
+    console.warn('[Storage] clearLocalReplica error:', e.message);
+  }
+};
+
 export const putSheet = async (sheetName, data) => {
   try {
+    if (useSQLite()) {
+      await sqliteUpsertMany(sheetName, data, false);
+      return;
+    }
     const current = await getSheet(sheetName);
     const merged = { ...current, ...data };
     await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(merged));
@@ -47,6 +97,10 @@ export const putSheet = async (sheetName, data) => {
 
 export const setSheet = async (sheetName, data) => {
   try {
+    if (useSQLite()) {
+      await sqliteReplaceSheet(sheetName, data);
+      return;
+    }
     await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(data));
   } catch (e) {
     console.warn(`[Storage] setSheet error for ${sheetName}:`, e.message);
@@ -55,6 +109,7 @@ export const setSheet = async (sheetName, data) => {
 
 export const getSheet = async (sheetName) => {
   try {
+    if (useSQLite()) return await sqliteGetSheet(sheetName);
     const val = await AsyncStorage.getItem(`sheet_${sheetName}`);
     return val ? JSON.parse(val) : {};
   } catch (e) {
@@ -64,9 +119,7 @@ export const getSheet = async (sheetName) => {
 
 export const getAppData = async () => {
   const result = {};
-  for (const sheet of SHEETS) {
-    result[sheet] = await getSheet(sheet);
-  }
+  for (const sheet of SHEETS) result[sheet] = await getSheet(sheet);
   return result;
 };
 
@@ -81,7 +134,7 @@ export const getLastSyncTime = async () => {
 
 export const setLastSyncTime = async (timestamp) => {
   try {
-    await AsyncStorage.setItem('last_sync_time', timestamp.toString());
+    await AsyncStorage.setItem('last_sync_time', String(timestamp));
   } catch (e) {}
 };
 
@@ -96,11 +149,11 @@ export const getLastEventStamp = async () => {
 
 export const setLastEventStamp = async (timestamp) => {
   try {
-    await AsyncStorage.setItem('last_event_stamp', timestamp.toString());
+    await AsyncStorage.setItem('last_event_stamp', String(timestamp));
   } catch (e) {}
 };
 
-// ── Generic metadata (web IndexedDB _metadata store parity) ────────────────
+// Generic metadata remains small and is intentionally kept in AsyncStorage.
 export const getMetadata = async (key) => {
   try {
     const val = await AsyncStorage.getItem(`meta_${key}`);
@@ -116,20 +169,20 @@ export const setMetadata = async (key, value) => {
   } catch (e) {}
 };
 
-// ── Zombie Shield (web indexeddb.js _checkAndPut parity) ────────────────────
-// Merge records into a sheet, but only overwrite an existing record when the
-// incoming TIME_STAMP is strictly newer. Prevents stale sync data from clobber-
-// ing fresher SSE/delta writes. Records without TIME_STAMP always pass through.
 const _isNewer = (incoming, existing) => {
   if (!existing) return true;
   const inTs = Number(incoming?.TIME_STAMP);
   const exTs = Number(existing?.TIME_STAMP);
-  if (!inTs || !exTs) return true;   // missing timestamps — can't compare, write
+  if (!inTs || !exTs) return true;
   return inTs > exTs;
 };
 
 export const putSheetNewer = async (sheetName, data) => {
   try {
+    if (useSQLite()) {
+      await sqliteUpsertMany(sheetName, data, true);
+      return;
+    }
     const current = await getSheet(sheetName);
     const merged = { ...current };
     for (const [key, record] of Object.entries(data || {})) {
@@ -143,13 +196,16 @@ export const putSheetNewer = async (sheetName, data) => {
   }
 };
 
-// Remove a record from a sheet by its unique key (web bulkMerge __deletes parity).
 export const deleteFromSheet = async (sheetName, keys) => {
   try {
+    if (useSQLite()) {
+      await sqliteDeleteMany(sheetName, keys);
+      return;
+    }
     const current = await getSheet(sheetName);
     const list = Array.isArray(keys) ? keys : [keys];
     const next = { ...current };
-    for (const k of list) delete next[k];
+    for (const key of list) delete next[key];
     await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(next));
   } catch (e) {
     console.warn(`[Storage] deleteFromSheet error for ${sheetName}:`, e.message);

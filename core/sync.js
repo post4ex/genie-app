@@ -130,7 +130,9 @@ export async function fullSync(token) {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ since_ms: 0 })
+      // Omit since_ms: FastAPI treats any supplied since_ms as DELTA mode.
+      // An empty body is the true FULL snapshot request.
+      body: JSON.stringify({})
     });
     const json = await res.json();
     if (json.status === 'success' && json.data) {
@@ -226,8 +228,10 @@ function _resolveDeleteKeys(sheet, keyPath, pbIds) {
 // cascaded ORDERS child deletes (MULTIBOX/PRODUCTS/UPLOADS) and retry backoff.
 export async function pullDeltaSince(token, sinceMs, retryCount = 0) {
   if (!token || !sinceMs) return null;
+  // 1-minute safety net overlap (60,000 ms) to catch in-flight boundary transactions
+  const querySince = Math.max(0, sinceMs - 60000);
   try {
-    const res = await fetch(`${API_BASE}/api/fetchEvents?since_ms=${sinceMs}`, {
+    const res = await fetch(`${API_BASE}/api/fetchEvents?since_ms=${querySince}`, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -240,43 +244,46 @@ export async function pullDeltaSince(token, sinceMs, retryCount = 0) {
     const deletes = {};
 
     for (const ev of events) {
-      const { COLLECTION: col, ACTION: action, PB_ID: pb_id } = ev;
+      const { COLLECTION: col, ACTION: rawAction, PB_ID: pb_id } = ev;
+      const action = String(rawAction || '').toLowerCase();
       if (!col || !pb_id) continue;
-      if (action === 'create' || action === 'update') {
+      if (action === 'create' || action === 'insert' || action === 'update') {
         (upserts[col] = upserts[col] || []).push(pb_id);
-      } else if (action === 'delete') {
+      } else if (action === 'delete' || action === 'remove') {
         (deletes[col] = deletes[col] || []).push(pb_id);
       }
     }
 
-    // Upserts — normalized by keyPath + guarded merges.
-    // Web bulkMerge re-keys every record by its keyPath field value (e.g. REFERENCE
-    // for ORDERS), ignoring the object key the server used — we must do the same or
-    // the same record can land under two keys (duplicate rows in the UI).
+    // Upserts — normalized by keyPath + guarded merges. A failed group is a
+    // failed catch-up: do not advance the cursor past it.
     if (Object.keys(upserts).length) {
       for (const [col, ids] of Object.entries(upserts)) {
-        try {
+        // FastAPI caps each getRecords request at 500 IDs. Chunking is required
+        // so a large event burst cannot be silently dropped before the cursor
+        // advances.
+        for (let offset = 0; offset < ids.length; offset += 500) {
+          const idBatch = ids.slice(offset, offset + 500);
           const recRes = await fetch(`${API_BASE}/api/getRecords`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ collection: col, ids })
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+            body: JSON.stringify({ collection: col, ids: idBatch })
           });
+          if (!recRes.ok) throw new Error(`getRecords ${col} HTTP ${recRes.status}`);
           const recJson = await recRes.json();
-          if (recJson.status === 'success' && recJson.data) {
-            const keyPath = SHEET_KEYS[col] || 'id';
-            const normalized = {};
-            for (const [k, rec] of Object.entries(recJson.data)) {
-              if (!rec || typeof rec !== 'object') continue;
-              const key = rec[keyPath] || rec.id || rec.PB_ID || k;
-              normalized[key] = rec;
-            }
-            if (Object.keys(normalized).length) await putSheetNewer(col, normalized);
+          if (recJson.status !== 'success' || !recJson.data) {
+            throw new Error(`getRecords ${col} returned no success data`);
           }
-        } catch (err) {
-          console.warn(`[Sync] pullDeltaSince getRecords failed for ${col}:`, err.message);
+          const keyPath = SHEET_KEYS[col] || 'id';
+          const normalized = {};
+          for (const [k, rec] of Object.entries(recJson.data)) {
+            if (!rec || typeof rec !== 'object') continue;
+            const key = rec[keyPath] || rec.id || rec.PB_ID || k;
+            normalized[key] = rec;
+          }
+          if (Object.keys(normalized).length) await putSheetNewer(col, normalized);
         }
       }
     }
