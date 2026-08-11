@@ -235,11 +235,11 @@ export const setMetadata = async (key, value) => {
 
 const _isNewer = (incoming, existing) => {
   if (!existing) return true;
-  const inTs = Number(incoming?.TIME_STAMP ?? incoming?.time_stamp ?? 0);
-  const exTs = Number(existing?.TIME_STAMP ?? existing?.time_stamp ?? 0);
-  if (!inTs) return false;
+  const inTs = Number(incoming?.TIME_STAMP ?? incoming?.time_stamp ?? incoming?.ORDER_DATE ?? 0);
+  const exTs = Number(existing?.TIME_STAMP ?? existing?.time_stamp ?? existing?.ORDER_DATE ?? 0);
+  if (!inTs) return true;
   if (!exTs) return true;
-  return inTs > exTs;
+  return inTs >= exTs;
 };
 
 export const putSheetNewer = async (sheetName, data) => {

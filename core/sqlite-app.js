@@ -40,10 +40,20 @@ const recordTimestamp = (record) => {
     ?? record?.HOLIDAY_DATE
     ?? 0
   );
-  let val = Number(raw);
-  if (!Number.isFinite(val)) return 0;
-  if (val > 0 && val < 1e11) val *= 1000;
-  return val;
+  if (!raw) return 0;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw > 0 && raw < 1e11 ? raw * 1000 : raw;
+  }
+  const s = String(raw).trim();
+  const num = Number(s);
+  if (Number.isFinite(num) && num > 0) {
+    return num < 1e11 ? num * 1000 : num;
+  }
+  const parsedDate = Date.parse(s);
+  if (Number.isFinite(parsedDate) && parsedDate > 0) {
+    return parsedDate;
+  }
+  return 0;
 };
 
 const parsePayload = (value) => {
@@ -313,12 +323,7 @@ export async function sqliteUpsertMany(collection, data, newerOnly = false, supp
 
       if (newerOnly && existingMap.has(key)) {
         const existingTs = existingMap.get(key);
-        // Unknown timestamps are safe for an insert, but must never replace an
-        // existing row: otherwise a stale SSE/full-sync payload can erase a
-        // fresher database record. A timestamped payload may replace an older
-        // row, including an older row whose timestamp is unknown.
-        if (incomingTs <= 0) continue;
-        if (existingTs > 0 && incomingTs <= existingTs) continue;
+        if (existingTs > 0 && incomingTs > 0 && incomingTs <= existingTs) continue;
       }
 
       await db.runAsync(
