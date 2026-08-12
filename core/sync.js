@@ -52,7 +52,10 @@ export async function streamSync(token, completedLayers = [], onProgress = null)
     });
     if (!res.ok) throw new Error(`Stream HTTP ${res.status}`);
     if (!res.body || typeof res.body.getReader !== 'function') {
-      throw new Error('ReadableStream not supported'); // native RN → caller falls back
+      // Native React Native fetch may not expose a WHATWG ReadableStream even
+      // though the request succeeded. This is an expected capability gap, not a
+      // sync failure: return null so fullSync uses its JSON snapshot fallback.
+      return null;
     }
 
     const reader = res.body.getReader();

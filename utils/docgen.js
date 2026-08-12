@@ -113,6 +113,32 @@ function _esc(str) {
     return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// Static Code-128-B renderer. Printed/native HTML cannot rely on a browser
+// script load, so every document gets real bars in its initial SVG markup.
+const CODE128_PATTERNS = ["11011001100","11001101100","11001100110","10010011000","10010001100","10001001100","10011001000","10011000100","10001100100","11001001000","11001000100","11000100100","10110011100","10011011100","10011001110","10111001100","10011101100","10011100110","11001110010","11001011100","11001001110","11011100100","11001110100","11101101110","11101001100","11100101100","11100100110","11101100100","11100110100","11100110010","11011011000","11011000110","11000110110","10100011000","10001011000","10001000110","10110001000","10001101000","10001100010","11010001000","11000101000","11000100010","10110111000","10110001110","10001101110","10111011000","10111000110","10001110110","11101110110","11010001110","11000101110","11011101000","11011100010","11011101110","11101011000","11101000110","11100010110","11101101000","11101100010","11100011010","11101111010","11001000010","11110001010","10100110000","10100001100","10010110000","10010000110","10000101100","10000100110","10110010000","10110000100","10011010000","10011000010","10000110100","10000110010","11000010010","11001010000","11110111010","11000010100","10001111010","10100111100","10010111100","10010011110","10111100100","10011110100","10011110010","11110100100","11110010100","11110010010","11011011110","11011110110","11110110110","10101111000","10100011110","10001011110","10111101000","10111100010","11110101000","11110100010","10111011110","10111101110","11101011110","11110101110","11010000100","11010010000","11010011100","1100011101011"];
+
+function buildCode128Svg(value, id = 'awb-barcode') {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    const codes = [];
+    for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i) - 32;
+        if (code < 0 || code > 94) return `<div class="barcode-number">${_esc(text)}</div>`;
+        codes.push(code);
+    }
+    let checksum = 104;
+    codes.forEach((code, index) => { checksum += code * (index + 1); });
+    const pattern = [CODE128_PATTERNS[104], ...codes.map(code => CODE128_PATTERNS[code]), CODE128_PATTERNS[checksum % 103], CODE128_PATTERNS[106]].join('');
+    const moduleWidth = 2;
+    let x = 8;
+    let bars = '';
+    for (let i = 0; i < pattern.length; i++) {
+        if (pattern[i] === '1') bars += `<rect x="${x}" y="2" width="${moduleWidth}" height="42" fill="#000"/>`;
+        x += moduleWidth;
+    }
+    const width = x + 8;
+    return `<div class="barcode-container" style="text-align:center;overflow:hidden;"><svg id="${id}" class="barcode-svg" viewBox="0 0 ${width} 58" preserveAspectRatio="none" role="img" aria-label="AWB ${_esc(text)}">${bars}<text x="${width / 2}" y="56" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" letter-spacing="1">${_esc(text)}</text></svg></div>`;
+}
 
 function buildLabel(order, cnor, cnee, products, multiboxItems, options = { type: 'preview' }) {
     const orderDate   = fmtDate(order.ORDER_DATE, 'date');
@@ -223,7 +249,7 @@ function buildLabel(order, cnor, cnee, products, multiboxItems, options = { type
         </div>
         <div class="label-row">
             <div class="label-cell">
-                <div class="barcode-container"><svg id="${barcodeId}" class="barcode-svg" data-value="${awb}"></svg></div>
+                ${buildCode128Svg(awb, barcodeId)}
             </div>
         </div>
         <div class="label-row">
@@ -412,7 +438,7 @@ function _buildReceiptHtml(order, cnor, cnee, products, copyType, branch) {
                 ${formatCarrierName(carrierName)}
             </div>
             <div class="receipt-meta-cell" style="grid-row:1/3;grid-column:3/4;border-left:1px solid #333;border-top:none;border-right:none;padding:0.5rem;">
-                <div class="receipt-barcode-container"><svg id="receipt-barcode" class="barcode-svg" data-value="${awb}"></svg></div>
+                <div class="receipt-barcode-container">${buildCode128Svg(awb, 'receipt-barcode')}</div>
             </div>
             <div class="receipt-meta-cell" style="border-right:1px solid #333;"><strong>Ref No:</strong> ${ref}</div>
         </div>
@@ -525,7 +551,7 @@ function buildDocs(order, cnor, cnee, products) {
     return `${getPackingSlipStyles()}
     <div class="ps-wrapper">
         <div class="ps-header">
-            <div class="ps-title">PRODUCT PACKING SLIP</div>
+            <div class="ps-title">PRODUCT PACKING SLIP</div><div>${buildCode128Svg(awb, 'docs-barcode')}</div>
         </div>
         <div class="ps-meta">
             <div class="ps-meta-cell"><div class="lbl">AWB No</div><div class="val">${awb}</div></div>
@@ -619,7 +645,7 @@ function buildMultibox(order, cnor, cnee, products, multiboxItems) {
     return `${getPackingSlipStyles()}
     <div class="ps-wrapper">
         <div class="ps-header">
-            <div class="ps-title">PACKING SLIP</div>
+            <div class="ps-title">PACKING SLIP</div><div>${buildCode128Svg(awb, 'multibox-barcode')}</div>
         </div>
         <div class="ps-meta">
             <div class="ps-meta-cell"><div class="lbl">AWB No</div><div class="val">${awb}</div></div>
@@ -902,7 +928,7 @@ function buildDocsAndBox(order, cnor, cnee, products, multiboxItems) {
     const combined = `${getPackingSlipStyles()}
     <div class="ps-wrapper">
         <div class="ps-header">
-            <div class="ps-title">${isDec ? 'PACKAGING LIST CUM DECLARATION' : 'PACKING SLIP'}</div>
+            <div class="ps-title">${isDec ? 'PACKAGING LIST CUM DECLARATION' : 'PACKING SLIP'}</div><div>${buildCode128Svg(awb, 'docs-box-barcode')}</div>
         </div>
         <div class="ps-meta">
             <div class="ps-meta-cell"><div class="lbl">AWB No</div><div class="val">${awb}</div></div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, View, Text, TouchableOpacity, Alert, AppState } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Alert, AppState, Modal } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import {
   useFonts,
@@ -44,12 +44,14 @@ import DashboardScreen from './screens/DashboardScreen';
 import OrdersScreen from './screens/OrdersScreen';
 import BookOrderScreen from './screens/BookOrderScreen';
 import TrackingScreen from './screens/TrackingScreen';
+import UploaderScreen from './screens/UploaderScreen';
+import AdminScreen from './screens/AdminScreen';
 import NotificationsPanel from './components/NotificationsPanel';
 
 function MainApp() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState('');
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'orders' | 'book' | 'track'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'orders' | 'book' | 'track' | 'uploader'
 
   const [orders, setOrders] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -67,6 +69,12 @@ function MainApp() {
   const [bookingLoading, setBookingLoading] = useState(false);
   // Edit flow: Orders detail → Edit button → book tab pre-filled (web editOrderRef parity)
   const [editOrder, setEditOrder] = useState(null);
+  // Book Order uses the same one-reference mini-uploader entry point as the
+  // web BookOrder page. Keep the modal in App so it receives the canonical
+  // synced order/lookup maps and can be reused after a booking confirmation.
+  const [bookUploadVisible, setBookUploadVisible] = useState(false);
+  const [bookUploadTarget, setBookUploadTarget] = useState(null);
+
   const sseRef = useRef(null);
   const tokenRef = useRef('');
   const refreshTokenRef = useRef('');
@@ -462,16 +470,19 @@ function MainApp() {
       if (ts) await setLastEventStamp(ts);
     } catch (e) {
       console.warn('[SSE] delta apply failed:', e.message);
+      // Keep the event cursor unchanged and let the event API retry this delta;
+      // swallowing the error would make the live chain consider the event done.
+      throw e;
     }
   };
 
   // Catch-up pull — resume from the last event stamp, not wall-clock time
   // (web uses lastEventStamp; Date.now() can skip or outrun server stamps).
   // Skipped while a full sync is mid-flight (web pullDeltaSince _syncInProgress guard).
-  const runDeltaCatchup = async (authToken) => {
+  const runDeltaCatchup = async (authToken, sinceOverride = 0) => {
     if (syncInProgressRef.current) return;
     try {
-      const since = (await getLastEventStamp()) || (await getLastSyncTime());
+      const since = Number(sinceOverride) || (await getLastEventStamp()) || (await getLastSyncTime());
       if (since) await pullDeltaSince(authToken, since);
     } catch (_) {}
   };
@@ -505,7 +516,10 @@ function MainApp() {
       deltaChainRef.current = deltaChainRef.current
         .then(() => applyDeltaToStorage(payload))
         .then(() => scheduleReload()) // coalesced — web _scheduleRefresh 300ms parity
-        .catch(() => {});
+        .catch((error) => {
+          console.warn('[SSE] delta persistence failed; scheduling catch-up:', error.message);
+          runDeltaCatchup(authToken, Number(payload?.ts || payload?.TIME_STAMP || 0));
+        });
       return;
     }
     if (type === 'notification') {
@@ -557,37 +571,53 @@ function MainApp() {
   };
 
   const markNotifRead = async (id) => {
-    const raw = await getSheet('NOTIFICATIONS');
-    const rec = raw[id];
-    if (!rec) return;
-    await putSheet('NOTIFICATIONS', { [id]: { ...rec, IS_READ: true } });
-    _postNotif('/api/notifread', [id]);
-    await loadNotifications(false);
+    try {
+      const raw = await getSheet('NOTIFICATIONS');
+      const rec = raw[id];
+      if (!rec) return;
+      await putSheet('NOTIFICATIONS', { [id]: { ...rec, IS_READ: true } });
+      _postNotif('/api/notifread', [id]);
+      await loadNotifications(false);
+    } catch (error) {
+      console.warn('[Notif] mark read failed:', error.message);
+    }
   };
 
   const markAllNotifsRead = async () => {
-    const raw = await getSheet('NOTIFICATIONS');
-    const ids = Object.keys(raw || {}).filter(k => !raw[k]?.IS_READ);
-    if (!ids.length) return;
-    for (const id of ids) await putSheet('NOTIFICATIONS', { [id]: { ...raw[id], IS_READ: true } });
-    _postNotif('/api/notifread', ids);
-    await loadNotifications(false);
+    try {
+      const raw = await getSheet('NOTIFICATIONS');
+      const ids = Object.keys(raw || {}).filter(k => !raw[k]?.IS_READ);
+      if (!ids.length) return;
+      for (const id of ids) await putSheet('NOTIFICATIONS', { [id]: { ...raw[id], IS_READ: true } });
+      _postNotif('/api/notifread', ids);
+      await loadNotifications(false);
+    } catch (error) {
+      console.warn('[Notif] mark all read failed:', error.message);
+    }
   };
 
   const clearNotif = async (id) => {
-    await deleteFromSheet('NOTIFICATIONS', id);
-    _postNotif('/api/notifclear', [id]);
-    await loadNotifications(false);
+    try {
+      await deleteFromSheet('NOTIFICATIONS', id);
+      _postNotif('/api/notifclear', [id]);
+      await loadNotifications(false);
+    } catch (error) {
+      console.warn('[Notif] clear failed:', error.message);
+    }
   };
 
   const clearAllNotifs = async () => {
-    const raw = await getSheet('NOTIFICATIONS');
-    const ids = Object.keys(raw || {}).filter(k => raw[k]?.LEVEL !== 'CRITICAL');
-    if (ids.length) {
-      await deleteFromSheet('NOTIFICATIONS', ids);
-      _postNotif('/api/notifclear', ids);
+    try {
+      const raw = await getSheet('NOTIFICATIONS');
+      const ids = Object.keys(raw || {}).filter(k => raw[k]?.LEVEL !== 'CRITICAL');
+      if (ids.length) {
+        await deleteFromSheet('NOTIFICATIONS', ids);
+        _postNotif('/api/notifclear', ids);
+      }
+      await loadNotifications(false);
+    } catch (error) {
+      console.warn('[Notif] clear all failed:', error.message);
     }
-    await loadNotifications(false);
   };
 
   const startSSEOnly = (authToken) => {
@@ -595,7 +625,14 @@ function MainApp() {
     if (sseRef.current) sseRef.current.stop();
     sseRef.current = new SSEListener(
       authToken,
-      (eventPayload) => { handleSSEEvent(authToken, eventPayload); },
+      (eventPayload) => {
+        // SSEListener does not await async handlers; consume failures here so a
+        // transient local SQLite write failure cannot become an unhandled
+        // promise rejection. Delta failures are retried by their own catch-up
+        // path and never advance the cursor until persistence succeeds.
+        handleSSEEvent(authToken, eventPayload)
+          .catch((error) => console.warn('[SSE] event processing failed:', error.message));
+      },
       (err) => {
         if (err === 'UNAUTHORIZED') {
           // A near-expiry stream can fail while the heartbeat is rotating.
@@ -631,6 +668,11 @@ function MainApp() {
     fetchAllBusinessLayers(authToken, () => {
       setSyncStatus('live');
       reloadLocalState();
+    }).catch((error) => {
+      // A failed local write must not leave an unhandled rejection or mark the
+      // background layer as complete. The next foreground/safety sync retries it.
+      console.warn('[Sync] background layer merge failed:', error.message);
+      setSyncStatus('reconnecting');
     });
     // Server counts are scoped to the authenticated user. Repair only after the
     // initial stream so a reconnect cannot briefly replace fresh local deltas.
@@ -762,6 +804,7 @@ function MainApp() {
     setNotifications([]);
     setUnreadCount(0);
     setNotifModalVisible(false);
+    closeBookUploader();
     setSyncStatus('idle');
     await removeSession();
   };
@@ -914,6 +957,21 @@ function MainApp() {
     setActiveTab('book');
   };
 
+  const openBookUploader = (order) => {
+    const reference = order?.REFERENCE || order?.reference;
+    if (!reference) {
+      Alert.alert('Upload unavailable', 'This booking has no reference yet.');
+      return;
+    }
+    setBookUploadTarget({ ...order, REFERENCE: reference });
+    setBookUploadVisible(true);
+  };
+
+  const closeBookUploader = () => {
+    setBookUploadVisible(false);
+    setBookUploadTarget(null);
+  };
+
   const handleBookOrder = async (payload) => {
     const order = payload.order || payload;
     const isEdit = !!order.REFERENCE;
@@ -1024,6 +1082,7 @@ function MainApp() {
             token={token}
             apiBase={API_BASE}
             onEditOrder={handleEditOrder}
+            role={user?.ROLE || 'STAFF'}
           />
         )}
         {activeTab === 'book' && (
@@ -1043,15 +1102,65 @@ function MainApp() {
             onContactCreated={handleContactCreated}
             editOrder={editOrder}
             onEditDone={() => setEditOrder(null)}
+            onOpenUploader={openBookUploader}
           />
         )}
         {activeTab === 'track' && (
           <TrackingScreen token={token} apiBase={API_BASE} orders={orders} shipmentsMap={shipmentsMap} />
         )}
+        {activeTab === 'uploader' && (
+          <UploaderScreen
+            orders={orders}
+            b2b2cMap={b2b2cMap}
+            productsMap={productsMap}
+            uploadsMap={uploadsMap}
+            token={token}
+            apiBase={API_BASE}
+            role={user?.ROLE || 'STAFF'}
+            onRefresh={onRefresh}
+          />
+        )}
+        {activeTab === 'admin' && (
+          <AdminScreen
+            token={token}
+            apiBase={API_BASE}
+            user={user}
+            onRefresh={onRefresh}
+          />
+        )}
       </View>
 
+      {/* Book Order mini-uploader parity: the web opens one reference and hides
+          POD/KYC on the booking page. Orders/Shipments keeps its own general
+          mini-uploader modal with the default KYC restriction. */}
+      <Modal
+        visible={bookUploadVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={closeBookUploader}
+      >
+        <UploaderScreen
+          key={bookUploadTarget?.REFERENCE || 'book-uploader'}
+          orders={bookUploadTarget ? [bookUploadTarget] : []}
+          b2b2cMap={b2b2cMap}
+          productsMap={bookUploadTarget?.products?.length
+            ? { ...productsMap, [bookUploadTarget.REFERENCE]: bookUploadTarget.products }
+            : productsMap}
+          uploadsMap={uploadsMap}
+          token={token}
+          apiBase={API_BASE}
+          role={user?.ROLE || 'STAFF'}
+          enforceRoleRestrictions
+          hiddenTypes={['POD', 'KYC']}
+          initialOrder={bookUploadTarget}
+          modalMode
+          onClose={closeBookUploader}
+          onRefresh={onRefresh}
+        />
+      </Modal>
+
       {/* Bottom Navigation Bar */}
-      <BottomMenuSheet activeTab={activeTab} onNavigate={setActiveTab} />
+      <BottomMenuSheet activeTab={activeTab} onNavigate={setActiveTab} userRole={user?.ROLE || 'CLIENT'} />
     </View>
   );
 }

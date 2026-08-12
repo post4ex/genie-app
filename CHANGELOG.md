@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.0.14] — 2026-08-12
+
+### Added
+- **Supabase Backend Integration**: Backend PostgreSQL migrated to Supabase (`us-east-1`) with generic `ACTIVE_DB` selector.
+- **Document & Image Uploader Engine** (`core/uploader-engine.js`, `screens/UploaderScreen.js`): Refactored image & document upload workflow with progress tracking.
+- **Admin Management & Viewer Screens** (`screens/AdminScreen.js`, `utils/upload-viewer.js`): Added dedicated admin control interfaces and document previewer.
+- **Enhanced Storage & Sync Caching** (`core/sqlite-app.js`, `core/storage.js`): Improved SQLite cache resilience and local replica indexing.
+
+### Changed
+- `version` bumped to `1.0.14`.
+- `versionCode` bumped to `15`.
+- `runtimeVersion` updated to `1.0.14`.
+
+---
+
 ## [1.0.13] — 2026-08-11
 
 ### Fixed

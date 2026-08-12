@@ -148,6 +148,7 @@ export const putSheet = async (sheetName, data) => {
     await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(merged));
   } catch (e) {
     console.warn(`[Storage] putSheet error for ${sheetName}:`, e.message);
+    throw e;
   }
 };
 
@@ -160,6 +161,7 @@ export const setSheet = async (sheetName, data) => {
     await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(canonicalEntries(sheetName, data)));
   } catch (e) {
     console.warn(`[Storage] setSheet error for ${sheetName}:`, e.message);
+    throw e;
   }
 };
 
@@ -258,6 +260,7 @@ export const putSheetNewer = async (sheetName, data) => {
     await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(merged));
   } catch (e) {
     console.warn(`[Storage] putSheetNewer error for ${sheetName}:`, e.message);
+    throw e;
   }
 };
 
@@ -273,5 +276,6 @@ export const deleteFromSheet = async (sheetName, keys) => {
     await AsyncStorage.setItem(`sheet_${sheetName}`, JSON.stringify(next));
   } catch (e) {
     console.warn(`[Storage] deleteFromSheet error for ${sheetName}:`, e.message);
+    throw e;
   }
 };

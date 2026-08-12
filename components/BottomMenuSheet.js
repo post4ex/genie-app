@@ -6,10 +6,11 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AboutAppPanel from './AboutAppPanel';
 import { COLORS } from '../styles/theme';
+import { ROLE_LEVELS } from '../core/config';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
-export default function BottomMenuSheet({ activeTab, onNavigate }) {
+export default function BottomMenuSheet({ activeTab, onNavigate, userRole = 'CLIENT' }) {
   const insets = useSafeAreaInsets();
   const [menuOpen, setMenuOpen] = useState(false);
   const [aboutModalOpen, setAboutModalOpen] = useState(false);
@@ -135,7 +136,7 @@ export default function BottomMenuSheet({ activeTab, onNavigate }) {
                   <Text style={styles.chipIcon}>📍</Text>
                   <Text style={styles.chipLabel}>Pincode Search</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('dashboard')}>
+                <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('uploader')}>
                   <Text style={styles.chipIcon}>📤</Text>
                   <Text style={styles.chipLabel}>Uploader</Text>
                 </TouchableOpacity>
@@ -147,10 +148,12 @@ export default function BottomMenuSheet({ activeTab, onNavigate }) {
                   <Text style={styles.chipIcon}>🔐</Text>
                   <Text style={styles.chipLabel}>The Vault</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('dashboard')}>
-                  <Text style={styles.chipIcon}>⚙️</Text>
-                  <Text style={styles.chipLabel}>Masters / Admin</Text>
-                </TouchableOpacity>
+                {(ROLE_LEVELS[userRole] || 0) >= (ROLE_LEVELS.CLIENT || 1) && (
+                  <TouchableOpacity style={[styles.menuChip, activeTab === 'admin' && styles.menuChipActive]} onPress={() => handleSelect('admin')}>
+                    <Text style={styles.chipIcon}>⚙️</Text>
+                    <Text style={styles.chipLabel}>Masters / Admin</Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity style={styles.menuChip} onPress={() => { setMenuOpen(false); setAboutModalOpen(true); }}>
                   <Text style={styles.chipIcon}>ℹ️</Text>
                   <Text style={styles.chipLabel}>About & Updates</Text>
@@ -275,6 +278,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#e2e8f0',
+  },
+  menuChipActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: '#fff7f5',
   },
   chipIcon: {
     fontSize: 18,

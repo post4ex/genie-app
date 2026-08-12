@@ -94,7 +94,8 @@ const uppercaseText = (value) => String(value ?? '').toUpperCase();
 export default function BookOrderScreen({
   bookForm = {}, setBookForm, onBookOrder, bookingLoading,
   b2b2cMap = {}, b2bList = [], carriersMap = {}, modesMap = {}, ratesMap = {}, branchesMap = {},
-  token = '', apiBase = '', onContactCreated = null, editOrder = null, onEditDone = null
+  token = '', apiBase = '', onContactCreated = null, editOrder = null, onEditDone = null,
+  onOpenUploader = null
 }) {
   // --- 1. Top Section Local States ---
   const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
@@ -1373,7 +1374,13 @@ export default function BookOrderScreen({
         // shows as NaN/blank. Boxes/products ride along so Edit can re-prefill them.
         // Record the transaction (booked / pending)
         recordBookingTxn({ id: `${Date.now()}-${ref || 'x'}`, ts: Date.now(), status: result.confirmed ? 'booked' : 'pending', ref });
-        setLastBookedOrder({ ...payload.order, reference: ref, boxes: payload.multibox, products: payload.products });
+        setLastBookedOrder({
+          ...payload.order,
+          REFERENCE: payload.order.REFERENCE || ref,
+          reference: ref,
+          boxes: payload.multibox,
+          products: payload.products,
+        });
         setEditRef(null);
         onEditDone && onEditDone();
         resetForNextBooking();
@@ -2174,6 +2181,17 @@ export default function BookOrderScreen({
             <TouchableOpacity style={styles.lastBookedActionBtn} onPress={() => handleDeleteOrder(lastBookedOrder.reference || lastBookedOrder.REFERENCE)}>
               <Text style={styles.lastBookedActionDelete}>🗑 Delete</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.lastBookedActionBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Upload shipment documents"
+              onPress={() => onOpenUploader?.({
+                ...lastBookedOrder,
+                REFERENCE: lastBookedOrder.REFERENCE || lastBookedOrder.reference,
+              })}
+            >
+              <Text style={styles.lastBookedActionUpload}>⬆ Upload</Text>
+            </TouchableOpacity>
           </View>
         </View>
       )}
@@ -2517,12 +2535,12 @@ const styles = StyleSheet.create({
   pageTitle: { color: '#1e293b', fontSize: 24, fontWeight: '800', marginBottom: 14 },
 
   // Last Booked Card
-  lastBookedCard: { backgroundColor: '#e0e7ff', borderRadius: 12, padding: 14, borderWidth: 1.5, borderColor: '#6366f1', marginBottom: 14 },
-  lastBookedHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  lastBookedTitle: { fontSize: 13, fontWeight: '800', color: '#4338ca' },
-  lastBookedRoute: { fontSize: 12, color: '#374151', fontWeight: '600', marginBottom: 8 },
+  lastBookedCard: { backgroundColor: '#eef2ff', borderRadius: 14, padding: 15, borderWidth: 1, borderColor: '#818cf8', marginBottom: 14, shadowColor: '#312e81', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  lastBookedHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7, paddingBottom: 7, borderBottomWidth: 1, borderBottomColor: '#c7d2fe' },
+  lastBookedTitle: { fontSize: 14, fontWeight: '900', color: '#3730a3', letterSpacing: 0.1 },
+  lastBookedRoute: { fontSize: 13, color: '#1e293b', fontWeight: '800', marginBottom: 10 },
   lastBookedGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  lastBookedChip: { fontSize: 10.5, fontWeight: '700', color: '#4338ca', backgroundColor: '#ffffff', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4 },
+  lastBookedChip: { fontSize: 10.5, fontWeight: '800', color: '#3730a3', backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#c7d2fe', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, overflow: 'hidden' },
 
   cardWeb: { backgroundColor: '#ffffff', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 14 },
   cardMobile: { borderRadius: 8, padding: 10, marginBottom: 8 },
@@ -2657,6 +2675,7 @@ const styles = StyleSheet.create({
   lastBookedActionBtn: { flex: 1, alignItems: 'center', backgroundColor: '#ffffff', borderRadius: 6, borderWidth: 1, borderColor: '#c7d2fe', paddingVertical: 7 },
   lastBookedActionEdit: { fontSize: 11.5, fontWeight: '800', color: '#4338ca' },
   lastBookedActionDelete: { fontSize: 11.5, fontWeight: '800', color: '#dc2626' },
+  lastBookedActionUpload: { fontSize: 11.5, fontWeight: '800', color: '#15803d' },
 
   // Booking transactions log
   txnCard: { backgroundColor: '#ffffff', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 14 },

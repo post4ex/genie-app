@@ -2,7 +2,7 @@
   "expo": {
     "name": "Genie",
     "slug": "genie",
-    "version": "1.0.13",
+    "version": "1.0.14",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -20,7 +20,7 @@
         "backgroundColor": "#0f172a"
       },
       "package": "com.post4ex.geniereact",
-      "versionCode": 14,
+      "versionCode": 15,
       "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
@@ -30,7 +30,13 @@
       "expo-asset",
       "expo-font",
       "expo-splash-screen",
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Genie to use your camera to scan barcodes and QR codes and capture shipment documents."
+        }
+      ]
     ],
     "updates": {
       "enabled": true,
@@ -38,6 +44,11 @@
       "fallbackToCacheTimeout": 0,
       "url": "https://raw.githubusercontent.com/post4ex/genie-app/main/dist/android-index.json"
     },
-    "runtimeVersion": "1.0.13"
+    "extra": {
+      "eas": {
+        "projectId": "87ffdf1c-f236-4171-aa31-e40df5f73966"
+      }
+    },
+    "runtimeVersion": "1.0.14"
   }
 }

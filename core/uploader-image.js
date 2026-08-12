@@ -3,7 +3,7 @@
 // compressImage, getRotatedImage, dataURLtoFile, createPdfFromImages
 // ============================================================================
 
-async function compressImage(dataUrl, targetSizeKB = 200, maxDimension = 2048) {
+export async function compressImage(dataUrl, targetSizeKB = 200, maxDimension = 2048) {
     const targetSizeBytes = targetSizeKB * 1024;
     const img = await new Promise(resolve => {
 const image = new Image();
@@ -54,7 +54,7 @@ if (sizeInBytes > targetSizeBytes && quality > 0.1) {
  * @param {number} rotation - The rotation angle (0, 90, 180, 270).
  * @returns {Promise<string>} - The rotated image data URL (png).
  */
-function getRotatedImage(src, rotation) {
+export function getRotatedImage(src, rotation) {
     return new Promise((resolve) => {
 const img = new Image();
 img.onload = () => {
@@ -82,15 +82,16 @@ img.src = src;
 
 // --- === END OF IMAGE FUNCTIONS === ---
 
-async function dataURLtoFile(dataUrl, fileName) {
+export async function dataURLtoFile(dataUrl, fileName) {
     const res = await fetch(dataUrl); 
     const blob = await res.blob();
     return new File([blob], fileName, { type: 'image/jpeg' });
 }
 
 
-async function createPdfFromImages(images) {
-    const { jsPDF } = window.jspdf;
+export async function createPdfFromImages(images) {
+    const jsPDF = typeof globalThis !== 'undefined' ? globalThis.jspdf?.jsPDF : null;
+    if (typeof jsPDF !== 'function') throw new Error('PDF bundling is unavailable until jsPDF is loaded on web.');
     const doc = new jsPDF("p", "mm", "a4");
     const a4Width = 210;
     const a4Height = 297;

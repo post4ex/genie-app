@@ -1,16 +1,19 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, FlatList, TextInput,
-  TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator, Image, Share, Platform
+  TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator, Share, Platform,
+  useWindowDimensions
 } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { COLORS } from '../styles/theme';
+import { getSheet, deleteFromSheet } from '../core/storage';
 import { fmtDate, parseDate } from '../utils/formatIST';
 import * as docgen from '../utils/docgen.js';
-import * as ImagePicker from 'expo-image-picker';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import { UploadViewer, resolveUploadUri, isPdfUpload } from '../utils/upload-viewer';
+import UploaderScreen from './UploaderScreen';
 
 // ── Web SVG Icons (Exact GENIE_WEB shipments.js _docIco 1-to-1 match) ──────────
 const WhatsAppIcon = ({ size = 14, color = '#25D366' }) => (
@@ -166,7 +169,28 @@ const _isNewBooking = (o) => {
 const _hasPODUpload = (uploads) =>
   Array.isArray(uploads) && uploads.some(u => (u.UPLOAD_TYPE || '').toUpperCase() === 'POD');
 
-const CARRIERS_LIST = ['ALL', 'Jetline', 'Trackon', 'Delhivery', 'Shiprocket', 'Airways', 'ST Courier', 'TrackCourier', '17Track'];
+// Shipment state values arrive from different carriers with spaces, hyphens, or
+// underscores (for example, "Out for Delivery"). The web compares canonical
+// values such as `outfordelivery`, so use the same normalization for every tile,
+// count, filter, and TAT quick-filter predicate.
+const normalizeShipmentState = (value) => String(value ?? '')
+  .trim()
+  .toLowerCase()
+  .replace(/[\s_-]+/g, '');
+
+const ASSIGN_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const parseAssignmentDate = (value) => {
+  const match = ASSIGN_DATE_RE.exec(String(value ?? '').trim());
+  if (!match) return null;
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  // Date.parse normalizes impossible dates (e.g. 2025-02-31), so reject them.
+  if (date.getUTCFullYear() !== Number(match[1]) ||
+      date.getUTCMonth() + 1 !== Number(match[2]) ||
+      date.getUTCDate() !== Number(match[3])) return null;
+  return date;
+};
+
 const STATUSES_LIST = ['ALL', 'delivered', 'outfordelivery', 'intransit', 'exception', 'pending'];
 const PAY_MODES_LIST = ['ALL', 'TOPAY', 'COD', 'PREPAID'];
 
@@ -183,7 +207,7 @@ const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
 export default function OrdersScreen({
   orders = [], searchQuery, setSearchQuery, refreshing, onRefresh,
   b2b2cMap = {}, carriersMap = {}, modesMap = {}, productsMap = {}, multiboxMap = {}, uploadsMap = {}, shipmentsMap = {},
-  branchesMap = {}, token = '', apiBase = '', onEditOrder = null
+  branchesMap = {}, token = '', apiBase = '', onEditOrder = null, role = 'STAFF'
 }) {
   const [currentView, setCurrentView] = useState('tiles');
   const [selectedTile, setSelectedTile] = useState('all');
@@ -191,10 +215,25 @@ export default function OrdersScreen({
 
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [filterStatus, setFilterStatus] = useState('ALL');
+  const [filterBranch, setFilterBranch] = useState('ALL');
+  const [filterCode, setFilterCode] = useState('ALL');
   const [filterCarrier, setFilterCarrier] = useState('ALL');
   const [filterPayMode, setFilterPayMode] = useState('ALL');
   const [filterStartDate, setFilterStartDate] = useState('');
   const [filterEndDate, setFilterEndDate] = useState('');
+
+  // Dedicated Assign Carrier tile state (web shipments-assign-carrier-tile.js parity)
+  const [assignSearch, setAssignSearch] = useState('');
+  const [assignSelectedOrder, setAssignSelectedOrder] = useState(null);
+  const [assignCarrier, setAssignCarrier] = useState('');
+  const [assignAwb, setAssignAwb] = useState('');
+  const [assignOrderDate, setAssignOrderDate] = useState('');
+  const [assignTransitDate, setAssignTransitDate] = useState('');
+  const [assignDynaAwb, setAssignDynaAwb] = useState('');
+  const [assignSaving, setAssignSaving] = useState(false);
+  const [assignMessage, setAssignMessage] = useState('');
+  const [assignFormDirty, setAssignFormDirty] = useState(false);
+  const { width: screenWidth } = useWindowDimensions();
 
   // Visual Calendar Picker State
   const [calendarTarget, setCalendarTarget] = useState(null); // 'start' | 'end' | null
@@ -204,14 +243,16 @@ export default function OrdersScreen({
   // Tracking API State
   const [liveTracking, setLiveTracking] = useState(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
-  const [podImageUrl, setPodImageUrl] = useState(null); // POD image viewer modal
+  const [podImageUrl, setPodImageUrl] = useState(null); // Active upload viewer URI
+  const [podViewerTitle, setPodViewerTitle] = useState('Upload preview');
+  const [podViewerIsPdf, setPodViewerIsPdf] = useState(false);
   const [tatQuickFilter, setTatQuickFilter] = useState(null); // 'delivered' | 'outfordelivery' | 'intransit' | null
 
   // Web parity — state comes from the SHIPMENTS sheet first (shipmentsDataMap),
   // falling back to the order record (web: `s?.state || s?.STATE || order...`).
   const getOrderState = (o) => {
     const s = shipmentsMap[o?.REFERENCE];
-    return (s?.state || s?.STATE || o?.STATE || o?.state || 'pending').toLowerCase();
+    return normalizeShipmentState(s?.state || s?.STATE || o?.STATE || o?.state || 'pending');
   };
 
   // Web parity (_sortMovements): newest activity_stamp first, then time_stamp.
@@ -233,8 +274,9 @@ export default function OrdersScreen({
     const res = await fetch(`${apiBase}${path}`, {
       method,
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      // Web parity: only POST carries a JSON body (bare DELETE — FastAPI 422s on stray bodies)
-      body: method === 'POST' ? JSON.stringify(body || {}) : undefined,
+      // The web sends JSON for POST, PUT, and DELETE. DELETE /api/deleteOrder
+      // requires { reference }; omitting it makes FastAPI reject the request.
+      body: method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(body || {}),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || json.status === 'error') throw new Error(json.message || json.detail || `HTTP ${res.status}`);
@@ -293,14 +335,31 @@ export default function OrdersScreen({
     return firstDay.toISOString().split('T')[0];
   }, []);
 
-  const hasExplicitFilters = filterStatus !== 'ALL' || filterCarrier !== 'ALL' || filterPayMode !== 'ALL' ||
-    filterStartDate !== '' || filterEndDate !== '' || !!searchQuery;
+  // Web populateFilters keeps the actual order values (rather than a hardcoded
+  // catalog), so a backend branch/code/carrier is always selectable.
+  const filterBranchOptions = useMemo(() => ['ALL', ...new Set(orders.map(o => String(o?.BRANCH ?? '')).filter(Boolean).sort())], [orders]);
+  const filterCodeOptions = useMemo(() => ['ALL', ...new Set(orders.map(o => String(o?.CODE ?? '')).filter(Boolean).sort())], [orders]);
+  const filterCarrierOptions = useMemo(() => ['ALL', ...new Set(orders.map(o => String(o?.CARRIER ?? '')).filter(Boolean).sort())], [orders]);
+  const assignmentCarrierOptions = useMemo(() => {
+    const fromData = Object.entries(carriersMap || {}).map(([key, value]) => String(value?.COMPANY_CODE || key).trim()).filter(Boolean);
+    return [...new Set(fromData.length ? fromData : filterCarrierOptions.filter(v => v !== 'ALL'))].sort();
+  }, [carriersMap, filterCarrierOptions]);
+
+  const hasExplicitFilters = filterStatus !== 'ALL' || filterBranch !== 'ALL' || filterCode !== 'ALL' ||
+    filterCarrier !== 'ALL' || filterPayMode !== 'ALL' || filterStartDate !== '' || filterEndDate !== '' || !!searchQuery;
+  // Status/payment are React-only conveniences. Keep the web's implicit
+  // month-start date when only one of those conveniences is selected; the web
+  // equivalent filters (branch/code/carrier/search/date) intentionally disable it.
+  const hasWebEquivalentFilters = filterBranch !== 'ALL' || filterCode !== 'ALL' ||
+    filterCarrier !== 'ALL' || filterStartDate !== '' || filterEndDate !== '' || !!searchQuery;
 
   const filteredOrders = useMemo(() => {
     // Web parity: date bounds — explicit dates, else the implicit month start
-    const effStart = filterStartDate || (!hasExplicitFilters ? implicitDefaultStart : '');
-    const startMs = effStart ? new Date(effStart + 'T00:00:00').getTime() : 0;
-    const endMs = filterEndDate ? new Date(filterEndDate + 'T23:59:59').getTime() : 0;
+    const effStart = filterStartDate || (!hasWebEquivalentFilters ? implicitDefaultStart : '');
+    // Match the web's explicit UTC boundaries exactly; local-time parsing shifts
+    // records near midnight on devices outside the server timezone.
+    const startMs = effStart ? new Date(effStart + 'T00:00:00Z').getTime() : 0;
+    const endMs = filterEndDate ? new Date(filterEndDate + 'T23:59:59Z').getTime() : 0;
 
     const list = orders.filter(o => {
       const state = getOrderState(o);
@@ -339,14 +398,21 @@ export default function OrdersScreen({
 
       // ── Advanced filters ──
       if (filterStatus !== 'ALL' && state !== filterStatus) return false;
-      if (filterCarrier !== 'ALL' && (o.CARRIER || '').toLowerCase() !== filterCarrier.toLowerCase()) return false;
+      // Web uses exact option values for these three dynamically populated
+      // selects; do not silently merge distinct backend codes by case.
+      if (filterBranch !== 'ALL' && String(o.BRANCH ?? '') !== filterBranch) return false;
+      if (filterCode !== 'ALL' && String(o.CODE ?? '') !== filterCode) return false;
+      if (filterCarrier !== 'ALL' && String(o.CARRIER ?? '') !== filterCarrier) return false;
       if (filterPayMode === 'TOPAY' && o.TOPAY !== 'Yes') return false;
       if (filterPayMode === 'COD' && (!o.COD || parseFloat(o.COD) <= 0)) return false;
       if (filterPayMode === 'PREPAID' && (o.TOPAY === 'Yes' || (o.COD && parseFloat(o.COD) > 0))) return false;
 
       // ── Date range (web applyFilters parity) ──
-      const orderDate = parseDate(o.ORDER_DATE || o.TIME_STAMP);
-      if (startMs && (!orderDate || orderDate.getTime() < startMs)) return false;
+      const orderDate = parseDate(o.ORDER_DATE);
+      // Web excludes records with an invalid/missing ORDER_DATE even when the
+      // user has supplied another filter and no date range.
+      if (!orderDate) return false;
+      if (startMs && orderDate.getTime() < startMs) return false;
       if (endMs && (!orderDate || orderDate.getTime() > endMs)) return false;
 
       // ── Search (web parity: ref/awb/names/cities/pincodes) ──
@@ -378,12 +444,13 @@ export default function OrdersScreen({
       });
     }
     return list;
-  }, [orders, selectedTile, tatQuickFilter, filterStatus, filterCarrier, filterPayMode,
+  }, [orders, selectedTile, tatQuickFilter, filterStatus, filterBranch, filterCode, filterCarrier, filterPayMode,
     filterStartDate, filterEndDate, searchQuery, b2b2cMap, shipmentsMap, uploadsMap,
-    implicitDefaultStart, hasExplicitFilters]);
+    implicitDefaultStart, hasWebEquivalentFilters]);
 
   const activeTileObj = TILES.find(t => t.id === selectedTile) || TILES[0];
-  const hasActiveAdvancedFilters = filterStatus !== 'ALL' || filterCarrier !== 'ALL' || filterPayMode !== 'ALL' || filterStartDate !== '' || filterEndDate !== '';
+  const hasActiveAdvancedFilters = filterStatus !== 'ALL' || filterBranch !== 'ALL' || filterCode !== 'ALL' ||
+    filterCarrier !== 'ALL' || filterPayMode !== 'ALL' || filterStartDate !== '' || filterEndDate !== '';
 
   // Quick Date Presets Helper
   const applyDatePreset = (type) => {
@@ -469,7 +536,14 @@ export default function OrdersScreen({
   const handleSelectTile = (tileId) => {
     setSelectedTile(tileId);
     setTatQuickFilter(null);
-    setCurrentView('list');
+    setAssignMessage('');
+    if (tileId === 'assign-carrier') {
+      setAssignSearch('');
+      setAssignSelectedOrder(null);
+      setCurrentView('assign-carrier');
+    } else {
+      setCurrentView('list');
+    }
   };
 
   // ── Web-parity Mail / WhatsApp / Delete actions (real API calls) ─────────────
@@ -478,10 +552,15 @@ export default function OrdersScreen({
   // Escape user fields interpolated into email HTML (harden the mail templates)
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  const resolveFileUrl = (url) => {
-    if (!url) return url;
-    if (/^(https?:|data:|blob:)/.test(url)) return url;
-    return `${apiBase}${url.startsWith('/') ? url : '/' + url}`;
+  const resolveFileUrl = (url) => resolveUploadUri(url, apiBase);
+
+  const openUploadViewer = (uploadOrUri, title = 'Upload preview') => {
+    const upload = typeof uploadOrUri === 'string' ? { FILE_URL: uploadOrUri } : (uploadOrUri || {});
+    const uri = resolveUploadUri(upload.FILE_URL || upload.url || upload.pod_image || upload.POD_IMAGE, apiBase);
+    if (!uri) return;
+    setPodImageUrl(uri);
+    setPodViewerTitle(title || upload.UPLOAD_TYPE || 'Upload preview');
+    setPodViewerIsPdf(isPdfUpload(upload));
   };
 
   const mailShipment = async (o) => {
@@ -498,7 +577,7 @@ export default function OrdersScreen({
     if (!emails.length) { toast('No Email', 'No email address on file.'); return; }
     const s = liveTracking?.shipment || {};
     const movs = liveTracking?.movements || [];
-    const sc = STATE_CONFIG[(s.state || '').toLowerCase()] || STATE_CONFIG.intransit;
+    const sc = STATE_CONFIG[normalizeShipmentState(s.state)] || STATE_CONFIG.intransit;
     const movRows = movs.map(m => `<tr><td style='border:1px solid #ddd;padding:5px'>${esc(m.date)}</td><td style='border:1px solid #ddd;padding:5px'>${esc(m.time)}</td><td style='border:1px solid #ddd;padding:5px'>${esc(m.location)}</td><td style='border:1px solid #ddd;padding:5px'>${esc(m.activity)}</td></tr>`).join('');
     const movTable = movs.length
       ? `<table style='border-collapse:collapse;width:100%;font-size:12px'><thead><tr><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Date</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Time</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Location</th><th style='border:1px solid #ddd;padding:5px;background:#f5f5f5'>Activity</th></tr></thead><tbody>${movRows}</tbody></table>`
@@ -556,7 +635,7 @@ export default function OrdersScreen({
   const waShipmentTracking = (o) => {
     const s = liveTracking?.shipment || {};
     const movs = liveTracking?.movements || [];
-    const sc = STATE_CONFIG[(s.state || '').toLowerCase()] || STATE_CONFIG.intransit;
+    const sc = STATE_CONFIG[normalizeShipmentState(s.state)] || STATE_CONFIG.intransit;
     const movText = movs.slice(0, 10).map(m => `  ${[m.date, m.time].filter(Boolean).join(' ')} | ${m.location || ''} | ${m.activity || ''}`).join('\n') || 'No history';
     return waOrder(o, {
       template: 'SHIPMENT_TRACKING',
@@ -590,13 +669,38 @@ export default function OrdersScreen({
     });
   };
 
+  const removeOrderFromLocalReplica = async (reference) => {
+    if (!reference) return;
+    const orderSheet = await getSheet('ORDERS');
+    const orderKeys = Object.entries(orderSheet || {})
+      .filter(([, row]) => String(row?.REFERENCE ?? '') === String(reference))
+      .map(([key]) => key);
+    if (orderKeys.length) await deleteFromSheet('ORDERS', orderKeys);
+    for (const collection of ['MULTIBOX', 'PRODUCTS', 'UPLOADS', 'SHIPMENTS']) {
+      const sheet = await getSheet(collection);
+      const childKeys = Object.entries(sheet || {})
+        .filter(([, row]) => String(row?.REFERENCE ?? '') === String(reference))
+        .map(([key]) => key);
+      if (childKeys.length) await deleteFromSheet(collection, childKeys);
+    }
+  };
+
   const deleteOrder = (o) => {
     Alert.alert('Delete order', `Delete order ${o.REFERENCE}? This cannot be undone.`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete', style: 'destructive', onPress: async () => {
           try {
-            await apiCall('/api/deleteOrder', { reference: o.REFERENCE });
+            await apiCall('/api/deleteOrder', { reference: o.REFERENCE }, 'DELETE');
+            // Do not wait for the next SSE/full-sync cycle to remove the row:
+            // the web removes it from its current replica immediately too.
+            try {
+              await removeOrderFromLocalReplica(o.REFERENCE);
+            } catch (localError) {
+              // Server deletion succeeded; a later refresh/SSE will reconcile
+              // the replica even if the immediate local cleanup is unavailable.
+              console.warn('[Orders] local delete cleanup:', localError.message);
+            }
             toast('✅ Deleted', `Order ${o.REFERENCE} deleted`);
             setCurrentView('tiles');
             setSelectedOrder(null);
@@ -625,8 +729,6 @@ export default function OrdersScreen({
   // ── Document Center actions (web printSelectedShipment*/download*/mail* parity) ──
   const [labelLayout, setLabelLayout] = useState('2up-landscape'); // '2up-landscape' | '4up-portrait' (web window._labelLayout)
   const [uploadVisible, setUploadVisible] = useState(false);
-  const [uploadType, setUploadType] = useState('POD');
-  const [uploading, setUploading] = useState(false);
   const [uploadTarget, setUploadTarget] = useState(null);
 
   useEffect(() => {
@@ -721,34 +823,8 @@ export default function OrdersScreen({
     toast('Label Layout', next === '4up-portrait' ? 'Switched to 4-up Portrait' : 'Switched to 2-up Landscape');
   };
 
-  const openUpload = (o) => { setUploadTarget(o); setUploadType('POD'); setUploadVisible(true); };
-
-  const pickAndUpload = async () => {
-    const o = uploadTarget;
-    if (!o) return;
-    try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) { toast('Permission needed', 'Allow photo access to upload documents.'); return; }
-      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], base64: true, quality: 0.8 });
-      if (res.canceled || !res.assets || !res.assets.length) return;
-      const asset = res.assets[0];
-      if (!asset.base64) { toast('Upload failed', 'Could not read image data.'); return; }
-      setUploading(true);
-      await apiCall('/api/upload', {
-        upload_type: uploadType,
-        content_type: asset.mimeType || 'image/jpeg',
-        data: asset.base64,
-        reference: o.REFERENCE || '',
-        awb_number: o.AWB_NUMBER || '',
-        branch: o.BRANCH || '',
-        code: '', status_remark: '', child_awb: '', customer_uid: '', kyc_number: '', kyc_type: '', doc_number: '', doc_type: '',
-      });
-      toast('✅ Uploaded', `${uploadType} uploaded for ${o.REFERENCE}`);
-      setUploadVisible(false);
-      if (onRefresh) onRefresh();
-    } catch (e) { toast('❌ Upload failed', e.message); }
-    finally { setUploading(false); }
-  };
+  const openUpload = (o) => { setUploadTarget(o); setUploadVisible(true); };
+  const closeUpload = () => { setUploadVisible(false); setUploadTarget(null); };
 
   const handleSelectOrder = (order) => {
     setSelectedOrder(order);
@@ -757,10 +833,118 @@ export default function OrdersScreen({
 
   const handleResetAdvancedFilters = () => {
     setFilterStatus('ALL');
+    setFilterBranch('ALL');
+    setFilterCode('ALL');
     setFilterCarrier('ALL');
     setFilterPayMode('ALL');
     setFilterStartDate('');
     setFilterEndDate('');
+    setTatQuickFilter(null);
+  };
+
+  // Web Assign Carrier tile: recent shipments are sorted with incomplete rows
+  // first, then complete rows, both newest-first. The tile's count itself still
+  // counts only incomplete recent rows, exactly like the web.
+  const assignRows = useMemo(() => {
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const recent = orders.filter((o) => (parseDate(o?.ORDER_DATE)?.getTime() || 0) >= cutoff);
+    const q = assignSearch.trim().toLowerCase();
+    const matches = (o) => {
+      if (!q) return true;
+      const consignor = b2b2cMap[o.CONSIGNOR]?.NAME || o.CONSIGNOR || '';
+      const consignee = b2b2cMap[o.CONSIGNEE]?.NAME || o.CONSIGNEE || '';
+      return [o.REFERENCE, o.AWB_NUMBER, consignor, consignee]
+        .filter(Boolean).map(String).join('|').toLowerCase().includes(q);
+    };
+    return recent.filter(matches).sort((a, b) => {
+      const incompleteA = !a.CARRIER || !a.AWB_NUMBER;
+      const incompleteB = !b.CARRIER || !b.AWB_NUMBER;
+      if (incompleteA !== incompleteB) return incompleteA ? -1 : 1;
+      return (parseDate(b.ORDER_DATE)?.getTime() || 0) - (parseDate(a.ORDER_DATE)?.getTime() || 0);
+    });
+  }, [orders, assignSearch, b2b2cMap]);
+
+  // If SSE/full sync removes or replaces the selected record, never leave an
+  // orphaned assign form editing a shipment that no longer exists. Keep the
+  // input values intact so an in-progress edit is not unexpectedly overwritten.
+  useEffect(() => {
+    if (!assignSelectedOrder?.REFERENCE) return;
+    const latest = orders.find(o => String(o?.REFERENCE) === String(assignSelectedOrder.REFERENCE));
+    if (!latest) {
+      setAssignSelectedOrder(null);
+      setAssignFormDirty(false);
+      setAssignMessage('');
+      return;
+    }
+    if (latest !== assignSelectedOrder) {
+      // Never submit a form based on a record changed by SSE while it was being
+      // edited. A clean form is refreshed; a dirty form is safely invalidated.
+      if (assignFormDirty) {
+        setAssignSelectedOrder(null);
+        setAssignFormDirty(false);
+        setAssignMessage('Shipment changed on the server. Select it again.');
+      } else {
+        setAssignSelectedOrder(latest);
+        setAssignCarrier(latest.CARRIER || '');
+        setAssignAwb(latest.AWB_NUMBER || '');
+        setAssignOrderDate(toAssignmentDate(latest.ORDER_DATE));
+        setAssignTransitDate(toAssignmentDate(latest.TRANSIT_DATE));
+        setAssignDynaAwb(latest.DYNA_AWB || '');
+      }
+    }
+  }, [orders, assignSelectedOrder?.REFERENCE, assignFormDirty]);
+
+  const toAssignmentDate = (value) => {
+    const date = parseDate(value);
+    if (!date) return '';
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+  };
+
+  const selectAssignOrder = (order) => {
+    setAssignSelectedOrder(order);
+    setAssignFormDirty(false);
+    setAssignCarrier(order.CARRIER || '');
+    setAssignAwb(order.AWB_NUMBER || '');
+    setAssignOrderDate(toAssignmentDate(order.ORDER_DATE));
+    setAssignTransitDate(toAssignmentDate(order.TRANSIT_DATE));
+    setAssignDynaAwb(order.DYNA_AWB || '');
+    setAssignMessage('');
+  };
+
+  const saveAssignOrder = async () => {
+    if (!assignSelectedOrder) return;
+    if (!assignCarrier.trim() || !assignAwb.trim()) {
+      setAssignMessage('Carrier and AWB are required.');
+      return;
+    }
+    const orderDate = assignOrderDate ? parseAssignmentDate(assignOrderDate) : null;
+    const transitDate = assignTransitDate ? parseAssignmentDate(assignTransitDate) : null;
+    if ((assignOrderDate && !orderDate) || (assignTransitDate && !transitDate)) {
+      setAssignMessage('Dates must be valid YYYY-MM-DD values.');
+      return;
+    }
+    const fields = {
+      CARRIER: assignCarrier.trim(),
+      AWB_NUMBER: assignAwb.trim(),
+    };
+    if (orderDate) fields.ORDER_DATE = orderDate.getTime();
+    if (transitDate) fields.TRANSIT_DATE = transitDate.getTime();
+    if (assignDynaAwb.trim()) fields.DYNA_AWB = assignDynaAwb.trim();
+
+    setAssignSaving(true);
+    setAssignMessage('Updating…');
+    try {
+      await apiCall('/api/updateOrder', { reference: assignSelectedOrder.REFERENCE, ...fields }, 'PATCH');
+      const updated = { ...assignSelectedOrder, ...fields };
+      setAssignSelectedOrder(updated);
+      setAssignFormDirty(false);
+      setAssignMessage('Order updated successfully.');
+      onRefresh?.();
+    } catch (error) {
+      setAssignMessage(`Update failed: ${error.message}`);
+    } finally {
+      setAssignSaving(false);
+    }
   };
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -808,6 +992,85 @@ export default function OrdersScreen({
   }
 
   // ────────────────────────────────────────────────────────────────────────────
+  // ASSIGN CARRIER VIEW (GENIE_WEB shipments-assign-carrier-tile.js parity)
+  // ────────────────────────────────────────────────────────────────────────────
+  if (currentView === 'assign-carrier') {
+    return (
+      <View style={styles.container}>
+        <View style={styles.navHeader}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => { setAssignSelectedOrder(null); setCurrentView('tiles'); }}>
+            <Text style={styles.backBtnText}>‹ Tiles</Text>
+          </TouchableOpacity>
+          <Text style={styles.navTitle}>🚚 Assign Carrier</Text>
+        </View>
+        <View style={[styles.assignLayout, screenWidth < 720 && styles.assignLayoutCompact]}>
+          <View style={[styles.assignListPane, screenWidth < 720 && styles.assignListPaneCompact]}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search AWB, Ref, Consignor, Consignee..."
+              placeholderTextColor="#94a3b8"
+              value={assignSearch}
+              onChangeText={setAssignSearch}
+            />
+            <Text style={styles.assignListSummary}>{assignRows.length} recent shipment(s)</Text>
+            <ScrollView style={styles.assignList}>
+              {assignRows.length ? assignRows.map((order) => {
+                const incomplete = !order.CARRIER || !order.AWB_NUMBER;
+                const consignor = b2b2cMap[order.CONSIGNOR]?.NAME || order.CONSIGNOR || 'Unknown';
+                const consignee = b2b2cMap[order.CONSIGNEE]?.NAME || order.CONSIGNEE || 'Unknown';
+                return (
+                  <TouchableOpacity
+                    key={order.REFERENCE}
+                    style={[styles.assignItem, incomplete && styles.assignItemIncomplete, assignSelectedOrder?.REFERENCE === order.REFERENCE && styles.assignItemSelected]}
+                    onPress={() => selectAssignOrder(order)}
+                  >
+                    <Text style={styles.assignItemAwb}>{order.AWB_NUMBER || 'No AWB'}</Text>
+                    <Text style={styles.assignItemRoute}>{consignor} → {consignee}</Text>
+                    <Text style={styles.assignItemMeta}>Ref: {order.REFERENCE} · {fmtDate(order.ORDER_DATE, 'display')}</Text>
+                    <Text style={styles.assignItemCarrier}>{order.CARRIER || 'No Carrier'}</Text>
+                  </TouchableOpacity>
+                );
+              }) : <Text style={styles.emptyText}>No recent shipments found.</Text>}
+            </ScrollView>
+          </View>
+
+          <ScrollView style={[styles.assignFormPane, screenWidth < 720 && styles.assignFormPaneCompact]} contentContainerStyle={styles.assignFormContent}>
+            {!assignSelectedOrder ? (
+              <Text style={styles.placeholder}>Select a shipment to assign its carrier and AWB.</Text>
+            ) : (
+              <>
+                <Text style={styles.assignFormTitle}>Update Shipment</Text>
+                <Text style={styles.assignFormRef}>Reference: {assignSelectedOrder.REFERENCE}</Text>
+                <Text style={styles.assignLabel}>Carrier *</Text>
+                <View style={styles.assignChipRow}>
+                  {assignmentCarrierOptions.map((carrier) => (
+                    <TouchableOpacity key={carrier} style={[styles.assignChip, assignCarrier === carrier && styles.assignChipActive]} onPress={() => { setAssignFormDirty(true); setAssignCarrier(carrier); }}>
+                      <Text style={[styles.assignChipText, assignCarrier === carrier && styles.assignChipTextActive]}>{carrier}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TextInput style={styles.assignInput} placeholder="Carrier code" placeholderTextColor="#94a3b8" value={assignCarrier} onChangeText={(value) => { setAssignFormDirty(true); setAssignCarrier(value); }} />
+                <Text style={styles.assignLabel}>AWB Number *</Text>
+                <TextInput style={styles.assignInput} placeholder="Enter AWB number" placeholderTextColor="#94a3b8" value={assignAwb} onChangeText={(value) => { setAssignFormDirty(true); setAssignAwb(value); }} autoCapitalize="characters" />
+                <Text style={styles.assignLabel}>Order Date</Text>
+                <TextInput style={styles.assignInput} placeholder="YYYY-MM-DD" placeholderTextColor="#94a3b8" value={assignOrderDate} onChangeText={(value) => { setAssignFormDirty(true); setAssignOrderDate(value); }} />
+                <Text style={styles.assignLabel}>Transit Date</Text>
+                <TextInput style={styles.assignInput} placeholder="YYYY-MM-DD" placeholderTextColor="#94a3b8" value={assignTransitDate} onChangeText={(value) => { setAssignFormDirty(true); setAssignTransitDate(value); }} />
+                <Text style={styles.assignLabel}>Dynamic AWB</Text>
+                <TextInput style={styles.assignInput} placeholder="Optional" placeholderTextColor="#94a3b8" value={assignDynaAwb} onChangeText={(value) => { setAssignFormDirty(true); setAssignDynaAwb(value); }} autoCapitalize="characters" />
+                {assignMessage ? <Text style={[styles.assignMessage, assignMessage.includes('failed') || assignMessage.includes('required') ? styles.assignMessageError : styles.assignMessageSuccess]}>{assignMessage}</Text> : null}
+                <TouchableOpacity style={[styles.assignSubmit, assignSaving && styles.btnDisabled]} disabled={assignSaving} onPress={saveAssignOrder}>
+                  {assignSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.assignSubmitText}>Update Order</Text>}
+                </TouchableOpacity>
+              </>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
   // STAGE 2: LIST VIEW
   // ────────────────────────────────────────────────────────────────────────────
   if (currentView === 'list') {
@@ -815,7 +1078,7 @@ export default function OrdersScreen({
       <View style={styles.container}>
         <View style={styles.navHeader}>
           <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentView('tiles')}>
-            <Text style={styles.backBtnText}>‹ Back to Tiles</Text>
+            <Text style={styles.backBtnText}>‹ Tiles</Text>
           </TouchableOpacity>
           <Text style={styles.navTitle} numberOfLines={1}>
             {activeTileObj.icon} {activeTileObj.label} ({filteredOrders.length})
@@ -843,6 +1106,8 @@ export default function OrdersScreen({
         {hasActiveAdvancedFilters && (
           <View style={styles.activePillsBar}>
             {filterStatus !== 'ALL' && <Text style={styles.activePill}>Status: {filterStatus}</Text>}
+            {filterBranch !== 'ALL' && <Text style={styles.activePill}>Branch: {filterBranch}</Text>}
+            {filterCode !== 'ALL' && <Text style={styles.activePill}>Code: {filterCode}</Text>}
             {filterCarrier !== 'ALL' && <Text style={styles.activePill}>Carrier: {filterCarrier}</Text>}
             {filterPayMode !== 'ALL' && <Text style={styles.activePill}>Pay: {filterPayMode}</Text>}
             {(filterStartDate || filterEndDate) && (
@@ -875,7 +1140,7 @@ export default function OrdersScreen({
           </View>
         )}
 
-        {!hasExplicitFilters && (
+        {!hasWebEquivalentFilters && (
           <Text style={styles.defaultViewNote}>Default view from {implicitDefaultStart} — use filters to widen</Text>
         )}
 
@@ -973,17 +1238,29 @@ export default function OrdersScreen({
                   ))}
                 </View>
 
+                <Text style={styles.filterSectionTitle}>BRANCH</Text>
+                <View style={styles.chipRow}>
+                  {filterBranchOptions.map((branch) => (
+                    <TouchableOpacity key={branch} style={[styles.chip, filterBranch === branch && styles.chipActive]} onPress={() => setFilterBranch(branch)}>
+                      <Text style={[styles.chipText, filterBranch === branch && styles.chipTextActive]}>{branch}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.filterSectionTitle}>CODE</Text>
+                <View style={styles.chipRow}>
+                  {filterCodeOptions.map((code) => (
+                    <TouchableOpacity key={code} style={[styles.chip, filterCode === code && styles.chipActive]} onPress={() => setFilterCode(code)}>
+                      <Text style={[styles.chipText, filterCode === code && styles.chipTextActive]}>{code}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
                 <Text style={styles.filterSectionTitle}>CARRIER</Text>
                 <View style={styles.chipRow}>
-                  {CARRIERS_LIST.map(car => (
-                    <TouchableOpacity
-                      key={car}
-                      style={[styles.chip, filterCarrier === car && styles.chipActive]}
-                      onPress={() => setFilterCarrier(car)}
-                    >
-                      <Text style={[styles.chipText, filterCarrier === car && styles.chipTextActive]}>
-                        {car}
-                      </Text>
+                  {filterCarrierOptions.map((car) => (
+                    <TouchableOpacity key={car} style={[styles.chip, filterCarrier === car && styles.chipActive]} onPress={() => setFilterCarrier(car)}>
+                      <Text style={[styles.chipText, filterCarrier === car && styles.chipTextActive]}>{car}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -1184,9 +1461,14 @@ export default function OrdersScreen({
       <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 30 }}>
         {/* Navigation Header */}
         <View style={styles.navHeader}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentView('tiles')}>
-            <Text style={styles.backBtnText}>‹ Back to Tiles</Text>
-          </TouchableOpacity>
+          <View style={styles.navBackGroup}>
+            <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentView('list')}>
+              <Text style={styles.backBtnText}>‹ List</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.backBtn} onPress={() => { setSelectedOrder(null); setCurrentView('tiles'); }}>
+              <Text style={styles.backBtnText}>‹ Tiles</Text>
+            </TouchableOpacity>
+          </View>
           <Text style={styles.navTitle} numberOfLines={1}>Ref: {o.REFERENCE}</Text>
         </View>
 
@@ -1419,7 +1701,7 @@ export default function OrdersScreen({
                         <View style={styles.uploadActionRow}>
                           {up.FILE_URL ? (
                             <>
-                              <TouchableOpacity style={styles.uploadActionBtn} onPress={() => Linking.openURL(resolveFileUrl(up.FILE_URL))}>
+                              <TouchableOpacity style={styles.uploadActionBtn} onPress={() => openUploadViewer(up, `${up.UPLOAD_TYPE || 'Upload'} — ${o.AWB_NUMBER || o.REFERENCE}`)}>
                                 <EyeIcon size={13} color="#0284c7" />
                                 <Text style={styles.uploadActionBtnText}>View</Text>
                               </TouchableOpacity>
@@ -1465,7 +1747,7 @@ export default function OrdersScreen({
               {shipment.pod_image ? (
                 <TouchableOpacity
                   style={[styles.docHeaderActionBtn, { backgroundColor: '#e0e7ff' }]}
-                  onPress={() => setPodImageUrl(shipment.pod_image.startsWith('data:') ? shipment.pod_image : resolveFileUrl(shipment.pod_image))}
+                  onPress={() => openUploadViewer(shipment.pod_image, `POD — ${o.AWB_NUMBER || o.REFERENCE}`)}
                   title="Show POD Image"
                 >
                   <EyeIcon size={14} color="#4f46e5" />
@@ -1597,66 +1879,37 @@ export default function OrdersScreen({
           )}
         </View>
 
-        {/* ── Upload Modal (web mini-uploader parity — pick type, then image) ── */}
+        {/* ── Mini-uploader adapter (web mini-uploader.setReference parity) ── */}
         <Modal
           visible={uploadVisible}
           animationType="slide"
-          transparent={true}
-          onRequestClose={() => setUploadVisible(false)}
+          presentationStyle="pageSheet"
+          onRequestClose={closeUpload}
         >
-          <View style={styles.uploadModalOverlay}>
-            <View style={styles.uploadModalContent}>
-              <Text style={styles.uploadModalTitle}>Upload Document</Text>
-              {uploadTarget ? (
-                <Text style={styles.uploadModalRef}>Ref: {uploadTarget.REFERENCE}{uploadTarget.AWB_NUMBER ? ` · AWB: ${uploadTarget.AWB_NUMBER}` : ''}</Text>
-              ) : null}
-              <Text style={styles.uploadModalLabel}>Document Type</Text>
-              <View style={styles.uploadTypeRow}>
-                {['POD', 'Reciept', 'Product', 'MultiBox'].map((t) => (
-                  <TouchableOpacity
-                    key={t}
-                    style={[styles.uploadTypeChip, uploadType === t && styles.uploadTypeChipActive]}
-                    onPress={() => setUploadType(t)}
-                  >
-                    <Text style={[styles.uploadTypeChipText, uploadType === t && styles.uploadTypeChipTextActive]}>{t}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              {uploading ? (
-                <View style={{ paddingVertical: 14, alignItems: 'center' }}>
-                  <ActivityIndicator size="small" color={COLORS.primary} />
-                  <Text style={styles.loadingText}>Uploading…</Text>
-                </View>
-              ) : (
-                <View style={styles.modalActions}>
-                  <TouchableOpacity style={styles.resetModalBtn} onPress={() => setUploadVisible(false)}>
-                    <Text style={styles.resetModalBtnText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.applyModalBtn} onPress={pickAndUpload}>
-                    <Text style={styles.applyModalBtnText}>Pick Image &amp; Upload</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-          </View>
+          <UploaderScreen
+            orders={uploadTarget ? [uploadTarget] : []}
+            b2b2cMap={b2b2cMap}
+            productsMap={productsMap}
+            uploadsMap={uploadsMap}
+            token={token}
+            apiBase={apiBase}
+            role={role}
+            enforceRoleRestrictions
+            hiddenTypes={['KYC']}
+            initialOrder={uploadTarget}
+            modalMode
+            onClose={closeUpload}
+            onRefresh={onRefresh}
+          />
         </Modal>
 
-        {/* ── POD Image Viewer (web _showPodImage parity) ── */}
-        <Modal
+        <UploadViewer
           visible={podImageUrl !== null}
-          animationType="fade"
-          transparent={true}
-          onRequestClose={() => setPodImageUrl(null)}
-        >
-          <View style={styles.podModalOverlay}>
-            <TouchableOpacity style={styles.podModalClose} onPress={() => setPodImageUrl(null)}>
-              <Text style={styles.podModalCloseText}>✕ Close</Text>
-            </TouchableOpacity>
-            {podImageUrl ? (
-              <Image source={{ uri: podImageUrl }} style={styles.podImage} resizeMode="contain" />
-            ) : null}
-          </View>
-        </Modal>
+          uri={podImageUrl}
+          title={podViewerTitle}
+          isPdf={podViewerIsPdf}
+          onClose={() => setPodImageUrl(null)}
+        />
       </ScrollView>
     );
   }
@@ -1677,7 +1930,7 @@ function WebShipmentListItem({ order, b2b2cMap, shipmentsMap = {}, isSelected, o
 
   // Web parity — state badge from the SHIPMENTS sheet first (shipmentsDataMap)
   const shipState = shipmentsMap[order.REFERENCE];
-  const stateRaw = (shipState?.state || shipState?.STATE || order.STATE || order.state || 'pending').toLowerCase();
+  const stateRaw = normalizeShipmentState(shipState?.state || shipState?.STATE || order.STATE || order.state || 'pending');
   const stateCfg = STATE_CONFIG[stateRaw] || STATE_CONFIG.pending;
   const dateStr = fmtDate(order.ORDER_DATE || order.TIME_STAMP, 'display');
 
@@ -1734,9 +1987,42 @@ const styles = StyleSheet.create({
 
   // Stage 2 & 3 Nav Bar
   navHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+  navBackGroup: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   backBtn: { backgroundColor: '#f1f5f9', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1' },
   backBtnText: { fontSize: 12, fontWeight: '700', color: COLORS.primary },
   navTitle: { fontSize: 14, fontWeight: '800', color: '#1e293b', flex: 1 },
+
+  // Assign Carrier tile view
+  assignLayout: { flex: 1, flexDirection: 'row', gap: 10 },
+  assignLayoutCompact: { flexDirection: 'column' },
+  assignListPane: { flex: 1, minWidth: 220, backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', padding: 10 },
+  assignListPaneCompact: { minWidth: 0, maxHeight: 300 },
+  assignFormPane: { flex: 1, backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0' },
+  assignFormPaneCompact: { minHeight: 360 },
+  assignFormContent: { padding: 14, paddingBottom: 30 },
+  assignList: { flex: 1 },
+  assignListSummary: { color: '#64748b', fontSize: 10, fontWeight: '700', marginBottom: 8 },
+  assignItem: { padding: 10, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, marginBottom: 7, backgroundColor: '#fff' },
+  assignItemIncomplete: { borderColor: '#fcd34d', backgroundColor: '#fffbeb' },
+  assignItemSelected: { borderColor: COLORS.primary, backgroundColor: '#eff6ff' },
+  assignItemAwb: { color: '#0f172a', fontSize: 12, fontWeight: '900' },
+  assignItemRoute: { color: '#334155', fontSize: 10, fontWeight: '700', marginTop: 3 },
+  assignItemMeta: { color: '#64748b', fontSize: 9, marginTop: 3 },
+  assignItemCarrier: { color: '#0369a1', fontSize: 10, fontWeight: '800', marginTop: 3 },
+  assignFormTitle: { color: '#1e293b', fontSize: 17, fontWeight: '900' },
+  assignFormRef: { color: '#64748b', fontSize: 11, marginTop: 3, marginBottom: 14 },
+  assignLabel: { color: '#475569', fontSize: 11, fontWeight: '800', marginTop: 8, marginBottom: 5 },
+  assignInput: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 8, color: '#0f172a', fontSize: 12 },
+  assignChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
+  assignChip: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 5, backgroundColor: '#f8fafc' },
+  assignChipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  assignChipText: { color: '#475569', fontSize: 10, fontWeight: '700' },
+  assignChipTextActive: { color: '#fff' },
+  assignMessage: { marginTop: 12, padding: 8, borderRadius: 6, fontSize: 11, fontWeight: '700' },
+  assignMessageError: { color: '#b91c1c', backgroundColor: '#fef2f2' },
+  assignMessageSuccess: { color: '#166534', backgroundColor: '#f0fdf4' },
+  assignSubmit: { marginTop: 14, backgroundColor: COLORS.primary, borderRadius: 7, paddingVertical: 10, alignItems: 'center' },
+  assignSubmitText: { color: '#fff', fontSize: 12, fontWeight: '900' },
 
   searchFilterRow: { flexDirection: 'row', gap: 8, marginBottom: 10, alignItems: 'center' },
   filterIconBtn: { backgroundColor: '#f1f5f9', borderWidth: 1.5, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, justifyContent: 'center' },

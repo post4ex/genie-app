@@ -17,6 +17,44 @@ if (Platform.OS !== 'web') {
 let databasePromise = null;
 let initializationPromise = null;
 
+// expo-sqlite shares one native connection, but async JavaScript callers can
+// still overlap transactions (SSE deltas, full sync, reconciliation, and UI
+// writes). Serialize every mutating operation before it reaches SQLite. The
+// queue is deliberately module-wide so all sheets and all sync paths use the
+// same lock discipline.
+let nativeWriteQueue = Promise.resolve();
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const isLockedError = (error) => /database is locked|database table is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(
+  String(error?.message || error || '')
+);
+
+async function withLockedRetry(operation) {
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isLockedError(error) || attempt === 3) throw error;
+      // A short backoff handles a lock held by an already-running native
+      // statement while keeping sync responsive instead of dropping a sheet.
+      await sleep(60 * (2 ** attempt));
+    }
+  }
+  throw lastError;
+}
+
+function enqueueNativeWrite(operation) {
+  const next = nativeWriteQueue
+    .catch(() => {})
+    .then(() => withLockedRetry(operation));
+  // Keep the queue usable after a failed operation without creating an
+  // unhandled rejection. The caller still receives the original failure.
+  nativeWriteQueue = next.catch(() => {});
+  return next;
+}
+
 const asString = (value) => value == null ? '' : String(value);
 
 const recordKey = (collection, record, fallback = '') => {
@@ -80,6 +118,7 @@ async function nativeInitialize() {
   await db.execAsync(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS replica_records (
       collection TEXT NOT NULL,
@@ -127,10 +166,10 @@ async function backfillExistingIdentityFields(db) {
         OR time_stamp IS NULL
   `);
   if (rows.length) {
-    await db.withTransactionAsync(async () => {
+    await db.withExclusiveTransactionAsync(async (tx) => {
       for (const row of rows) {
         const record = parsePayload(row.payload);
-        await db.runAsync(
+        await tx.runAsync(
           `UPDATE replica_records
               SET record_id = CASE WHEN record_id IS NULL OR record_id = '' THEN ? ELSE record_id END,
                   pb_id = CASE WHEN pb_id IS NULL OR pb_id = '' THEN ? ELSE pb_id END,
@@ -255,7 +294,10 @@ export async function initializeLocalDatabase() {
 
 async function ensureNativeDatabase() {
   if (!isNativeSQLite()) return null;
-  await initializeLocalDatabase();
+  const initialized = await initializeLocalDatabase();
+  // Never expose a handle when schema/migration setup failed. The initialization
+  // promise is reset on failure, so the next operation can retry safely.
+  if (!initialized) throw new Error('SQLite initialization failed');
   return openDatabase();
 }
 
@@ -295,53 +337,60 @@ export async function sqliteGetCounts(collections = SHEETS) {
 }
 
 export async function sqliteUpsertMany(collection, data, newerOnly = false, suppliedDb = null) {
+  // Resolve the database before entering the queue. During first-run
+  // initialization, migration itself calls this function with suppliedDb; doing
+  // ensureNativeDatabase from inside the queued callback would deadlock the
+  // initialization promise.
   const db = suppliedDb || await ensureNativeDatabase();
   if (!db) return 0;
   const entries = normalizeEntries(collection, data).filter(([, record]) => record && typeof record === 'object');
   if (!entries.length) return 0;
-  let written = 0;
 
-  // Pre-load all existing timestamps for this collection in 1 single fast query
-  // to avoid thousands of individual async SQL queries over the native bridge
-  const existingMap = new Map();
-  if (newerOnly) {
-    const existingRows = await db.getAllAsync(
-      'SELECT record_key, time_stamp FROM replica_records WHERE collection = ?',
-      collection
-    );
-    for (const r of existingRows) {
-      existingMap.set(r.record_key, Number(r.time_stamp || 0));
-    }
-  }
+  return enqueueNativeWrite(async () => {
+    let written = 0;
 
-  await db.withTransactionAsync(async () => {
-    for (const [fallbackKey, rawRecord] of entries) {
-      const key = recordKey(collection, rawRecord, fallbackKey);
-      if (!key) continue;
-      const record = { ...rawRecord };
-      const incomingTs = recordTimestamp(record);
-
-      if (newerOnly && existingMap.has(key)) {
-        const existingTs = existingMap.get(key);
-        if (existingTs > 0 && incomingTs > 0 && incomingTs <= existingTs) continue;
-      }
-
-      await db.runAsync(
-        `INSERT OR REPLACE INTO replica_records
-          (collection, record_key, record_id, pb_id, time_stamp, payload)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        collection,
-        key,
-        recordId(record),
-        recordPbId(record),
-        incomingTs,
-        JSON.stringify(record)
+    // Pre-load all existing timestamps for this collection in one fast query
+    // to avoid thousands of individual async SQL queries over the native bridge.
+    const existingMap = new Map();
+    if (newerOnly) {
+      const existingRows = await db.getAllAsync(
+        'SELECT record_key, time_stamp FROM replica_records WHERE collection = ?',
+        collection
       );
-      existingMap.set(key, incomingTs);
-      written += 1;
+      for (const r of existingRows) {
+        existingMap.set(r.record_key, Number(r.time_stamp || 0));
+      }
     }
+
+    await db.withExclusiveTransactionAsync(async (tx) => {
+      for (const [fallbackKey, rawRecord] of entries) {
+        const key = recordKey(collection, rawRecord, fallbackKey);
+        if (!key) continue;
+        const record = { ...rawRecord };
+        const incomingTs = recordTimestamp(record);
+
+        if (newerOnly && existingMap.has(key)) {
+          const existingTs = existingMap.get(key);
+          if (existingTs > 0 && incomingTs > 0 && incomingTs <= existingTs) continue;
+        }
+
+        await tx.runAsync(
+          `INSERT OR REPLACE INTO replica_records
+            (collection, record_key, record_id, pb_id, time_stamp, payload)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          collection,
+          key,
+          recordId(record),
+          recordPbId(record),
+          incomingTs,
+          JSON.stringify(record)
+        );
+        existingMap.set(key, incomingTs);
+        written += 1;
+      }
+    });
+    return written;
   });
-  return written;
 }
 
 export async function sqliteReplaceSheet(collection, data) {
@@ -349,28 +398,31 @@ export async function sqliteReplaceSheet(collection, data) {
   if (!db) return 0;
   const entries = normalizeEntries(collection, data)
     .filter(([, record]) => record && typeof record === 'object');
-  let written = 0;
-  await db.withExclusiveTransactionAsync(async (tx) => {
-    await tx.runAsync('DELETE FROM replica_records WHERE collection = ?', collection);
-    for (const [fallbackKey, rawRecord] of entries) {
-      const key = recordKey(collection, rawRecord, fallbackKey);
-      if (!key) continue;
-      const record = { ...rawRecord };
-      await tx.runAsync(
-        `INSERT OR REPLACE INTO replica_records
-          (collection, record_key, record_id, pb_id, time_stamp, payload)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        collection,
-        key,
-        recordId(record),
-        recordPbId(record),
-        recordTimestamp(record),
-        JSON.stringify(record)
-      );
-      written += 1;
-    }
+
+  return enqueueNativeWrite(async () => {
+    let written = 0;
+    await db.withExclusiveTransactionAsync(async (tx) => {
+      await tx.runAsync('DELETE FROM replica_records WHERE collection = ?', collection);
+      for (const [fallbackKey, rawRecord] of entries) {
+        const key = recordKey(collection, rawRecord, fallbackKey);
+        if (!key) continue;
+        const record = { ...rawRecord };
+        await tx.runAsync(
+          `INSERT OR REPLACE INTO replica_records
+            (collection, record_key, record_id, pb_id, time_stamp, payload)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          collection,
+          key,
+          recordId(record),
+          recordPbId(record),
+          recordTimestamp(record),
+          JSON.stringify(record)
+        );
+        written += 1;
+      }
+    });
+    return written;
   });
-  return written;
 }
 
 export async function sqliteDeleteMany(collection, keys) {
@@ -380,23 +432,34 @@ export async function sqliteDeleteMany(collection, keys) {
   if (!wanted.size) return 0;
   // All delete identities are indexed columns. Do not read/parse every payload
   // in ORDERS or SHIPMENTS just to resolve an event id.
-  const placeholders = Array.from(wanted, () => '?').join(', ');
-  const args = [collection, ...wanted, ...wanted, ...wanted];
-  const result = await db.runAsync(
-    `DELETE FROM replica_records
-       WHERE collection = ?
-         AND (record_key IN (${placeholders})
-           OR record_id IN (${placeholders})
-           OR pb_id IN (${placeholders}))`,
-    ...args
-  );
-  return Number(result?.changes || 0);
+  return enqueueNativeWrite(async () => {
+    const placeholders = Array.from(wanted, () => '?').join(', ');
+    const args = [collection, ...wanted, ...wanted, ...wanted];
+    let changes = 0;
+    await db.withExclusiveTransactionAsync(async (tx) => {
+      const result = await tx.runAsync(
+        `DELETE FROM replica_records
+           WHERE collection = ?
+             AND (record_key IN (${placeholders})
+               OR record_id IN (${placeholders})
+               OR pb_id IN (${placeholders}))`,
+        ...args
+      );
+      changes = Number(result?.changes || 0);
+    });
+    return changes;
+  });
 }
 
 export async function sqliteClearReplica() {
   const db = await ensureNativeDatabase();
   if (db) {
-    await db.execAsync('DELETE FROM replica_records; DELETE FROM replica_meta;');
+    await enqueueNativeWrite(async () => {
+      await db.withExclusiveTransactionAsync(async (tx) => {
+        await tx.runAsync('DELETE FROM replica_records');
+        await tx.runAsync('DELETE FROM replica_meta');
+      });
+    });
   }
   // Remove the legacy representation and sync metadata too, if an upgrade
   // was interrupted or the app was previously running without SQLite.
