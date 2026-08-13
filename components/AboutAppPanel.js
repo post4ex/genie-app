@@ -13,6 +13,20 @@ const CURRENT_VERSION = `v${packageJson.version}`;
 // Updates History / Changelog Timeline
 const UPDATE_HISTORY = [
   {
+    version: 'v1.2.1',
+    date: '13 Aug 2026',
+    type: 'Native & OTA Release',
+    tagColor: '#0284c7',
+    tagBg: '#e0f2fe',
+    changes: [
+      'Assign Carrier mobile screen flow: Tile ➔ List ➔ Pane navigation',
+      'Uploads Viewer max-fit layout bounded strictly between Header and Footer',
+      'In-app PDF viewer integration via react-native-webview',
+      'Native in-app downloads without external browser redirects',
+      'Direct 📥 Save action button in viewer header bar',
+    ],
+  },
+  {
     version: 'v1.2.0',
     date: '13 Aug 2026',
     type: 'Native & OTA Release',

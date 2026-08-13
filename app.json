@@ -2,7 +2,7 @@
   "expo": {
     "name": "Genie",
     "slug": "genie",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -20,7 +20,7 @@
         "backgroundColor": "#0f172a"
       },
       "package": "com.post4ex.geniereact",
-      "versionCode": 17,
+      "versionCode": 18,
       "permissions": ["android.permission.POST_NOTIFICATIONS"],
       "softwareKeyboardLayoutMode": "resize"
     },

@@ -1005,6 +1005,7 @@ export default function OrdersScreen({
   // ASSIGN CARRIER VIEW (GENIE_WEB shipments-assign-carrier-tile.js parity)
   // ────────────────────────────────────────────────────────────────────────────
   if (currentView === 'assign-carrier') {
+    const isCompact = screenWidth < 720;
     return (
       <View style={styles.container}>
         <View style={styles.navHeader}>
@@ -1013,73 +1014,77 @@ export default function OrdersScreen({
           </TouchableOpacity>
           <Text style={styles.navTitle}>🚚 Assign Carrier</Text>
         </View>
-        <View style={[styles.assignLayout, screenWidth < 720 && styles.assignLayoutCompact]}>
-          <View style={[styles.assignListPane, screenWidth < 720 && styles.assignListPaneCompact]}>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search AWB, Ref, Consignor, Consignee..."
-              placeholderTextColor="#94a3b8"
-              value={assignSearch}
-              onChangeText={setAssignSearch}
-            />
-            <Text style={styles.assignListSummary}>{assignRows.length} recent shipment(s)</Text>
-            <ScrollView style={styles.assignList}>
-              {assignRows.length ? assignRows.map((order) => {
-                const incomplete = !order.CARRIER || !order.AWB_NUMBER;
-                const consignor = b2b2cMap[order.CONSIGNOR]?.NAME || order.CONSIGNOR || 'Unknown';
-                const consignee = b2b2cMap[order.CONSIGNEE]?.NAME || order.CONSIGNEE || 'Unknown';
-                return (
-                  <TouchableOpacity
-                    key={order.REFERENCE}
-                    style={[styles.assignItem, incomplete && styles.assignItemIncomplete, assignSelectedOrder?.REFERENCE === order.REFERENCE && styles.assignItemSelected]}
-                    onPress={() => selectAssignOrder(order)}
-                  >
-                    <Text style={styles.assignItemAwb}>{order.AWB_NUMBER || 'No AWB'}</Text>
-                    <Text style={styles.assignItemRoute}>{consignor} → {consignee}</Text>
-                    <Text style={styles.assignItemMeta}>Ref: {order.REFERENCE} · {fmtDate(order.ORDER_DATE, 'display')}</Text>
-                    <Text style={styles.assignItemCarrier}>{order.CARRIER || 'No Carrier'}</Text>
-                  </TouchableOpacity>
-                );
-              }) : <Text style={styles.emptyText}>No recent shipments found.</Text>}
-            </ScrollView>
-          </View>
-
-          <ScrollView style={[styles.assignFormPane, screenWidth < 720 && styles.assignFormPaneCompact]} contentContainerStyle={styles.assignFormContent}>
-            {!assignSelectedOrder ? (
-              <Text style={styles.placeholder}>Select a shipment to assign its carrier and AWB.</Text>
-            ) : (
-              <>
-                {screenWidth < 720 ? (
-                  <TouchableOpacity style={styles.assignBackToListBtn} onPress={() => setAssignSelectedOrder(null)}>
-                    <Text style={styles.assignBackToListBtnText}>‹ Back to Shipments List</Text>
-                  </TouchableOpacity>
-                ) : null}
-                <Text style={styles.assignFormTitle}>Update Shipment</Text>
-                <Text style={styles.assignFormRef}>Reference: {assignSelectedOrder.REFERENCE}</Text>
-                <Text style={styles.assignLabel}>Carrier *</Text>
-                <View style={styles.assignChipRow}>
-                  {assignmentCarrierOptions.map((carrier) => (
-                    <TouchableOpacity key={carrier} style={[styles.assignChip, assignCarrier === carrier && styles.assignChipActive]} onPress={() => { setAssignFormDirty(true); setAssignCarrier(carrier); }}>
-                      <Text style={[styles.assignChipText, assignCarrier === carrier && styles.assignChipTextActive]}>{carrier}</Text>
+        <View style={[styles.assignLayout, isCompact && styles.assignLayoutCompact]}>
+          {(!isCompact || !assignSelectedOrder) && (
+            <View style={[styles.assignListPane, isCompact && styles.assignListPaneCompact]}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search AWB, Ref, Consignor, Consignee..."
+                placeholderTextColor="#94a3b8"
+                value={assignSearch}
+                onChangeText={setAssignSearch}
+              />
+              <Text style={styles.assignListSummary}>{assignRows.length} recent shipment(s)</Text>
+              <ScrollView style={styles.assignList}>
+                {assignRows.length ? assignRows.map((order) => {
+                  const incomplete = !order.CARRIER || !order.AWB_NUMBER;
+                  const consignor = b2b2cMap[order.CONSIGNOR]?.NAME || order.CONSIGNOR || 'Unknown';
+                  const consignee = b2b2cMap[order.CONSIGNEE]?.NAME || order.CONSIGNEE || 'Unknown';
+                  return (
+                    <TouchableOpacity
+                      key={order.REFERENCE}
+                      style={[styles.assignItem, incomplete && styles.assignItemIncomplete, assignSelectedOrder?.REFERENCE === order.REFERENCE && styles.assignItemSelected]}
+                      onPress={() => selectAssignOrder(order)}
+                    >
+                      <Text style={styles.assignItemAwb}>{order.AWB_NUMBER || 'No AWB'}</Text>
+                      <Text style={styles.assignItemRoute}>{consignor} → {consignee}</Text>
+                      <Text style={styles.assignItemMeta}>Ref: {order.REFERENCE} · {fmtDate(order.ORDER_DATE, 'display')}</Text>
+                      <Text style={styles.assignItemCarrier}>{order.CARRIER || 'No Carrier'}</Text>
                     </TouchableOpacity>
-                  ))}
-                </View>
-                <TextInput style={styles.assignInput} placeholder="Carrier code" placeholderTextColor="#94a3b8" value={assignCarrier} onChangeText={(value) => { setAssignFormDirty(true); setAssignCarrier(value); }} />
-                <Text style={styles.assignLabel}>AWB Number *</Text>
-                <TextInput style={styles.assignInput} placeholder="Enter AWB number" placeholderTextColor="#94a3b8" value={assignAwb} onChangeText={(value) => { setAssignFormDirty(true); setAssignAwb(value); }} autoCapitalize="characters" />
-                <Text style={styles.assignLabel}>Order Date</Text>
-                <TextInput style={styles.assignInput} placeholder="YYYY-MM-DD" placeholderTextColor="#94a3b8" value={assignOrderDate} onChangeText={(value) => { setAssignFormDirty(true); setAssignOrderDate(value); }} />
-                <Text style={styles.assignLabel}>Transit Date</Text>
-                <TextInput style={styles.assignInput} placeholder="YYYY-MM-DD" placeholderTextColor="#94a3b8" value={assignTransitDate} onChangeText={(value) => { setAssignFormDirty(true); setAssignTransitDate(value); }} />
-                <Text style={styles.assignLabel}>Dynamic AWB</Text>
-                <TextInput style={styles.assignInput} placeholder="Optional" placeholderTextColor="#94a3b8" value={assignDynaAwb} onChangeText={(value) => { setAssignFormDirty(true); setAssignDynaAwb(value); }} autoCapitalize="characters" />
-                {assignMessage ? <Text style={[styles.assignMessage, assignMessage.includes('failed') || assignMessage.includes('required') ? styles.assignMessageError : styles.assignMessageSuccess]}>{assignMessage}</Text> : null}
-                <TouchableOpacity style={[styles.assignSubmit, assignSaving && styles.btnDisabled]} disabled={assignSaving} onPress={saveAssignOrder}>
-                  {assignSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.assignSubmitText}>Update Order</Text>}
-                </TouchableOpacity>
-              </>
-            )}
-          </ScrollView>
+                  );
+                }) : <Text style={styles.emptyText}>No recent shipments found.</Text>}
+              </ScrollView>
+            </View>
+          )}
+
+          {(!isCompact || assignSelectedOrder) && (
+            <ScrollView style={[styles.assignFormPane, isCompact && styles.assignFormPaneCompact]} contentContainerStyle={styles.assignFormContent}>
+              {!assignSelectedOrder ? (
+                <Text style={styles.placeholder}>Select a shipment to assign its carrier and AWB.</Text>
+              ) : (
+                <>
+                  {isCompact ? (
+                    <TouchableOpacity style={styles.assignBackToListBtn} onPress={() => setAssignSelectedOrder(null)}>
+                      <Text style={styles.assignBackToListBtnText}>‹ Back to Shipments List</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  <Text style={styles.assignFormTitle}>Update Shipment</Text>
+                  <Text style={styles.assignFormRef}>Reference: {assignSelectedOrder.REFERENCE}</Text>
+                  <Text style={styles.assignLabel}>Carrier *</Text>
+                  <View style={styles.assignChipRow}>
+                    {assignmentCarrierOptions.map((carrier) => (
+                      <TouchableOpacity key={carrier} style={[styles.assignChip, assignCarrier === carrier && styles.assignChipActive]} onPress={() => { setAssignFormDirty(true); setAssignCarrier(carrier); }}>
+                        <Text style={[styles.assignChipText, assignCarrier === carrier && styles.assignChipTextActive]}>{carrier}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <TextInput style={styles.assignInput} placeholder="Carrier code" placeholderTextColor="#94a3b8" value={assignCarrier} onChangeText={(value) => { setAssignFormDirty(true); setAssignCarrier(value); }} />
+                  <Text style={styles.assignLabel}>AWB Number *</Text>
+                  <TextInput style={styles.assignInput} placeholder="Enter AWB number" placeholderTextColor="#94a3b8" value={assignAwb} onChangeText={(value) => { setAssignFormDirty(true); setAssignAwb(value); }} autoCapitalize="characters" />
+                  <Text style={styles.assignLabel}>Order Date</Text>
+                  <TextInput style={styles.assignInput} placeholder="YYYY-MM-DD" placeholderTextColor="#94a3b8" value={assignOrderDate} onChangeText={(value) => { setAssignFormDirty(true); setAssignOrderDate(value); }} />
+                  <Text style={styles.assignLabel}>Transit Date</Text>
+                  <TextInput style={styles.assignInput} placeholder="YYYY-MM-DD" placeholderTextColor="#94a3b8" value={assignTransitDate} onChangeText={(value) => { setAssignFormDirty(true); setAssignTransitDate(value); }} />
+                  <Text style={styles.assignLabel}>Dynamic AWB</Text>
+                  <TextInput style={styles.assignInput} placeholder="Optional" placeholderTextColor="#94a3b8" value={assignDynaAwb} onChangeText={(value) => { setAssignFormDirty(true); setAssignDynaAwb(value); }} autoCapitalize="characters" />
+                  {assignMessage ? <Text style={[styles.assignMessage, assignMessage.includes('failed') || assignMessage.includes('required') ? styles.assignMessageError : styles.assignMessageSuccess]}>{assignMessage}</Text> : null}
+                  <TouchableOpacity style={[styles.assignSubmit, assignSaving && styles.btnDisabled]} disabled={assignSaving} onPress={saveAssignOrder}>
+                    {assignSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.assignSubmitText}>Update Order</Text>}
+                  </TouchableOpacity>
+                </>
+              )}
+            </ScrollView>
+          )}
         </View>
       </View>
     );
@@ -2034,9 +2039,9 @@ const styles = StyleSheet.create({
   assignLayout: { flex: 1, flexDirection: 'row', gap: 10 },
   assignLayoutCompact: { flexDirection: 'column' },
   assignListPane: { flex: 1, minWidth: 220, backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', padding: 10 },
-  assignListPaneCompact: { minWidth: 0, maxHeight: 300 },
+  assignListPaneCompact: { minWidth: 0, flex: 1, maxHeight: undefined },
   assignFormPane: { flex: 1, backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0' },
-  assignFormPaneCompact: { minHeight: 360 },
+  assignFormPaneCompact: { minHeight: 0, flex: 1 },
   assignFormContent: { padding: 14, paddingBottom: 30 },
   assignList: { flex: 1 },
   assignListSummary: { color: '#64748b', fontSize: 10, fontWeight: '700', marginBottom: 8 },
