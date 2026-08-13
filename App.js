@@ -1058,7 +1058,7 @@ function MainApp() {
       <StatusBar style="dark" />
       <Header
         user={user}
-        onSearch={() => setActiveTab('track')}
+        onTrack={() => setActiveTab('track')}
         onRefresh={onRefresh}
         onNotif={() => setNotifModalVisible(true)}
         onLogout={handleLogout}

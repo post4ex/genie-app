@@ -13,6 +13,21 @@ const CURRENT_VERSION = `v${packageJson.version}`;
 // Updates History / Changelog Timeline
 const UPDATE_HISTORY = [
   {
+    version: 'v1.2.0',
+    date: '13 Aug 2026',
+    type: 'Native & OTA Release',
+    tagColor: '#16a34a',
+    tagBg: '#dcfce7',
+    changes: [
+      'Interactive Status Update modal with Primary & Sub-Status dropdowns',
+      'Contact person, attempt day, payment collection & remarks capture',
+      'Navigation toolbar update: Uploader in bottom bar, Track in header',
+      'Assign Carrier mobile back navigation (‹ Back to Shipments List)',
+      'Notification badge count read & clear persistence to PostgreSQL',
+      'Uploader header & control bar natural scrolling optimization',
+    ],
+  },
+  {
     version: 'v1.0.11',
     date: '11 Aug 2026',
     type: 'OTA Update',

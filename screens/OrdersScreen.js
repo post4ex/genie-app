@@ -4,7 +4,7 @@ import {
   TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator, Share, Platform,
   useWindowDimensions
 } from 'react-native';
-import Svg, { Path, Rect } from 'react-native-svg';
+import Svg, { Path, Rect, Polyline } from 'react-native-svg';
 import { COLORS } from '../styles/theme';
 import { getSheet, deleteFromSheet } from '../core/storage';
 import { fmtDate, parseDate } from '../utils/formatIST';
@@ -12,10 +12,18 @@ import * as docgen from '../utils/docgen.js';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { UploadViewer, resolveUploadUri, isPdfUpload } from '../utils/upload-viewer';
+import { UploadViewer, resolveUploadUri, isPdfUpload, downloadUploadNative } from '../utils/upload-viewer';
 import UploaderScreen from './UploaderScreen';
+import UpdateStatusModal from '../components/UpdateStatusModal';
 
 // ── Web SVG Icons (Exact GENIE_WEB shipments.js _docIco 1-to-1 match) ──────────
+const CheckmarkCircleIcon = ({ size = 14, color = '#0284c7' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+    <Polyline points="22 4 12 14.01 9 11.01" />
+  </Svg>
+);
+
 const WhatsAppIcon = ({ size = 14, color = '#25D366' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
     <Path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
@@ -247,6 +255,7 @@ export default function OrdersScreen({
   const [podViewerTitle, setPodViewerTitle] = useState('Upload preview');
   const [podViewerIsPdf, setPodViewerIsPdf] = useState(false);
   const [tatQuickFilter, setTatQuickFilter] = useState(null); // 'delivered' | 'outfordelivery' | 'intransit' | null
+  const [updateStatusTargetOrder, setUpdateStatusTargetOrder] = useState(null);
 
   // Web parity — state comes from the SHIPMENTS sheet first (shipmentsDataMap),
   // falling back to the order record (web: `s?.state || s?.STATE || order...`).
@@ -552,11 +561,11 @@ export default function OrdersScreen({
   // Escape user fields interpolated into email HTML (harden the mail templates)
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  const resolveFileUrl = (url) => resolveUploadUri(url, apiBase);
+  const resolveFileUrl = (url) => resolveUploadUri(url, apiBase, token);
 
   const openUploadViewer = (uploadOrUri, title = 'Upload preview') => {
     const upload = typeof uploadOrUri === 'string' ? { FILE_URL: uploadOrUri } : (uploadOrUri || {});
-    const uri = resolveUploadUri(upload.FILE_URL || upload.url || upload.pod_image || upload.POD_IMAGE, apiBase);
+    const uri = resolveUploadUri(upload.FILE_URL || upload.url || upload.pod_image || upload.POD_IMAGE, apiBase, token);
     if (!uri) return;
     setPodImageUrl(uri);
     setPodViewerTitle(title || upload.UPLOAD_TYPE || 'Upload preview');
@@ -948,10 +957,11 @@ export default function OrdersScreen({
   };
 
   // ────────────────────────────────────────────────────────────────────────────
-  // STAGE 1: TILES GRID VIEW
+  // STAGE VIEWS RENDER
   // ────────────────────────────────────────────────────────────────────────────
-  if (currentView === 'tiles') {
-    return (
+  const renderContent = () => {
+    if (currentView === 'tiles') {
+      return (
       <ScrollView
         style={styles.container}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
@@ -1039,6 +1049,11 @@ export default function OrdersScreen({
               <Text style={styles.placeholder}>Select a shipment to assign its carrier and AWB.</Text>
             ) : (
               <>
+                {screenWidth < 720 ? (
+                  <TouchableOpacity style={styles.assignBackToListBtn} onPress={() => setAssignSelectedOrder(null)}>
+                    <Text style={styles.assignBackToListBtnText}>‹ Back to Shipments List</Text>
+                  </TouchableOpacity>
+                ) : null}
                 <Text style={styles.assignFormTitle}>Update Shipment</Text>
                 <Text style={styles.assignFormRef}>Reference: {assignSelectedOrder.REFERENCE}</Text>
                 <Text style={styles.assignLabel}>Carrier *</Text>
@@ -1156,6 +1171,7 @@ export default function OrdersScreen({
               shipmentsMap={shipmentsMap}
               isSelected={selectedOrder?.REFERENCE === item.REFERENCE}
               onPress={() => handleSelectOrder(item)}
+              onUpdateStatus={(target) => setUpdateStatusTargetOrder(target)}
             />
           )}
           ListEmptyComponent={
@@ -1526,6 +1542,9 @@ export default function OrdersScreen({
           <View style={styles.cardHeaderRow}>
             <Text style={styles.cardTitle}>Shipment Details</Text>
             <View style={styles.actionIconGroup}>
+              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#e0f2fe' }]} onPress={() => setUpdateStatusTargetOrder(o)} title="Update Status">
+                <CheckmarkCircleIcon size={14} color="#0284c7" />
+              </TouchableOpacity>
               {!o.INV_NUMBER && (
                 <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => (onEditOrder ? onEditOrder({ ...o, boxes: multiboxMap[o.REFERENCE] || [], products: productsMap[o.REFERENCE] || [] }) : toast('Edit', 'Edit order ' + o.REFERENCE))} title="Edit">
                   <EditIcon size={14} color="#64748b" />
@@ -1705,7 +1724,7 @@ export default function OrdersScreen({
                                 <EyeIcon size={13} color="#0284c7" />
                                 <Text style={styles.uploadActionBtnText}>View</Text>
                               </TouchableOpacity>
-                              <TouchableOpacity style={styles.uploadActionBtn} onPress={() => Linking.openURL(resolveFileUrl(up.FILE_URL))}>
+                              <TouchableOpacity style={styles.uploadActionBtn} onPress={() => downloadUploadNative(resolveFileUrl(up.FILE_URL), `${up.UPLOAD_TYPE || 'Upload'}_${o.AWB_NUMBER || o.REFERENCE}`)}>
                                 <DownloadIcon size={13} color="#0284c7" />
                                 <Text style={styles.uploadActionBtnText}>Download</Text>
                               </TouchableOpacity>
@@ -1910,11 +1929,30 @@ export default function OrdersScreen({
           isPdf={podViewerIsPdf}
           onClose={() => setPodImageUrl(null)}
         />
+
       </ScrollView>
     );
   }
 
   return null;
+};
+
+return (
+  <View style={{ flex: 1 }}>
+    {renderContent()}
+    <UpdateStatusModal
+      visible={updateStatusTargetOrder !== null}
+      onClose={() => setUpdateStatusTargetOrder(null)}
+      order={updateStatusTargetOrder}
+      token={token}
+      apiBase={apiBase}
+      role={role}
+      onSuccess={(ref, statusRaw) => {
+        if (onRefresh) onRefresh();
+      }}
+    />
+  </View>
+);
 }
 
 // ── Web Shipment List Item ─────────────────────────────────────────────────────
@@ -2023,6 +2061,8 @@ const styles = StyleSheet.create({
   assignMessageSuccess: { color: '#166534', backgroundColor: '#f0fdf4' },
   assignSubmit: { marginTop: 14, backgroundColor: COLORS.primary, borderRadius: 7, paddingVertical: 10, alignItems: 'center' },
   assignSubmitText: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  assignBackToListBtn: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#f1f5f9', borderRadius: 6, alignSelf: 'flex-start' },
+  assignBackToListBtnText: { color: '#0284c7', fontSize: 12, fontWeight: '800' },
 
   searchFilterRow: { flexDirection: 'row', gap: 8, marginBottom: 10, alignItems: 'center' },
   filterIconBtn: { backgroundColor: '#f1f5f9', borderWidth: 1.5, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, justifyContent: 'center' },

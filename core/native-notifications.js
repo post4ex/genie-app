@@ -1,5 +1,17 @@
 import { Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
+
+let _Notifications = null;
+function getNotificationsModule() {
+  if (Platform.OS === 'web') return null;
+  if (_Notifications) return _Notifications;
+  try {
+    _Notifications = require('expo-notifications');
+    return _Notifications;
+  } catch (e) {
+    // Expo Go (SDK 53+) disables remote notifications
+    return null;
+  }
+}
 
 let configured = false;
 let permissionGranted = false;
@@ -11,6 +23,10 @@ let permissionGranted = false;
 export async function configureNativeNotifications() {
   if (Platform.OS === 'web') return false;
   if (configured) return permissionGranted;
+
+  const Notifications = getNotificationsModule();
+  if (!Notifications) return false;
+
   configured = true;
 
   try {
@@ -51,8 +67,12 @@ export async function configureNativeNotifications() {
 export async function presentNativeNotification(notification) {
   if (Platform.OS === 'web') return false;
   try {
+    const Notifications = getNotificationsModule();
+    if (!Notifications) return false;
+
     const allowed = await configureNativeNotifications();
     if (!allowed) return false;
+
     const level = String(notification?.LEVEL || notification?.type || 'INFO').toUpperCase();
     const title = level === 'CRITICAL' ? 'Genie critical alert' : `Genie ${level.toLowerCase()}`;
     await Notifications.scheduleNotificationAsync({

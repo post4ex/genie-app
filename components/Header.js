@@ -3,7 +3,7 @@ import {
   StyleSheet, View, Text, TouchableOpacity, Platform, Animated, Easing
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path, Polyline, Line } from 'react-native-svg';
+import Svg, { Path, Polyline, Line, Circle } from 'react-native-svg';
 import { COLORS } from '../styles/theme';
 
 // Sync status colors — dot on the refresh (sync) icon
@@ -26,7 +26,7 @@ const STATUS_LABEL = {
 };
 
 export default function Header({
-  user, onRefresh, onNotif, onLogout,
+  user, onRefresh, onNotif, onLogout, onTrack,
   unreadCount = 0, syncStatus = 'idle', refreshing = false,
 }) {
   const insets = useSafeAreaInsets();
@@ -71,6 +71,18 @@ export default function Header({
       <View style={styles.webHeaderRight}>
         {user ? (
           <>
+            {/* Track AWB Icon — switches to Track tab */}
+            <TouchableOpacity
+              style={styles.iconBtnCircle}
+              onPress={onTrack}
+              accessibilityLabel="Track AWB"
+            >
+              <Svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <Circle cx="11" cy="11" r="8" />
+                <Line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </Svg>
+            </TouchableOpacity>
+
             {/* Sync Icon — spins while syncing, dot shows connection status */}
             <TouchableOpacity
               style={styles.iconBtnCircle}

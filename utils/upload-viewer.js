@@ -9,11 +9,26 @@ import {
   Platform,
   StyleSheet,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 
-export const resolveUploadUri = (url, apiBase = '') => {
+export const resolveUploadUri = (url, apiBase = '', token = '') => {
   if (!url) return '';
-  if (/^(https?:|data:|blob:|file:)/i.test(String(url))) return String(url);
-  return `${apiBase}${String(url).startsWith('/') ? '' : '/'}${url}`;
+  let res = String(url).trim();
+
+  // Prepend apiBase if it's a relative path
+  const isExternal = /^(https?:|data:|blob:|file:)/i.test(res);
+  if (!isExternal) {
+    res = `${apiBase}${res.startsWith('/') ? '' : '/'}${res}`;
+  }
+
+  // Only append auth token for our own operations server endpoints (/api/file/, etc.)
+  const isOurApi = (apiBase && res.startsWith(apiBase)) || res.includes('/api/file/') || res.includes('/api/download');
+  if (isOurApi && token && !res.includes('token=')) {
+    res += (res.includes('?') ? '&' : '?') + `token=${encodeURIComponent(token)}`;
+  }
+
+  return res;
 };
 
 export const isImageUpload = (upload = {}) => {
@@ -28,13 +43,47 @@ export const isPdfUpload = (upload = {}) => {
   return type === 'application/pdf' || /\.pdf(\?|$)/i.test(url);
 };
 
-export const openUploadExternally = async (uri) => {
+export const downloadUploadNative = async (uri, title = 'Download') => {
   if (!uri) return false;
+
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.open(uri, '_blank', 'noopener,noreferrer');
+    const a = document.createElement('a');
+    a.href = uri;
+    a.target = '_blank';
+    a.download = title;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
     return true;
   }
-  return Linking.openURL(uri);
+
+  try {
+    const rawUrl = uri.split('?')[0];
+    const extMatch = rawUrl.match(/\.([a-zA-Z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'pdf';
+    
+    const cleanTitle = title.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const targetPath = `${FileSystem.documentDirectory}${cleanTitle}_${Date.now()}.${ext}`;
+
+    const result = await FileSystem.downloadAsync(uri, targetPath);
+    if (result && result.uri) {
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(result.uri, {
+          dialogTitle: `Save ${title}`,
+          mimeType: ext === 'pdf' ? 'application/pdf' : ext.match(/(jpg|jpeg|png|webp)/) ? `image/${ext}` : undefined,
+        });
+      }
+      return true;
+    }
+  } catch (err) {
+    console.warn('[Native Download] Error downloading file:', err);
+    Linking.openURL(uri).catch(() => {});
+  }
+  return false;
+};
+
+export const openUploadExternally = async (uri, title = 'File') => {
+  return downloadUploadNative(uri, title);
 };
 
 // A dependency-free viewer: images render inside the app on every platform;

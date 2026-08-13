@@ -45,9 +45,9 @@ export default function BottomMenuSheet({ activeTab, onNavigate, userRole = 'CLI
             <Text style={[styles.tabLabel, activeTab === 'book' && styles.tabLabelActive]}>Book</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.tabItem, activeTab === 'track' && styles.tabActive]} onPress={() => handleSelect('track')}>
-            <Text style={styles.tabIcon}>🔍</Text>
-            <Text style={[styles.tabLabel, activeTab === 'track' && styles.tabLabelActive]}>Track</Text>
+          <TouchableOpacity style={[styles.tabItem, activeTab === 'uploader' && styles.tabActive]} onPress={() => handleSelect('uploader')}>
+            <Text style={styles.tabIcon}>📤</Text>
+            <Text style={[styles.tabLabel, activeTab === 'uploader' && styles.tabLabelActive]}>Uploader</Text>
           </TouchableOpacity>
 
           {/* 5th Button: Dedicated Menu Button */}

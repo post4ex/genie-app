@@ -3,17 +3,14 @@ import {
   Alert, Image, Modal, PanResponder, Platform, ScrollView, StyleSheet,
   Text, TextInput, TouchableOpacity, View, useWindowDimensions,
 } from 'react-native';
-import { FilterImage } from 'react-native-svg';
-import { captureRef } from 'react-native-view-shot';
-import { recognizeText } from 'expo-ocr-kit';
-import PdfPageImageModule from 'expo-pdf-page-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as DocumentPicker from 'expo-document-picker';
-import Slider from '@react-native-community/slider';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { CameraView, scanFromURLAsync, useCameraPermissions } from 'expo-camera';
+import PdfPageImageModule from 'expo-pdf-page-image';
+import { FilterImage } from 'react-native-svg/filter-image';
 import { COLORS } from '../styles/theme';
 import { ROLE_LEVELS } from '../core/config';
 import { UploadViewer, resolveUploadUri, isPdfUpload } from '../utils/upload-viewer';
@@ -47,7 +44,11 @@ const assetData = async (asset) => {
 const dataUrlToCacheUri = async (dataUrl) => {
   if (!String(dataUrl).startsWith('data:')) return dataUrl;
   const encoded = String(dataUrl).split(',')[1] || '';
-  const uri = `${FileSystem.cacheDirectory}genie-uploader-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
+  // Extension follows the actual MIME type (png pages from the PDF rasterizer,
+  // raw pdf fallback, jpeg photos) so image tools never see a mismatched file.
+  const mime = String(dataUrl).split(';')[0].split(':')[1] || 'image/jpeg';
+  const ext = mime === 'image/png' ? 'png' : mime === 'application/pdf' ? 'pdf' : 'jpg';
+  const uri = `${FileSystem.cacheDirectory}genie-uploader-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
   await FileSystem.writeAsStringAsync(uri, encoded, { encoding: FileSystem.EncodingType.Base64 });
   return uri;
 };
@@ -88,6 +89,14 @@ const buildNativeFilters = (opts = {}) => {
   return [{ name: 'feColorMatrix', type: 'matrix', values: matrix }];
 };
 
+// Native expo-camera barcode set — the same list the live scanner modal uses.
+const NATIVE_BARCODE_TYPES = ['qr', 'code128', 'code39', 'ean13', 'ean8', 'upc_a', 'upc_e', 'itf14', 'datamatrix', 'pdf417', 'aztec', 'code93', 'codabar'];
+
+// React Native has no DOM BarcodeDetector, so the visible preview is rendered
+// through react-native-svg FilterImage: the enhancement controls (Auto /
+// Greyscale / B&W / brightness / contrast) change the image live, the same
+// effect the web's CSS filters have on its cropper preview.
+
 export default function UploaderScreen({
   orders = [], b2b2cMap = {}, productsMap = {}, uploadsMap = {}, token = '', apiBase = '',
   role = 'STAFF', onRefresh, onClose, initialOrder = null, initialType = null,
@@ -123,6 +132,11 @@ export default function UploaderScreen({
   const sessionGenerationRef = useRef(0);
   const [kycPickerVisible, setKycPickerVisible] = useState(false);
   const [enhancePanelVisible, setEnhancePanelVisible] = useState(false);
+  // Web setInterfaceState('preview') parity: true only after the current image
+  // has been confirmed in the cropper. The strip's preview row (Rotate / Lock /
+  // Cancel / Cancel All) stays hidden while an uncropped image sits in the
+  // workspace, exactly like uploader.html hides them until crop-confirm.
+  const [isPreviewing, setIsPreviewing] = useState(false);
   // ── Native crop modal (web initCropper parity: 95% box, drag-move, corner resize, rotate) ──
   const [nativeCropVisible, setNativeCropVisible] = useState(false);
   const [cropImageUri, setCropImageUri] = useState('');
@@ -249,6 +263,7 @@ export default function UploaderScreen({
     setNativeCameraActive(false);
     setNativeCameraReady(false);
     setNativeCameraCaptured(false);
+    setIsPreviewing(false);
     setUploadType(initialType || defaultType || null);
     setMobileOrderListCollapsed(Boolean(initialOrder));
     if (!initialOrder) {
@@ -260,9 +275,14 @@ export default function UploaderScreen({
     setMessage(`Ready. Uploading for: ${initialOrder.AWB_NUMBER || initialOrder.REFERENCE}`);
   }, [initialOrder, initialType, defaultType]);
 
+  // KYC is hidden by default everywhere (product decision): the button and its
+  // pickup rows never render unless a caller explicitly opens the mini-uploader
+  // with defaultType='KYC' (web setReferenceWithDefaultType parity).
+  // Client-level Reciept/POD restrictions apply only in modal (mini) contexts.
   const effectiveHiddenTypes = useMemo(() => {
     const configured = hiddenTypes?.length ? hiddenTypes : (modalMode ? DEFAULT_HIDDEN_TYPES : []);
     const result = new Set(restrictedUploadTypes(role, configured, enforceRoleRestrictions));
+    if (defaultType !== 'KYC') result.add('KYC');
     if (defaultType) UPLOAD_TYPES.filter((type) => type !== defaultType).forEach((type) => result.add(type));
     return result;
   }, [hiddenTypes, defaultType, modalMode, role, enforceRoleRestrictions]);
@@ -574,6 +594,7 @@ export default function UploaderScreen({
       setEnhanceVisible(false);
       setImageQueue((q) => q.map((item, i) => (i === imageIndex ? dataUrl : item)));
       setRotation(0);
+      setIsPreviewing(true); // web setInterfaceState('preview') after crop confirm
       setMessage('Crop applied.');
       scanBarcodeFromData(dataUrl); // web parity: auto-scan after crop confirm
     } catch (err) { setMessage(`Crop failed: ${err.message}`, true); }
@@ -596,6 +617,7 @@ export default function UploaderScreen({
     setImageIndex(0);
     setNativeCameraReady(false);
     setNativeCameraCaptured(false);
+    setIsPreviewing(false);
     setNativeCameraActive(true);
     setMessage('Starting camera...');
   };
@@ -626,11 +648,15 @@ export default function UploaderScreen({
   };
 
   const doneNativeCamera = () => {
-    const firstImage = imageQueue[0];
     stopNativeCamera();
-    if (firstImage) {
+    if (imageQueue.length > 0) {
       setImageIndex(0);
-      openNativeCrop(firstImage);
+      setRotation(0);
+      setIsPreviewing(false);
+      // Web 'Done' -> stopCamera -> displayImage(0) -> initCropper parity:
+      // open the crop UI on the first captured frame instead of a plain preview.
+      if (imageQueue[0] && !String(imageQueue[0]).startsWith('data:application/pdf')) openNativeCrop(imageQueue[0]);
+      setMessage(`Captured ${imageQueue.length} photo(s). Crop to continue.`);
     }
   };
 
@@ -677,6 +703,7 @@ export default function UploaderScreen({
       setTimeout(() => { try { new globalThis.ImageCapture(track).grabFrame().catch(() => {}); } catch (_) {} }, 600);
     }
     setWebCaptured(false);
+    setIsPreviewing(false);
     setWebCameraActive(true);
   };
 
@@ -688,11 +715,17 @@ export default function UploaderScreen({
   // ── Scan / OCR result handling (web scanBarcodeFromPreview + OCR parity) ──
   const runNativeOcr = async (source = currentImage) => {
     if (!source) { setMessage('No image in preview. Capture or upload an image first.', true); return; }
+    let recognizeTextFunc = null;
+    try { recognizeTextFunc = require('expo-ocr-kit').recognizeText; } catch (_) {}
+    if (!recognizeTextFunc) {
+      setMessage('OCR engine is active in web mode and standalone builds.', true);
+      return;
+    }
     setProcessingImage(true);
     setMessage('Running OCR…');
     try {
       const localUri = await dataUrlToCacheUri(source);
-      const result = await recognizeText(localUri);
+      const result = await recognizeTextFunc(localUri);
       const text = String(result?.text || '').trim();
       const cleanText = text.replace(/\s+/g, ' ');
       const mobiles = [...new Set(cleanText.match(/(?:\+91|91)?\s*[6-9]\d{9}/g) || [])];
@@ -733,6 +766,25 @@ export default function UploaderScreen({
   // Refresh the ref after the definition so DOM handlers always see the latest
   // applyScanResult (tasks / selectedTaskIndex / orders change every render).
   applyScanResultRef.current = applyScanResult;
+
+  // Web scanBarcodeFromPreview parity (native): after a crop the cropped image
+  // is scanned statically (expo-camera scanFromURLAsync) and the value fills the
+  // selected row / matches an order from the list / filters it — exactly like
+  // the web auto-scan after crop confirm. No barcode button needed.
+  const scanBarcodeFromNativeImage = async (dataUrl) => {
+    if (Platform.OS === 'web' || !dataUrl || String(dataUrl).startsWith('data:application/pdf')) return;
+    try {
+      const uri = await dataUrlToCacheUri(dataUrl);
+      const barcodes = await scanFromURLAsync(uri, NATIVE_BARCODE_TYPES);
+      if (barcodes && barcodes.length > 0 && barcodes[0].data) {
+        applyScanResult(String(barcodes[0].data || '').trim());
+      } else {
+        setMessage('No barcode found. Select an area for OCR.');
+      }
+    } catch (error) {
+      console.warn('[Uploader] Native barcode scan failed:', error?.message);
+    }
+  };
 
   const scanBarcodeFromData = async (dataUrl) => {
     if (Platform.OS !== 'web' || !dataUrl || !globalThis.BarcodeDetector) return;
@@ -808,6 +860,7 @@ export default function UploaderScreen({
 
   const selectImageAt = (index) => {
     setImageIndex(index);
+    setIsPreviewing(false); // every image switch goes back through the cropper
     if (Platform.OS === 'web') setCropMode(true);
     else if (imageQueue[index]) openNativeCrop(imageQueue[index]);
   };
@@ -830,25 +883,39 @@ export default function UploaderScreen({
   };
 
   const measureCrop = async () => {
-    const stageW = cropStageSizeRef.current?.width;
-    const stageH = cropStageSizeRef.current?.height;
-    if (!stageW || !stageH || !cropImageUri) return;
+    const stageW = cropStageSizeRef.current?.width || 320;
+    const stageH = cropStageSizeRef.current?.height || 320;
+    if (!cropImageUri) return;
     try {
-      const src = await dataUrlToCacheUri(cropImageUri);
-      const size = await new Promise((resolve, reject) => Image.getSize(src, (width, height) => resolve({ width, height }), reject));
-      const scale = Math.min(stageW / size.width, stageH / size.height);
-      const renderedW = size.width * scale;
-      const renderedH = size.height * scale;
+      let size = { width: 800, height: 800 };
+      if (cropImageUri.startsWith('data:')) {
+        const src = await dataUrlToCacheUri(cropImageUri);
+        size = await new Promise((resolve) => {
+          Image.getSize(src, (width, height) => resolve({ width, height }), () => resolve({ width: 800, height: 800 }));
+        });
+      } else {
+        size = await new Promise((resolve) => {
+          Image.getSize(cropImageUri, (width, height) => resolve({ width, height }), () => resolve({ width: 800, height: 800 }));
+        });
+      }
+      const natW = size.width || 800;
+      const natH = size.height || 800;
+      const scale = Math.min(stageW / natW, stageH / natH);
+      const renderedW = natW * scale;
+      const renderedH = natH * scale;
       const offsetX = (stageW - renderedW) / 2;
       const offsetY = (stageH - renderedH) / 2;
       const rectW = renderedW * 0.95;
       const rectH = renderedH * 0.95;
-      cropBoundsRef.current = { stageW, stageH, natW: size.width, natH: size.height, renderedW, renderedH, offsetX, offsetY };
+      cropBoundsRef.current = { stageW, stageH, natW, natH, renderedW, renderedH, offsetX, offsetY };
       const rect = { x: offsetX + (renderedW - rectW) / 2, y: offsetY + (renderedH - rectH) / 2, w: rectW, h: rectH };
       cropRectRef.current = rect;
       setCropRect({ ...rect });
     } catch (_) {
-      setMessage('Could not load the image for cropping.', true);
+      const rect = { x: stageW * 0.05, y: stageH * 0.05, w: stageW * 0.9, h: stageH * 0.9 };
+      cropBoundsRef.current = { stageW, stageH, natW: 800, natH: 800, renderedW: stageW, renderedH: stageH, offsetX: 0, offsetY: 0 };
+      cropRectRef.current = rect;
+      setCropRect({ ...rect });
     }
   };
 
@@ -879,28 +946,34 @@ export default function UploaderScreen({
     if (cropBusy) return;
     const bounds = cropBoundsRef.current;
     const rect = cropRectRef.current;
-    if (!bounds || !rect) return;
+    if (!bounds || !rect || !cropImageUri) return;
     setCropBusy(true);
     try {
       // Map the on-screen crop box back to source pixel coordinates.
       const scaleX = bounds.natW / bounds.renderedW;
       const scaleY = bounds.natH / bounds.renderedH;
-      let sx = (rect.x - bounds.offsetX) * scaleX;
-      let sy = (rect.y - bounds.offsetY) * scaleY;
+      let sx = Math.max(0, (rect.x - bounds.offsetX) * scaleX);
+      let sy = Math.max(0, (rect.y - bounds.offsetY) * scaleY);
       let sw = rect.w * scaleX;
       let sh = rect.h * scaleY;
-      sx = Math.max(0, Math.min(bounds.natW, sx));
-      sy = Math.max(0, Math.min(bounds.natH, sy));
-      sw = Math.max(1, Math.min(bounds.natW - sx, sw));
-      sh = Math.max(1, Math.min(bounds.natH - sy, sh));
+      sx = Math.max(0, Math.min(bounds.natW - 10, Math.floor(sx)));
+      sy = Math.max(0, Math.min(bounds.natH - 10, Math.floor(sy)));
+      sw = Math.max(10, Math.min(bounds.natW - sx, Math.floor(sw)));
+      sh = Math.max(10, Math.min(bounds.natH - sy, Math.floor(sh)));
       const cropped = await processNativeImage(
         cropImageUri, 0, false, modalMode ? 100 : 200, modalMode ? 1024 : 2048,
-        { originX: Math.round(sx), originY: Math.round(sy), width: Math.round(sw), height: Math.round(sh) },
+        { originX: sx, originY: sy, width: sw, height: sh },
       );
-      setImageQueue((queue) => queue.map((item, index) => (index === imageIndex ? cropped : item)));
-      setRotation(0);
-      setNativeCropVisible(false);
-      setMessage('Crop applied.');
+      if (cropped) {
+        setImageQueue((queue) => queue.map((item, index) => (index === imageIndex ? cropped : item)));
+        setRotation(0);
+        setNativeCropVisible(false);
+        setIsPreviewing(true); // web setInterfaceState('preview') after crop confirm
+        setMessage('Crop applied ✓');
+        scanBarcodeFromNativeImage(cropped); // web parity: auto-read barcode after crop
+      } else {
+        setMessage('Crop failed: invalid image data.', true);
+      }
     } catch (error) { setMessage(`Crop failed: ${error.message}`, true); }
     finally { setCropBusy(false); }
   };
@@ -941,7 +1014,21 @@ export default function UploaderScreen({
 
   // Native Upload parity: the web file input accepts image/* + application/pdf.
   // expo-document-picker covers both on Android/iOS; native PDFs are rendered
-  // into PNG page images before entering the same queue as photographs.
+  // into PNG page images (2x scale, one per page) before entering the same
+  // queue as photographs — matching web handlePdfFile exactly.
+  const rasterizePdfPages = async (uri) => {
+    if (Platform.OS === 'web') return null;
+    try {
+      const pages = await PdfPageImageModule.generateAllPages(uri, 2);
+      const uris = (pages || []).map((page) => page.uri).filter(Boolean);
+      uris.forEach((pageUri) => pdfPageUrisRef.current.add(pageUri));
+      return uris;
+    } catch (error) {
+      console.warn('[Uploader] PDF page rasterization failed, keeping raw PDF:', error?.message);
+      return null;
+    }
+  };
+
   const pickDocuments = async () => {
     if (busy || processingImage) return;
     const sessionGeneration = sessionGenerationRef.current;
@@ -958,15 +1045,18 @@ export default function UploaderScreen({
         if (!asset?.uri) continue;
         const isPdf = asset.mimeType === 'application/pdf' || /\.pdf$/i.test(asset.name || asset.uri);
         if (isPdf) {
-          if (Platform.OS === 'web') {
-            const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
-            next.push(`data:application/pdf;base64,${base64}`);
+          // Web handlePdfFile parity: one queue item per PDF page. Raw PDF is
+          // only the defensive fallback when the native rasterizer is missing.
+          const pages = await rasterizePdfPages(asset.uri);
+          if (pages && pages.length) {
+            for (const pageUri of pages) {
+              if (next.length >= MAX_FILES) break;
+              const base64 = await FileSystem.readAsStringAsync(pageUri, { encoding: FileSystem.EncodingType.Base64 });
+              if (base64) next.push(`data:image/png;base64,${base64}`);
+            }
           } else {
-            setMessage(`Rendering PDF ${asset.name || ''}...`);
-            const pages = await PdfPageImageModule.generateAllPages(asset.uri, 2);
-            pages.slice(0, MAX_FILES - next.length).forEach((page) => {
-              if (page?.uri) { pdfPageUrisRef.current.add(page.uri); next.push(page.uri); }
-            });
+            const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+            if (base64) next.push(`data:application/pdf;base64,${base64}`);
           }
         } else {
           const dataUrl = await assetData(asset);
@@ -978,8 +1068,12 @@ export default function UploaderScreen({
       setImageQueue(next);
       setImageIndex(0);
       setRotation(0);
+      setNativeCropVisible(false);
+      setIsPreviewing(false);
       setMessage(`${next.length} file(s) loaded.`);
-      if (Platform.OS !== 'web') openNativeCrop(next[0]);
+      // Web upload -> displayImage(0) -> initCropper parity: open the crop UI
+      // on the first loaded image (raw-PDF fallback has no crop surface).
+      if (Platform.OS !== 'web' && next[0] && !String(next[0]).startsWith('data:application/pdf')) openNativeCrop(next[0]);
     } catch (error) { setMessage(`Could not load file: ${error.message}`, true); }
   };
 
@@ -1013,10 +1107,10 @@ export default function UploaderScreen({
       setImageQueue(next);
       setImageIndex(0);
       setRotation(0);
+      setNativeCropVisible(false);
+      setIsPreviewing(false);
       setMessage(`${next.length} image(s) loaded.`);
-      // Web parity: a camera capture enters the crop flow immediately.
-      if (camera && Platform.OS !== 'web') openNativeCrop(next[0]);
-      if (camera && Platform.OS === 'web') setCropMode(true);
+      if (Platform.OS !== 'web' && next[0] && !String(next[0]).startsWith('data:application/pdf')) openNativeCrop(next[0]);
     } catch (error) { setMessage(`Could not load image: ${error.message}`, true); }
   };
 
@@ -1033,9 +1127,12 @@ export default function UploaderScreen({
     if (!files.length) return;
     setMessage('Processing uploaded files...');
     try {
-      const valid = files.filter((file) => file.type === 'application/pdf' || file.type.startsWith('image/')).slice(0, MAX_FILES);
+      const valid = files.filter((file) => file.type === 'application/pdf' || file.type.startsWith('image/'));
+      // Web parity: warn and load only the first MAX_FILES (web truncates with
+      // the same error status before processing).
+      if (valid.length > MAX_FILES) setMessage(`Max ${MAX_FILES} files allowed. Loading first ${MAX_FILES}.`, true);
       const data = [];
-      for (const file of valid) {
+      for (const file of valid.slice(0, MAX_FILES)) {
         // The browser web module rasterizes PDF pages when pdfjsLib is loaded.
         // Preserve the original PDF as a valid upload when the optional worker
         // is not present rather than silently discarding the selected file.
@@ -1065,6 +1162,7 @@ export default function UploaderScreen({
       setImageQueue(data.slice(0, MAX_FILES));
       setImageIndex(0);
       setRotation(0);
+      setIsPreviewing(false);
       setMessage(`${Math.min(data.length, MAX_FILES)} file(s) loaded.`);
       // uploader.js file-input flow calls displayImage(0), which opens the
       // inline Cropper immediately for the first selected image/page.
@@ -1097,6 +1195,7 @@ export default function UploaderScreen({
     setNativeCropVisible(false);
     setKycPickerVisible(false);
     setSelectedTaskIndex(null);
+    setIsPreviewing(false);
     setImageQueue([]); setImageIndex(0); setStagedRows([]); setRowFields({}); setSubmitStates({}); setLocked(false); setRotation(0); setEnhancements({ brightness: 0, contrast: 0, sharpen: false, greyscale: false, bw: false });
     setMessage('Select an order or start capture.');
   };
@@ -1110,6 +1209,7 @@ export default function UploaderScreen({
     setNativeCropVisible(false);
     setKycPickerVisible(false);
     setSelectedTaskIndex(null);
+    setIsPreviewing(false);
     if (Platform.OS !== 'web') {
       stopNativeCamera();
       cleanupPdfPages();
@@ -1153,8 +1253,13 @@ export default function UploaderScreen({
     let workingWidth = size.width;
     let workingHeight = size.height;
     if (customCrop) {
-      workingWidth = customCrop.width;
-      workingHeight = customCrop.height;
+      const originX = Math.max(0, Math.min(size.width - 2, Math.floor(customCrop.originX || 0)));
+      const originY = Math.max(0, Math.min(size.height - 2, Math.floor(customCrop.originY || 0)));
+      const cropW = Math.max(2, Math.min(size.width - originX, Math.floor(customCrop.width || size.width)));
+      const cropH = Math.max(2, Math.min(size.height - originY, Math.floor(customCrop.height || size.height)));
+      crop = { originX, originY, width: cropW, height: cropH };
+      workingWidth = cropW;
+      workingHeight = cropH;
     } else if (centerCrop) {
       const side = Math.min(size.width, size.height);
       crop = { originX: Math.floor((size.width - side) / 2), originY: Math.floor((size.height - side) / 2), width: side, height: side };
@@ -1176,7 +1281,13 @@ export default function UploaderScreen({
       if (sizeBytes <= targetKB * 1024 || quality <= 0.1) break;
       quality = Math.max(0.1, quality - 0.1);
     } while (quality >= 0.1);
-    return result.base64 ? `data:image/jpeg;base64,${result.base64}` : result.uri;
+    if (result.base64) return `data:image/jpeg;base64,${result.base64}`;
+    if (result.uri) {
+      const base64 = await FileSystem.readAsStringAsync(result.uri, { encoding: FileSystem.EncodingType.Base64 });
+      if (base64) return `data:image/jpeg;base64,${base64}`;
+      return result.uri;
+    }
+    return dataUrl;
   };
 
   const prepareImageForUpload = async (dataUrl) => {
@@ -1188,9 +1299,11 @@ export default function UploaderScreen({
         // Capture the same native FilterImage used by the preview so native
         // brightness/contrast/greyscale/B&W adjustments are present in bytes,
         // then run the normal size/quality compressor.
-        if (nativeProcessingRef.current && !isPdfItem) {
+        let captureRefFunc = null;
+        try { captureRefFunc = require('react-native-view-shot').captureRef; } catch (_) {}
+        if (nativeProcessingRef.current && !isPdfItem && captureRefFunc) {
           await new Promise((resolve) => setTimeout(resolve, 40));
-          const filteredBase64 = await captureRef(nativeProcessingRef.current, {
+          const filteredBase64 = await captureRefFunc(nativeProcessingRef.current, {
             format: 'jpg', quality: 0.95, result: 'base64',
             width: nativeProcessingSize.width, height: nativeProcessingSize.height,
           });
@@ -1252,13 +1365,15 @@ export default function UploaderScreen({
     // Web cancel parity: streaming -> stop; locked or empty -> full reset;
     // otherwise remove the current queue item and show the next in the cropper.
     if (Platform.OS === 'web' && webCameraActive) {
+      // Web cancel parity: 1+ captures -> 'Done' (stop camera, open cropper);
+      // otherwise a full reset that also restores the idle status text.
       if (webCaptured && imageQueue.length > 0) doneWebCamera();
-      else stopWebCamera();
+      else resetUploader();
       return;
     }
     if (Platform.OS !== 'web' && nativeCameraActive) {
       if (nativeCameraCaptured && imageQueue.length > 0) doneNativeCamera();
-      else stopNativeCamera();
+      else resetUploader();
       return;
     }
     if (locked || imageQueue.length === 0) { resetUploader(); return; }
@@ -1280,6 +1395,16 @@ export default function UploaderScreen({
       delete next[key];
       return next;
     });
+    // Web delete-last parity: clear the media cache too (web resetUploader).
+    resetUploader();
+  };
+
+  // Web clear-all parity: clears the table AND the media queue (web clears
+  // #data-table-body then calls resetUploader).
+  const clearStagedRows = () => {
+    setStagedRows([]);
+    setSubmitStates({});
+    resetUploader();
   };
 
   const deleteExistingUpload = (upload) => {
@@ -1520,7 +1645,7 @@ export default function UploaderScreen({
       </View>
       <View style={styles.tblActions}>
         <TouchableOpacity style={styles.tblDangerBtn} onPress={deleteLastStagedRow}><Text style={styles.tblDangerText}>Delete Last</Text></TouchableOpacity>
-        <TouchableOpacity style={styles.tblDangerBtn} onPress={() => { setStagedRows([]); setSubmitStates({}); }}><Text style={styles.tblDangerText}>Clear All</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.tblDangerBtn} onPress={clearStagedRows}><Text style={styles.tblDangerText}>Clear All</Text></TouchableOpacity>
         <TouchableOpacity style={styles.tblPrimaryBtn} disabled={busy} onPress={submitRows}><Text style={styles.tblPrimaryText}>{busy ? 'Submitting...' : 'Submit'}</Text></TouchableOpacity>
       </View>
       </>
@@ -1540,7 +1665,7 @@ export default function UploaderScreen({
             <View>
               <View style={styles.tblHeaderRow}>{headers.map((h, i) => tableHeaderCell(h, widths[i]))}</View>
               {existingUploads.map((upload, index) => {
-                const uri = resolveUploadUri(upload.FILE_URL || upload.url, apiBase);
+                const uri = resolveUploadUri(upload.FILE_URL || upload.url, apiBase, token);
                 const refAwb = upload.UPLOAD_TYPE === 'MultiBox'
                   ? `Ref: ${upload.REFERENCE || upload.AWB_NUMBER} · Child: ${upload.CHILD_AWB}`
                   : `Ref: ${upload.REFERENCE || ''} · AWB: ${upload.AWB_NUMBER || ''}`;
@@ -1664,7 +1789,7 @@ export default function UploaderScreen({
         </View>
         <View style={[styles.tableActions, isCompactMobile && styles.tableActionsCenter]}>
           <TouchableOpacity style={styles.dangerBtn} onPress={deleteLastStagedRow}><Text style={styles.dangerBtnText}>Delete Last</Text></TouchableOpacity>
-          <TouchableOpacity style={styles.dangerBtn} onPress={() => { setStagedRows([]); setSubmitStates({}); }}><Text style={styles.dangerBtnText}>Clear All</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.dangerBtn} onPress={clearStagedRows}><Text style={styles.dangerBtnText}>Clear All</Text></TouchableOpacity>
           <TouchableOpacity style={styles.primaryBtn} disabled={busy} onPress={submitRows}><Text style={styles.primaryBtnText}>{busy ? 'Submitting...' : 'Submit'}</Text></TouchableOpacity>
         </View>
       </View>
@@ -1679,7 +1804,7 @@ export default function UploaderScreen({
         <Text style={styles.existingHeading}>Existing Uploads for this Order</Text>
         <View style={styles.dataTableBox}>
         {existingUploads.map((upload, index) => {
-          const uri = resolveUploadUri(upload.FILE_URL || upload.url, apiBase);
+          const uri = resolveUploadUri(upload.FILE_URL || upload.url, apiBase, token);
           const refAwb = upload.UPLOAD_TYPE === 'MultiBox'
             ? `Ref: ${upload.REFERENCE || upload.AWB_NUMBER} · Child: ${upload.CHILD_AWB}`
             : `Ref: ${upload.REFERENCE || ''} · AWB: ${upload.AWB_NUMBER || ''}`;
@@ -1778,67 +1903,122 @@ export default function UploaderScreen({
       </View>
     </View>
   );
+  const renderNativeInlineCropper = () => (
+    <View style={styles.inlineCropperWrap}>
+      <View style={styles.cropStage} onLayout={onCropLayout}>
+        {cropImageUri ? (Platform.OS !== 'web' ? <FilterImage source={{ uri: cropImageUri }} style={styles.cropImage} resizeMode="contain" filters={nativeFilters} /> : <Image source={{ uri: cropImageUri }} style={styles.cropImage} resizeMode="contain" />) : null}
+        {cropRect ? (
+          <>
+            <View style={[styles.cropMask, { top: 0, left: 0, right: 0, height: cropRect.y }]} />
+            <View style={[styles.cropMask, { top: cropRect.y + cropRect.h, left: 0, right: 0, bottom: 0 }]} />
+            <View style={[styles.cropMask, { top: cropRect.y, left: 0, width: cropRect.x, height: cropRect.h }]} />
+            <View style={[styles.cropMask, { top: cropRect.y, left: cropRect.x + cropRect.w, right: 0, height: cropRect.h }]} />
+            <View {...(cropPanResponderRef.current?.panHandlers || {})} style={[styles.cropBox, { left: cropRect.x, top: cropRect.y, width: cropRect.w, height: cropRect.h }]}>
+              <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleTL]} />
+              <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleTR]} />
+              <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleBL]} />
+              <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleBR]} />
+            </View>
+          </>
+        ) : null}
+      </View>
+      <View style={styles.cropButtonsInline}>
+        <TouchableOpacity style={styles.dangerBtn} disabled={cropBusy} onPress={rotateNativeCrop}><Text style={styles.dangerBtnText}>Rotate</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.dangerBtn} disabled={cropBusy} onPress={() => runNativeOcr(cropImageUri)}><Text style={styles.dangerBtnText}>OCR</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.dangerBtn} onPress={() => setNativeCropVisible(false)}><Text style={styles.dangerBtnText}>Cancel</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.primaryBtn} disabled={cropBusy} onPress={confirmNativeCrop}><Text style={styles.primaryBtnText}>{cropBusy ? 'Cropping…' : 'Crop'}</Text></TouchableOpacity>
+      </View>
+    </View>
+  );
 
   const cameraActive = webCameraActive || nativeCameraActive;
-  const showPreviewControls = !!currentImage && !cameraActive && !cropMode && !nativeCropVisible;
+  // Web setInterfaceState('preview') parity: the preview row (Rotate / Lock /
+  // Cancel / Cancel All) appears only AFTER the current image was cropped.
+  const showPreviewControls = !!currentImage && !cameraActive && !cropMode && !nativeCropVisible && isPreviewing;
   const showMainControls = !cropMode && !nativeCropVisible;
 
   return (
     <View style={styles.container}>
-      <View style={styles.pageHeader}>
-        <View style={styles.pageHeaderRow}>
-          <View style={styles.pageHeaderTitles}><Text style={styles.title}>Document Uploader</Text><Text style={styles.subtitle}>POD, receipt, KYC, product and multibox uploads</Text></View>
-          {modalMode && onClose ? <TouchableOpacity style={styles.headerClose} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close uploader"><Text style={styles.headerCloseText}>✕</Text></TouchableOpacity> : null}
-        </View>
-      </View>
       {Platform.OS === 'web' ? <>{React.createElement('input', { ref: webInputRef, type: 'file', accept: 'image/*,application/pdf', multiple: true, onChange: handleWebFiles, style: { display: 'none' } })}</> : null}
-      {/* Web main-controls-strip: idle = type/Camera/Upload; streaming = Capture/Cancel; preview = Rotate/Lock/Cancel/Cancel All. */}
-      {showMainControls ? (
-        <View style={[styles.controlsStrip, isCompactMobile && styles.controlsStripMobile, Platform.OS === 'web' && isCompactMobile && styles.controlsStripWebMobile]}>
-          {!cameraActive ? (
-            <>
-              <View style={styles.typeStrip}>
-                {UPLOAD_TYPES.filter((type) => !effectiveHiddenTypes.has(type)).map((type) => (
-                  <TouchableOpacity key={type} style={[styles.typeBtn, uploadType === type && styles.typeBtnActive]} onPress={() => chooseType(type)}>
-                    <Text style={[styles.typeBtnText, uploadType === type && styles.typeBtnTextActive]}>{type}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              {!isCompactMobile ? <View style={styles.stripSeparator} /> : null}
-            </>
-          ) : null}
-          <View style={styles.buttonGroup}>
-            {!showPreviewControls ? (
-              <TouchableOpacity style={styles.actionBtn} onPress={() => {
-                if (Platform.OS === 'web') { if (webCameraActive) captureWebFrame(); else startWebCamera(); }
-                else if (nativeCameraActive) captureNativeFrame();
-                else startNativeCamera();
-              }}><Text style={styles.actionBtnText}>{cameraActive ? 'Capture' : 'Camera'}</Text></TouchableOpacity>
-            ) : null}
-            {!cameraActive && !showPreviewControls ? <TouchableOpacity style={styles.actionBtn} onPress={() => (Platform.OS === 'web' ? chooseAssets(false) : pickDocuments())}><Text style={styles.actionBtnText}>Upload</Text></TouchableOpacity> : null}
-            {showPreviewControls ? <TouchableOpacity style={styles.dangerBtn} onPress={() => setRotation((value) => (value + 90) % 360)}><Text style={styles.dangerBtnText}>Rotate</Text></TouchableOpacity> : null}
-            {showPreviewControls ? <TouchableOpacity style={[styles.dangerBtn, locked && styles.dangerBtnActive]} onPress={() => setLocked((value) => !value)}><Text style={[styles.dangerBtnText, locked && styles.dangerBtnTextActive]}>{locked ? 'Unlock' : 'Lock'}</Text></TouchableOpacity> : null}
-            {(cameraActive || showPreviewControls) ? <TouchableOpacity style={styles.dangerBtn} onPress={cancelCurrentImage}><Text style={styles.dangerBtnText}>{(webCameraActive && webCaptured) || (nativeCameraActive && nativeCameraCaptured) ? 'Done' : 'Cancel'}</Text></TouchableOpacity> : null}
-            {showPreviewControls ? <TouchableOpacity style={styles.dangerBtn} onPress={resetUploader}><Text style={styles.dangerBtnText}>Cancel All</Text></TouchableOpacity> : null}
-          </View>
-        </View>
-      ) : null}
-      {Platform.OS !== 'web' && currentImage && !isPdfItem && enhancePanelVisible ? (
-        <View style={styles.enhanceSliderPanel}>
-          <View style={styles.nativeEnhanceButtons}>
-            <TouchableOpacity style={styles.nativeEnhanceBtn} onPress={autoEnhance}><Text style={styles.nativeEnhanceText}>Auto</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.nativeEnhanceBtn, enhancements.greyscale && styles.nativeEnhanceBtnActive]} onPress={toggleGreyscale}><Text style={styles.nativeEnhanceText}>Greyscale</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.nativeEnhanceBtn, enhancements.bw && styles.nativeEnhanceBtnActive]} onPress={toggleBlackWhite}><Text style={styles.nativeEnhanceText}>B&amp;W Doc</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.nativeEnhanceBtn, enhancements.sharpen && styles.nativeEnhanceBtnActive]} onPress={toggleSharpen}><Text style={styles.nativeEnhanceText}>Sharpen</Text></TouchableOpacity>
-            <TouchableOpacity style={styles.nativeEnhanceBtn} onPress={resetEnhancements}><Text style={styles.nativeEnhanceText}>Reset</Text></TouchableOpacity>
-          </View>
-          <View style={styles.enhanceSliderRow}><Text style={styles.enhanceSliderLabel}>Brightness</Text><Slider style={styles.enhanceSlider} minimumValue={-50} maximumValue={50} step={1} minimumTrackTintColor="#1e3a5f" maximumTrackTintColor="#cbd5e1" thumbTintColor="#1e3a5f" value={Number(enhancements.brightness) || 0} onValueChange={(value) => setEnhancementValue('brightness', value)} /></View>
-          <View style={styles.enhanceSliderRow}><Text style={styles.enhanceSliderLabel}>Contrast</Text><Slider style={styles.enhanceSlider} minimumValue={-50} maximumValue={50} step={1} minimumTrackTintColor="#1e3a5f" maximumTrackTintColor="#cbd5e1" thumbTintColor="#1e3a5f" value={Number(enhancements.contrast) || 0} onValueChange={(value) => setEnhancementValue('contrast', value)} /></View>
-        </View>
-      ) : null}
       <View style={[styles.body, isCompactMobile && styles.bodyMobile, modalMode && styles.bodyModal]}>
         <ScrollView nestedScrollEnabled={isCompactMobile} style={styles.workPane} contentContainerStyle={styles.workContent}>
-          {!selectedOrder && !webCameraActive && !nativeCameraActive ? (
+          <View style={styles.pageHeader}>
+            <View style={styles.pageHeaderRow}>
+              <View style={styles.pageHeaderTitles}><Text style={styles.title}>Document Uploader</Text><Text style={styles.subtitle}>POD, receipt, product and multibox uploads</Text></View>
+              {modalMode && onClose ? <TouchableOpacity style={styles.headerClose} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close uploader"><Text style={styles.headerCloseText}>✕</Text></TouchableOpacity> : null}
+            </View>
+          </View>
+          {/* Web main-controls-strip: idle = type/Camera/Upload; streaming = Capture/Cancel; preview = Rotate/Lock/Cancel/Cancel All. */}
+          {showMainControls ? (
+            <View style={[styles.controlsStrip, isCompactMobile && styles.controlsStripMobile, Platform.OS === 'web' && isCompactMobile && styles.controlsStripWebMobile]}>
+              {!cameraActive && !showPreviewControls ? (
+                <>
+                  <View style={styles.typeStrip}>
+                    {UPLOAD_TYPES.filter((type) => !effectiveHiddenTypes.has(type)).map((type) => (
+                      <TouchableOpacity key={type} style={[styles.typeBtn, uploadType === type && styles.typeBtnActive]} onPress={() => chooseType(type)}>
+                        <Text style={[styles.typeBtnText, uploadType === type && styles.typeBtnTextActive]}>{type}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  {!isCompactMobile ? <View style={styles.stripSeparator} /> : null}
+                </>
+              ) : null}
+              <View style={styles.buttonGroup}>
+                {/* 1. Camera / Capture Button */}
+                {!showPreviewControls ? (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, cameraActive && styles.captureActiveBtn]}
+                    onPress={() => {
+                      if (Platform.OS === 'web') { if (webCameraActive) captureWebFrame(); else startWebCamera(); }
+                      else if (nativeCameraActive) captureNativeFrame();
+                      else startNativeCamera();
+                    }}
+                  >
+                    <Text style={styles.actionBtnText}>
+                      {cameraActive ? `Capture ${imageQueue.length > 0 ? `(${imageQueue.length})` : ''}` : 'Camera'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+
+                {/* 2. Upload Button (hidden when camera is active or preview is open) */}
+                {!cameraActive && !showPreviewControls ? (
+                  <TouchableOpacity style={styles.actionBtn} onPress={() => (Platform.OS === 'web' ? chooseAssets(false) : pickDocuments())}>
+                    <Text style={styles.actionBtnText}>Upload</Text>
+                  </TouchableOpacity>
+                ) : null}
+
+                {/* 3. Camera Active Done Button (shows as primary action when 1+ photos captured) */}
+                {cameraActive && imageQueue.length > 0 ? (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, { backgroundColor: '#16a34a' }]}
+                    onPress={() => (Platform.OS === 'web' ? doneWebCamera() : doneNativeCamera())}
+                  >
+                    <Text style={[styles.actionBtnText, { color: '#ffffff', fontWeight: 'bold' }]}>
+                      Done ({imageQueue.length}) ✓
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+
+                {/* 4. Preview controls (web preview state): Rotate / Lock only.
+                    Crop / Enhance / Barcode / OCR never live in the top strip —
+                    the web keeps them inside the cropper; native gets them in a
+                    utility row under the preview (see below). */}
+                {showPreviewControls ? (
+                  <>
+                    <TouchableOpacity style={styles.actionBtn} onPress={() => { setRotation((value) => (value + 90) % 360); if (Platform.OS === 'web') scanBarcodeFromData(currentImage); }}><Text style={styles.actionBtnText}>Rotate</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.dangerBtn, locked && styles.dangerBtnActive]} onPress={() => setLocked((value) => !value)}><Text style={[styles.dangerBtnText, locked && styles.dangerBtnTextActive]}>{locked ? 'Unlock' : 'Lock'}</Text></TouchableOpacity>
+                  </>
+                ) : null}
+                {(cameraActive || showPreviewControls) ? (
+                  <TouchableOpacity style={styles.dangerBtn} onPress={cancelCurrentImage}>
+                    <Text style={styles.dangerBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {showPreviewControls ? <TouchableOpacity style={styles.dangerBtn} onPress={resetUploader}><Text style={styles.dangerBtnText}>Cancel All</Text></TouchableOpacity> : null}
+              </View>
+            </View>
+          ) : null}
+          {!selectedOrder && !webCameraActive && !nativeCameraActive && !imageQueue.length && !currentImage ? (
             <>
               <View style={styles.viewArea}><Text style={styles.viewAreaPlaceholder}>Select Camera or Upload to begin</Text></View>
               <View style={[styles.statusBar, statusError && styles.statusBarError]}><Text style={[styles.statusBarText, statusError && styles.statusBarErrorText]}>{status}</Text></View>
@@ -1858,7 +2038,9 @@ export default function UploaderScreen({
                   </ScrollView>
                 </View>
               ) : null}
-              {Platform.OS === 'web' && cropMode ? renderWebCropper() : webCameraActive || nativeCameraActive ? (
+              {Platform.OS === 'web' && cropMode ? renderWebCropper() : nativeCropVisible ? (
+                renderNativeInlineCropper()
+              ) : webCameraActive || nativeCameraActive ? (
                 <View style={[styles.viewArea, styles.cameraViewArea, { position: 'relative' }]}>
                   {Platform.OS === 'web' ? React.createElement('video', { ref: webVideoRef, autoPlay: true, playsInline: true, onClick: captureWebFrame, style: { width: '100%', height: '100%', objectFit: 'cover' } }) : (
                     <CameraView ref={nativeCameraRef} style={styles.nativeCamera} facing="back" mode="picture" onCameraReady={() => setNativeCameraReady(true)} />
@@ -1874,7 +2056,7 @@ export default function UploaderScreen({
                     {currentImage.startsWith('data:application/pdf') ? (
                       <View style={styles.pdfPreview}><Text style={styles.pdfBadge}>PDF</Text><Text style={styles.pdfPreviewText}>PDF document ready for upload</Text></View>
                     ) : Platform.OS !== 'web' ? (
-                      <FilterImage source={{ uri: currentImage }} filters={nativeFilters} style={[styles.viewImage, { transform: [{ rotate: `${rotation}deg` }] }]} resizeMode="contain" />
+                      <FilterImage source={{ uri: currentImage }} style={[styles.viewImage, { transform: [{ rotate: `${rotation}deg` }] }]} resizeMode="contain" filters={nativeFilters} />
                     ) : (
                       <Image source={{ uri: currentImage }} style={[styles.viewImage, { transform: [{ rotate: `${rotation}deg` }] }]} resizeMode="contain" />
                     )}
@@ -1885,23 +2067,54 @@ export default function UploaderScreen({
               ) : (
                 <View style={styles.viewArea}><Text style={styles.viewAreaPlaceholder}>Select Camera or Upload to begin</Text></View>
               )}
+              {/* Native utility row: the web has no Crop/Enhance/Barcode/OCR
+                  buttons in preview (auto-scan + drag-OCR + in-cropper controls),
+                  so native keeps those actions here, below the preview. */}
+              {Platform.OS !== 'web' && !!currentImage && !cameraActive && !cropMode && !nativeCropVisible && !isPdfItem ? (
+                <View style={styles.utilityRow}>
+                  <TouchableOpacity style={styles.utilBtn} onPress={onPressCrop}><Text style={styles.utilBtnText}>Crop</Text></TouchableOpacity>
+                  <TouchableOpacity style={[styles.utilBtn, enhancePanelVisible && styles.utilBtnActive]} onPress={() => setEnhancePanelVisible((v) => !v)}><Text style={styles.utilBtnText}>Enhance</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.utilBtn} onPress={runOCR}><Text style={styles.utilBtnText}>OCR</Text></TouchableOpacity>
+                </View>
+              ) : null}
+              {/* Native enhance controls — web parity: the web renders the
+                  enhancement controls BELOW the image area (inside the cropper
+                  wrapper), not under the top strip. */}
+              {Platform.OS !== 'web' && !!currentImage && !cameraActive && !cropMode && !nativeCropVisible && !isPdfItem && enhancePanelVisible ? (
+                <View style={styles.enhanceSliderPanel}>
+                  <View style={styles.nativeEnhanceButtons}>
+                    <TouchableOpacity style={styles.nativeEnhanceBtn} onPress={autoEnhance}><Text style={styles.nativeEnhanceText}>Auto</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.nativeEnhanceBtn, enhancements.greyscale && styles.nativeEnhanceBtnActive]} onPress={toggleGreyscale}><Text style={styles.nativeEnhanceText}>Greyscale</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.nativeEnhanceBtn, enhancements.bw && styles.nativeEnhanceBtnActive]} onPress={toggleBlackWhite}><Text style={styles.nativeEnhanceText}>B&amp;W Doc</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.nativeEnhanceBtn, enhancements.sharpen && styles.nativeEnhanceBtnActive]} onPress={toggleSharpen}><Text style={styles.nativeEnhanceText}>Sharpen</Text></TouchableOpacity>
+                    <TouchableOpacity style={styles.nativeEnhanceBtn} onPress={resetEnhancements}><Text style={styles.nativeEnhanceText}>Reset</Text></TouchableOpacity>
+                  </View>
+                  <View style={styles.enhanceSliderRow}>
+                    <Text style={styles.enhanceSliderLabel}>Brightness ({Number(enhancements.brightness) > 0 ? `+${enhancements.brightness}` : Number(enhancements.brightness) || 0})</Text>
+                    <TouchableOpacity style={styles.stepBtn} onPress={() => setEnhancementValue('brightness', Math.max(-50, (Number(enhancements.brightness) || 0) - 10))}><Text style={styles.stepBtnText}>-10</Text></TouchableOpacity>
+                    <TouchableOpacity style={styles.stepBtn} onPress={() => setEnhancementValue('brightness', Math.min(50, (Number(enhancements.brightness) || 0) + 10))}><Text style={styles.stepBtnText}>+10</Text></TouchableOpacity>
+                  </View>
+                  <View style={styles.enhanceSliderRow}>
+                    <Text style={styles.enhanceSliderLabel}>Contrast ({Number(enhancements.contrast) > 0 ? `+${enhancements.contrast}` : Number(enhancements.contrast) || 0})</Text>
+                    <TouchableOpacity style={styles.stepBtn} onPress={() => setEnhancementValue('contrast', Math.max(-50, (Number(enhancements.contrast) || 0) - 10))}><Text style={styles.stepBtnText}>-10</Text></TouchableOpacity>
+                    <TouchableOpacity style={styles.stepBtn} onPress={() => setEnhancementValue('contrast', Math.min(50, (Number(enhancements.contrast) || 0) + 10))}><Text style={styles.stepBtnText}>+10</Text></TouchableOpacity>
+                  </View>
+                </View>
+              ) : null}
               {Platform.OS === 'web' ? React.createElement('img', { ref: webImageRef, src: currentImage || '', style: { display: 'none' } }) : null}
               {Platform.OS !== 'web' && currentImage && !isPdfItem ? (
                 <View ref={nativeProcessingRef} pointerEvents="none" style={[styles.nativeProcessingStage, { width: nativeProcessingSize.width, height: nativeProcessingSize.height }]}>
-                  <FilterImage source={{ uri: currentImage }} filters={nativeFilters} style={styles.nativeProcessingImage} resizeMode="contain" />
+                  {/* Same filtered render as the visible preview so the captured
+                      upload bytes match what the user sees (view-shot bake). */}
+                  <FilterImage source={{ uri: currentImage }} style={styles.nativeProcessingImage} resizeMode="contain" filters={nativeFilters} />
                 </View>
               ) : null}
-              {Platform.OS !== 'web' && currentImage && !isPdfItem && !cropMode ? (
-                <View style={styles.utilityRow}>
-                  <TouchableOpacity style={[styles.utilBtn, isCompactMobile && styles.utilBtnSmall]} onPress={onPressCrop}><Text style={styles.utilBtnText}>Crop</Text></TouchableOpacity>
-                  {Platform.OS !== 'web' ? <TouchableOpacity style={[styles.utilBtn, isCompactMobile && styles.utilBtnSmall, enhancePanelVisible && styles.utilBtnActive]} onPress={() => setEnhancePanelVisible((value) => !value)}><Text style={styles.utilBtnText}>Enhance</Text></TouchableOpacity> : null}
-                  <TouchableOpacity style={[styles.utilBtn, isCompactMobile && styles.utilBtnSmall]} onPress={scanBarcode}><Text style={styles.utilBtnText}>Barcode</Text></TouchableOpacity>
-                  <TouchableOpacity style={[styles.utilBtn, isCompactMobile && styles.utilBtnSmall]} onPress={runOCR}><Text style={styles.utilBtnText}>OCR</Text></TouchableOpacity>
-                </View>
-              ) : null}
+
               {/* Web #status-bar parity: grey rounded bar below the view area */}
               <View style={[styles.statusBar, statusError && styles.statusBarError]}><Text style={[styles.statusBarText, statusError && styles.statusBarErrorText]}>{status}</Text></View>
               {isCompactMobile && !modalMode ? renderOrderPane(true) : null}
+              {/* Web #dynamic-input-area parity: placeholder until an order is selected */}
+              {!selectedOrder ? <View style={styles.dynamicInputBox}><Text style={styles.placeholder}>Select an order from the list to begin.</Text></View> : null}
               {isCompactMobile ? renderPickupCards() : renderPickupTable()}
               {isCompactMobile ? renderDataCards() : renderDataTable()}
               {isCompactMobile ? renderExistingCards() : renderExistingTable()}
@@ -1910,7 +2123,7 @@ export default function UploaderScreen({
         </ScrollView>
         {!modalMode && !isCompactMobile ? renderOrderPane(false) : null}
       </View>
-      <Modal visible={previewVisible} transparent animationType="fade" onRequestClose={() => setPreviewVisible(false)}><View style={styles.modal}><TouchableOpacity onPress={() => setPreviewVisible(false)}><Text style={styles.close}>✕ Close</Text></TouchableOpacity>{currentImage?.startsWith('data:application/pdf') ? <View style={styles.pdfLargePreview}><Text style={styles.pdfBadge}>PDF</Text><Text style={styles.pdfPreviewText}>The original PDF will be sent with this upload.</Text></View> : currentImage ? <Image source={{ uri: currentImage }} style={styles.largePreview} resizeMode="contain" /> : null}</View></Modal>
+      <Modal visible={previewVisible} transparent animationType="fade" onRequestClose={() => setPreviewVisible(false)}><View style={styles.modal}><TouchableOpacity onPress={() => setPreviewVisible(false)}><Text style={styles.close}>✕ Close</Text></TouchableOpacity>{currentImage?.startsWith('data:application/pdf') ? <View style={styles.pdfLargePreview}><Text style={styles.pdfBadge}>PDF</Text><Text style={styles.pdfPreviewText}>The original PDF will be sent with this upload.</Text></View> : currentImage ? (Platform.OS !== 'web' ? <FilterImage source={{ uri: currentImage }} style={styles.largePreview} resizeMode="contain" filters={nativeFilters} /> : <Image source={{ uri: currentImage }} style={styles.largePreview} resizeMode="contain" />) : null}</View></Modal>
       <UploadViewer visible={!!existingViewer} uri={existingViewer?.uri} title={existingViewer?.title} isPdf={existingViewer?.isPdf} onClose={() => setExistingViewer(null)} />
 
       {/* ── Native live barcode/QR scanner (expo-camera) ── */}
@@ -1923,49 +2136,14 @@ export default function UploaderScreen({
           <CameraView
             style={styles.scanner}
             facing="back"
-            barcodeScannerSettings={{ barcodeTypes: ['qr', 'code128', 'code39', 'ean13', 'ean8', 'upc_a', 'upc_e', 'itf14', 'datamatrix', 'pdf417', 'aztec', 'code93', 'codabar'] }}
+            barcodeScannerSettings={{ barcodeTypes: NATIVE_BARCODE_TYPES }}
             onBarcodeScanned={scanPaused ? undefined : onNativeBarcode}
           />
           <Text style={styles.scanHint}>Point the camera at a barcode or QR code. It auto-detects and fills the selected task row, matches an order, or filters the list.</Text>
         </View>
       </Modal>
 
-      {/* ── Native crop modal (web inline-cropper parity: 95% box, drag-move, corner-resize, rotate) ── */}
-      <Modal visible={nativeCropVisible} transparent animationType="fade" onRequestClose={() => setNativeCropVisible(false)}>
-        <View style={styles.cropOverlay}>
-          <View style={styles.cropCard}>
-            <View style={styles.cropHeader}>
-              <Text style={styles.cropTitle}>Crop image</Text>
-              <TouchableOpacity onPress={() => setNativeCropVisible(false)} accessibilityRole="button" accessibilityLabel="Cancel crop"><Text style={styles.cropHeaderClose}>✕</Text></TouchableOpacity>
-            </View>
-            <View style={styles.cropStage} onLayout={onCropLayout}>
-              {cropImageUri ? <FilterImage source={{ uri: cropImageUri }} filters={nativeFilters} style={styles.cropImage} resizeMode="contain" /> : null}
-              {cropRect ? (
-                <>
-                  <View style={[styles.cropMask, { top: 0, left: 0, right: 0, height: cropRect.y }]} />
-                  <View style={[styles.cropMask, { top: cropRect.y + cropRect.h, left: 0, right: 0, bottom: 0 }]} />
-                  <View style={[styles.cropMask, { top: cropRect.y, left: 0, width: cropRect.x, height: cropRect.h }]} />
-                  <View style={[styles.cropMask, { top: cropRect.y, left: cropRect.x + cropRect.w, right: 0, height: cropRect.h }]} />
-                  <View {...(cropPanResponderRef.current?.panHandlers || {})} style={[styles.cropBox, { left: cropRect.x, top: cropRect.y, width: cropRect.w, height: cropRect.h }]}>
-                    {/* pointerEvents="none" keeps the box as the touch target so
-                        locationX/Y stay box-relative for corner detection */}
-                    <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleTL]} />
-                    <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleTR]} />
-                    <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleBL]} />
-                    <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleBR]} />
-                  </View>
-                </>
-              ) : null}
-            </View>
-            <View style={styles.cropButtons}>
-              <TouchableOpacity style={styles.dangerBtn} disabled={cropBusy} onPress={rotateNativeCrop}><Text style={styles.dangerBtnText}>Rotate</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.dangerBtn} disabled={cropBusy} onPress={() => runNativeOcr(cropImageUri)}><Text style={styles.dangerBtnText}>OCR</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.dangerBtn} onPress={() => setNativeCropVisible(false)}><Text style={styles.dangerBtnText}>Cancel</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.primaryBtn} disabled={cropBusy} onPress={confirmNativeCrop}><Text style={styles.primaryBtnText}>{cropBusy ? 'Cropping…' : 'Crop'}</Text></TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+
 
       {/* ── KYC type picker (web optgroups: Individual / Business) ── */}
       {renderKycTypePicker()}
@@ -2079,8 +2257,9 @@ const styles = StyleSheet.create({
   nativeEnhanceBtnActive: { backgroundColor: '#d4edda' },
   nativeEnhanceText: { color: '#1e3a5f', fontSize: 10, fontWeight: '700' },
   enhanceSliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 3 },
-  enhanceSliderLabel: { width: 72, color: '#334155', fontSize: 11, fontWeight: '700' },
-  enhanceSlider: { flex: 1, height: 32 },
+  enhanceSliderLabel: { minWidth: 110, color: '#334155', fontSize: 11, fontWeight: '700' },
+  stepBtn: { backgroundColor: '#1e3a5f', borderRadius: 4, paddingHorizontal: 12, paddingVertical: 6, marginHorizontal: 4 },
+  stepBtnText: { color: '#ffffff', fontSize: 11, fontWeight: '700' },
 
   // KYC type picker modal
   kycPickerOverlay: { flex: 1, backgroundColor: 'rgba(2,6,23,0.55)', justifyContent: 'center', padding: 24 },
@@ -2162,4 +2341,6 @@ const styles = StyleSheet.create({
   cropHandleBL: { bottom: -2, left: -2, borderBottomLeftRadius: 4 },
   cropHandleBR: { bottom: -2, right: -2, borderBottomRightRadius: 4 },
   cropButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 10 },
+  cropButtonsInline: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 10, width: '100%' },
+  inlineCropperWrap: { width: '100%', backgroundColor: '#ffffff', borderRadius: 6, padding: 6, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 10 },
 });
