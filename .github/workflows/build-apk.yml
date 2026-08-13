@@ -65,9 +65,10 @@ jobs:
       - name: Create GitHub Release & Attach APK
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.10
-          name: Release v1.0.10
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
           files: android/app/build/outputs/apk/release/*.apk
           generate_release_notes: true
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
