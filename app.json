@@ -2,7 +2,7 @@
   "expo": {
     "name": "Genie",
     "slug": "genie",
-    "version": "1.0.14",
+    "version": "1.1.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -20,7 +20,8 @@
         "backgroundColor": "#0f172a"
       },
       "package": "com.post4ex.geniereact",
-      "versionCode": 15,
+      "versionCode": 16,
+      "permissions": ["android.permission.POST_NOTIFICATIONS"],
       "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
@@ -36,6 +37,20 @@
         {
           "cameraPermission": "Allow Genie to use your camera to scan barcodes and QR codes and capture shipment documents."
         }
+      ],
+      "expo-ocr-kit",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Genie to capture branch and attendance GPS locations."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#9C2007"
+        }
       ]
     ],
     "updates": {
@@ -49,6 +64,6 @@
         "projectId": "87ffdf1c-f236-4171-aa31-e40df5f73966"
       }
     },
-    "runtimeVersion": "1.0.14"
+    "runtimeVersion": "1.1.1"
   }
 }

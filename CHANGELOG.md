@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.1] — 2026-08-13
+
+### Added
+- **Web Parity Major Feature Release**: 10 brand-new native React Screens matching full web platform functionality:
+  - `CalculatorScreen.js` — Shipping rate calculator & volume converter (`calc.html`).
+  - `CalendarScreen.js` — Operational calendar & holiday schedule (`calendar.html`).
+  - `ComplaintScreen.js` — Customer service ticket and dispute manager (`complaint.html`).
+  - `DocsScreen.js` — System documentation and user guides (`docs.html`).
+  - `InvoiceScreen.js` — Billing invoice generator and statement viewer (`invoice.html`).
+  - `MemosScreen.js` — Internal branch announcements and circulars (`memos.html`).
+  - `PincodeScreen.js` — Serviceability pin code lookup engine (`Pincode.html`).
+  - `ServicesScreen.js` — Carrier services directory (`services.html`).
+  - `VaultScreen.js` — Secure document storage vault (`vault.html`).
+  - `ZipFinderScreen.js` — International postal code & zone finder (`zipfinder.html`).
+- **Native Push & System Notifications** (`core/native-notifications.js`): Integrated native Expo notification handling.
+- **Document Config & Validation Engines** (`utils/native-docs-config.js`, `utils/native-docs-validation.js`): Rules engine for document verification.
+
+### Changed
+- `version` bumped to `1.1.1`.
+- `versionCode` bumped to `16`.
+- `runtimeVersion` updated to `1.1.1`.
+
+---
+
 ## [1.0.14] — 2026-08-12
 
 ### Added

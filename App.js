@@ -34,6 +34,7 @@ import {
 import { fullSync, pullDeltaSince, fetchAllBusinessLayers } from './core/sync';
 import { SSEListener } from './core/sse';
 import { auditAndReconcile } from './core/reconcile';
+import { configureNativeNotifications, presentNativeNotification } from './core/native-notifications';
 
 import Header from './components/Header';
 import Footer from './components/Footer';
@@ -44,6 +45,16 @@ import DashboardScreen from './screens/DashboardScreen';
 import OrdersScreen from './screens/OrdersScreen';
 import BookOrderScreen from './screens/BookOrderScreen';
 import TrackingScreen from './screens/TrackingScreen';
+import PincodeScreen from './screens/PincodeScreen';
+import CalculatorScreen from './screens/CalculatorScreen';
+import ZipFinderScreen from './screens/ZipFinderScreen';
+import ComplaintScreen from './screens/ComplaintScreen';
+import CalendarScreen from './screens/CalendarScreen';
+import MemosScreen from './screens/MemosScreen';
+import InvoiceScreen from './screens/InvoiceScreen';
+import DocsScreen from './screens/DocsScreen';
+import VaultScreen from './screens/VaultScreen';
+import ServicesScreen from './screens/ServicesScreen';
 import UploaderScreen from './screens/UploaderScreen';
 import AdminScreen from './screens/AdminScreen';
 import NotificationsPanel from './components/NotificationsPanel';
@@ -51,7 +62,7 @@ import NotificationsPanel from './components/NotificationsPanel';
 function MainApp() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState('');
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'orders' | 'book' | 'track' | 'uploader'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'orders' | 'book' | 'track' | 'pincode' | 'calc' | 'zipfinder' | 'complaint' | 'uploader'
 
   const [orders, setOrders] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -207,6 +218,7 @@ function MainApp() {
         sessionExpiresAtRef.current = Number(saved.sessionExpiresAt || sessionExpiresAtRef.current || 0);
         await reloadLocalState();
         startSyncAndSSE(saved.token);
+        configureNativeNotifications().catch(() => {});
         loadNotifications(true);
       }
     })();
@@ -526,7 +538,12 @@ function MainApp() {
       // Web layout.js parity: store into NOTIFICATIONS sheet
       const notif = payload?.data;
       const nid = notif?.NOTIF_ID || payload?.key;
-      if (notif && nid) await putSheet('NOTIFICATIONS', { [nid]: { ...notif, IS_READ: false } });
+      if (notif && nid) {
+        await putSheet('NOTIFICATIONS', { [nid]: { ...notif, IS_READ: false } });
+        // Web uses the service worker for OS alerts; native uses the Expo
+        // notification channel while the same event remains in the panel.
+        presentNativeNotification({ ...notif, IS_READ: false }).catch(() => {});
+      }
       await loadNotifications(false);
       return;
     }
@@ -777,6 +794,7 @@ function MainApp() {
     // it in the background. This is the fast relogin/offline behavior.
     await reloadLocalState();
     startSyncAndSSE(jwtToken);
+    configureNativeNotifications().catch(() => {});
   };
 
   const handleLogout = async () => {
@@ -1108,6 +1126,24 @@ function MainApp() {
         {activeTab === 'track' && (
           <TrackingScreen token={token} apiBase={API_BASE} orders={orders} shipmentsMap={shipmentsMap} />
         )}
+        {activeTab === 'pincode' && <PincodeScreen />}
+        {activeTab === 'calc' && (
+          <CalculatorScreen
+            b2bList={b2bList}
+            modesMap={modesMap}
+            carriersMap={carriersMap}
+            ratesMap={ratesMap}
+            branchesMap={branchesMap}
+          />
+        )}
+        {activeTab === 'zipfinder' && <ZipFinderScreen />}
+        {activeTab === 'complaint' && <ComplaintScreen />}
+        {activeTab === 'calendar' && <CalendarScreen token={token} apiBase={API_BASE} />}
+        {activeTab === 'memos' && <MemosScreen token={token} apiBase={API_BASE} user={user} />}
+        {activeTab === 'invoice' && <InvoiceScreen orders={orders} b2bList={b2bList} user={user} />}
+        {activeTab === 'docs' && <DocsScreen orders={orders} b2bList={b2bList} user={user} />}
+        {activeTab === 'vault' && <VaultScreen token={token} apiBase={API_BASE} user={user} />}
+        {activeTab === 'services' && <ServicesScreen onNavigate={setActiveTab} />}
         {activeTab === 'uploader' && (
           <UploaderScreen
             orders={orders}

@@ -70,6 +70,30 @@ export function getPincodeCount() {
     return PINCODE.size;
 }
 
+export async function searchCity(city) {
+    const query = String(city || '').trim();
+    if (query.length < 3) return [];
+
+    try {
+        const res = await fetch(`https://api.postalpincode.in/postoffice/${encodeURIComponent(query)}`);
+        const data = await res.json();
+        const offices = data?.[0]?.Status === 'Success' && Array.isArray(data[0].PostOffice)
+            ? data[0].PostOffice
+            : [];
+        return offices.map((office) => ({
+            NAME: office.Name || office.Name,
+            PINCODE: office.Pincode,
+            DISTRICT: office.District,
+            STATE: office.State,
+            BRANCH_TYPE: office.BranchType,
+            DELIVERY_STATUS: office.DeliveryStatus,
+        }));
+    } catch (error) {
+        console.warn('City search API fallback failed:', error);
+        return [];
+    }
+}
+
 export async function searchPin(pincode) {
     const pin = String(pincode).trim();
     

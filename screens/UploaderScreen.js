@@ -1,11 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Image, Modal, Platform, ScrollView, StyleSheet,
+  Alert, Image, Modal, PanResponder, Platform, ScrollView, StyleSheet,
   Text, TextInput, TouchableOpacity, View, useWindowDimensions,
 } from 'react-native';
+import { FilterImage } from 'react-native-svg';
+import { captureRef } from 'react-native-view-shot';
+import { recognizeText } from 'expo-ocr-kit';
+import PdfPageImageModule from 'expo-pdf-page-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
+import * as DocumentPicker from 'expo-document-picker';
+import Slider from '@react-native-community/slider';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { COLORS } from '../styles/theme';
@@ -46,22 +52,6 @@ const dataUrlToCacheUri = async (dataUrl) => {
   return uri;
 };
 
-// ── Web-only DOM styles (web uploader.html parity) ─────────────────────────
-// Plain CSS objects (not StyleSheet) so they can be applied to real DOM nodes
-// created with React.createElement on the web build.
-const webTd = { border: '1px solid #ccc', padding: 8, textAlign: 'left', fontSize: 12, whiteSpace: 'nowrap', verticalAlign: 'middle' };
-const webTh = { ...webTd, backgroundColor: '#f0f0f0', fontWeight: 700, position: 'sticky', top: 0, zIndex: 2, whiteSpace: 'nowrap' };
-const webTable = { width: '100%', borderCollapse: 'collapse' };
-const webTableWrap = { width: '100%', marginTop: 15, overflowX: 'auto', maxHeight: 400, border: '1px solid #ccc', borderRadius: 4 };
-const webBtn = { padding: '8px 16px', border: '1px solid #ccc', background: '#fff', borderRadius: 4, cursor: 'pointer', fontWeight: 500, color: '#333', fontSize: '0.875rem', transition: 'background-color 0.2s, border-color 0.2s' };
-const webBtnDanger = { ...webBtn, background: '#f8d7da', borderColor: '#f5c6cb' };
-const webBtnPrimary = { ...webBtn, background: '#1e3a5f', color: '#fff', borderColor: '#1e3a5f' };
-const webInput = { padding: '6px 8px', border: '1px solid #ccc', borderRadius: 4, fontSize: '0.875rem', background: '#fff', width: '100%', minWidth: 150, boxSizing: 'border-box' };
-const webPickupTh = { padding: 10, borderBottom: '1px solid #eee', fontSize: '0.875rem', textAlign: 'left', backgroundColor: '#f8f8f8', fontWeight: 600, color: '#333', position: 'sticky', top: 0, zIndex: 1, whiteSpace: 'nowrap' };
-const webPickupTd = { padding: 10, borderBottom: '1px solid #eee', fontSize: '0.875rem', textAlign: 'left', verticalAlign: 'middle', whiteSpace: 'normal' };
-const webPickupTable = { width: '100%', borderCollapse: 'collapse' };
-const webPickupWrap = { width: '100%', marginTop: 15, border: '1px solid #e2e8f0', borderRadius: 4, backgroundColor: '#fafafa', maxHeight: 280, overflowY: 'auto' };
-
 // Web applyEnhancements() parity — the exact CSS filter string used for both
 // the cropper preview and the baked crop output. Sharpen is a preview-only
 // control in the web app and never enters the filter string.
@@ -71,6 +61,31 @@ const buildFilterString = (opts = {}) => {
   const b = Number(opts.brightness) || 0;
   const c = Number(opts.contrast) || 0;
   return `brightness(${100 + b * 2}%) contrast(${100 + c * 2}%)`;
+};
+
+// Native preview equivalent of the web CSS filters. FilterImage keeps the
+// controls live on Android/iOS without pretending that ImageManipulator has
+// unsupported brightness/contrast actions.
+const buildNativeFilters = (opts = {}) => {
+  const brightness = (Number(opts.brightness) || 0) / 100;
+  const contrast = (100 + (Number(opts.contrast) || 0) * 2) / 100;
+  const offset = 0.5 * (1 - contrast) + brightness;
+  const gray = [0.2126, 0.7152, 0.0722];
+  const matrix = opts.bw || opts.greyscale
+    ? [gray[0] * contrast, gray[1] * contrast, gray[2] * contrast, 0, offset,
+      gray[0] * contrast, gray[1] * contrast, gray[2] * contrast, 0, offset,
+      gray[0] * contrast, gray[1] * contrast, gray[2] * contrast, 0, offset,
+      0, 0, 0, 1, 0]
+    : [contrast, 0, 0, 0, offset,
+      0, contrast, 0, 0, offset,
+      0, 0, contrast, 0, offset,
+      0, 0, 0, 1, 0];
+  if (opts.bw) {
+    matrix[0] *= 1.7; matrix[1] *= 1.7; matrix[2] *= 1.7;
+    matrix[5] *= 1.7; matrix[6] *= 1.7; matrix[7] *= 1.7;
+    matrix[10] *= 1.7; matrix[11] *= 1.7; matrix[12] *= 1.7;
+  }
+  return [{ name: 'feColorMatrix', type: 'matrix', values: matrix }];
 };
 
 export default function UploaderScreen({
@@ -97,15 +112,86 @@ export default function UploaderScreen({
   const [status, setStatus] = useState('Select an order or start capture.');
   const [statusError, setStatusError] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
-  const [existingVisible, setExistingVisible] = useState(false);
   const [existingViewer, setExistingViewer] = useState(null);
   const [deletingUpload, setDeletingUpload] = useState(false);
   const [processingImage, setProcessingImage] = useState(false);
   const [enhancements, setEnhancements] = useState({ brightness: 0, contrast: 0, sharpen: false, greyscale: false, bw: false });
+  const [nativeProcessingSize, setNativeProcessingSize] = useState({ width: 1024, height: 1024 });
   const [deletedUploadIds, setDeletedUploadIds] = useState(() => new Set());
   const [submitStates, setSubmitStates] = useState({});
   const webInputRef = useRef(null);
   const sessionGenerationRef = useRef(0);
+  const [kycPickerVisible, setKycPickerVisible] = useState(false);
+  const [enhancePanelVisible, setEnhancePanelVisible] = useState(false);
+  // ── Native crop modal (web initCropper parity: 95% box, drag-move, corner resize, rotate) ──
+  const [nativeCropVisible, setNativeCropVisible] = useState(false);
+  const [cropImageUri, setCropImageUri] = useState('');
+  const [cropRect, setCropRect] = useState(null);
+  const [cropBusy, setCropBusy] = useState(false);
+  const cropRectRef = useRef(null);
+  const cropStageSizeRef = useRef(null);
+  const cropBoundsRef = useRef(null);
+  const cropGestureRef = useRef(null);
+  const cropPanResponderRef = useRef(null);
+  // Drag-to-move / corner-resize for the crop box. Refs only, so the responder
+  // never goes stale across renders.
+  if (!cropPanResponderRef.current) {
+    cropPanResponderRef.current = PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        const rect = cropRectRef.current;
+        if (!rect) return;
+        const { locationX, locationY } = evt.nativeEvent;
+        let mode = 'move';
+        const tolerance = 28;
+        const corners = [['tl', 0, 0], ['tr', rect.w, 0], ['bl', 0, rect.h], ['br', rect.w, rect.h]];
+        for (const [key, cx, cy] of corners) {
+          if (Math.abs(locationX - cx) <= tolerance && Math.abs(locationY - cy) <= tolerance) { mode = key; break; }
+        }
+        cropGestureRef.current = { mode, orig: { ...rect } };
+      },
+      onPanResponderMove: (evt) => {
+        const gesture = cropGestureRef.current;
+        const bounds = cropBoundsRef.current;
+        if (!gesture || !bounds) return;
+        const { dx, dy } = evt.nativeEvent;
+        const min = 48;
+        const minX = bounds.offsetX;
+        const minY = bounds.offsetY;
+        const maxX = bounds.offsetX + bounds.renderedW;
+        const maxY = bounds.offsetY + bounds.renderedH;
+        const rect = { ...gesture.orig };
+        if (gesture.mode === 'move') {
+          rect.x = Math.max(minX, Math.min(maxX - rect.w, gesture.orig.x + dx));
+          rect.y = Math.max(minY, Math.min(maxY - rect.h, gesture.orig.y + dy));
+        } else if (gesture.mode === 'br') {
+          rect.w = Math.max(min, Math.min(maxX - rect.x, gesture.orig.w + dx));
+          rect.h = Math.max(min, Math.min(maxY - rect.y, gesture.orig.h + dy));
+        } else if (gesture.mode === 'tl') {
+          const nx = Math.min(gesture.orig.x + gesture.orig.w - min, Math.max(minX, gesture.orig.x + dx));
+          const ny = Math.min(gesture.orig.y + gesture.orig.h - min, Math.max(minY, gesture.orig.y + dy));
+          rect.w = gesture.orig.x + gesture.orig.w - nx;
+          rect.h = gesture.orig.y + gesture.orig.h - ny;
+          rect.x = nx;
+          rect.y = ny;
+        } else if (gesture.mode === 'tr') {
+          const nx = Math.max(minX, Math.min(maxX - min, gesture.orig.x + dx));
+          rect.x = nx;
+          rect.w = Math.max(min, gesture.orig.x + gesture.orig.w - nx);
+          rect.h = Math.max(min, Math.min(maxY - rect.y, gesture.orig.h + dy));
+        } else if (gesture.mode === 'bl') {
+          const ny = Math.max(minY, Math.min(maxY - min, gesture.orig.y + dy));
+          rect.y = ny;
+          rect.h = Math.max(min, gesture.orig.y + gesture.orig.h - ny);
+          rect.w = Math.max(min, Math.min(maxX - rect.x, gesture.orig.w + dx));
+        }
+        cropRectRef.current = rect;
+        setCropRect({ ...rect });
+      },
+      onPanResponderTerminationRequest: () => false,
+    });
+  }
 
   // ── Web-parity engine state (cropper / camera / OCR / scan) ────────────────
   const [cropMode, setCropMode] = useState(false);        // web inline Cropper.js overlay
@@ -113,6 +199,9 @@ export default function UploaderScreen({
   const [webCameraActive, setWebCameraActive] = useState(false); // web getUserMedia live feed
   const [webCaptured, setWebCaptured] = useState(false);  // web 'Cancel' -> 'Done' after first capture
   const [nativeScanVisible, setNativeScanVisible] = useState(false); // expo-camera live scanner
+  const [nativeCameraActive, setNativeCameraActive] = useState(false);
+  const [nativeCameraReady, setNativeCameraReady] = useState(false);
+  const [nativeCameraCaptured, setNativeCameraCaptured] = useState(false);
   const [scanPaused, setScanPaused] = useState(false);
   const [selectedTaskIndex, setSelectedTaskIndex] = useState(null); // web pickup-row selection
   const [scanPermission, requestScanPermission] = useCameraPermissions();
@@ -124,7 +213,10 @@ export default function UploaderScreen({
   const webSelectionCanvasRef = useRef(null); // DOM canvas overlay (selection rect)
   const webImageRef = useRef(null);           // hidden <img> with natural dims / detector source
   const webVideoRef = useRef(null);           // DOM <video> live feed
+  const nativeCameraRef = useRef(null);
+  const nativeProcessingRef = useRef(null);
   const streamRef = useRef(null);             // active MediaStream
+  const pdfPageUrisRef = useRef(new Set());
   const lastScanRef = useRef(0);              // native scanner throttle
   const rotationRef = useRef(0);              // mirror for DOM OCR handlers
   const isSelectingRef = useRef(false);
@@ -150,9 +242,13 @@ export default function UploaderScreen({
     setRotation(0);
     setEnhancements({ brightness: 0, contrast: 0, sharpen: false, greyscale: false, bw: false });
     setExistingViewer(null);
-    setExistingVisible(false);
     setDeletedUploadIds(new Set());
     setSubmitStates({});
+    setKycPickerVisible(false);
+    setNativeCropVisible(false);
+    setNativeCameraActive(false);
+    setNativeCameraReady(false);
+    setNativeCameraCaptured(false);
     setUploadType(initialType || defaultType || null);
     setMobileOrderListCollapsed(Boolean(initialOrder));
     if (!initialOrder) {
@@ -201,11 +297,70 @@ export default function UploaderScreen({
     enforceRoleRestrictions,
   ), [selectedOrder, normalized, uploadMapForTasks, uploadType, effectiveHiddenTypes, role, stagedRows, enforceRoleRestrictions]);
   const currentImage = imageQueue[imageIndex] || '';
+  const nativeFilters = buildNativeFilters(enhancements);
   const parties = selectedOrder ? getOrderParties(selectedOrder, normalized.contacts) : null;
-  // PDFs can't be edited (web rasterizes them; a raw PDF here goes straight to upload)
+  // Raw PDF is only a defensive fallback; selected native PDFs are rasterized
+  // into page images before entering the queue, matching the web pipeline.
   const isPdfItem = String(currentImage || '').startsWith('data:application/pdf');
 
+  useEffect(() => {
+    let active = true;
+    if (Platform.OS === 'web' || !currentImage || isPdfItem) return undefined;
+    (async () => {
+      try {
+        const uri = await dataUrlToCacheUri(currentImage);
+        const size = await new Promise((resolve, reject) => Image.getSize(uri, (width, height) => resolve({ width, height }), reject));
+        const scale = Math.min(1024 / size.width, 1024 / size.height, 1);
+        if (active) setNativeProcessingSize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) });
+      } catch (_) {}
+    })();
+    return () => { active = false; };
+  }, [currentImage, isPdfItem]);
+
   const setMessage = (message, error = false) => { setStatus(message); setStatusError(error); };
+
+  // uploader.html loads these browser libraries before uploader.js. Expo web
+  // has no HTML script list, so load the same libraries on demand before a
+  // crop/PDF/OCR/submit operation starts.
+  const webLibrariesPromiseRef = useRef(null);
+  const loadWebScript = (src, globalName) => new Promise((resolve, reject) => {
+    if (globalThis[globalName]) { resolve(globalThis[globalName]); return; }
+    const existing = document.querySelector(`script[data-genie-uploader="${globalName}"]`);
+    if (existing) {
+      existing.addEventListener('load', () => resolve(globalThis[globalName]), { once: true });
+      existing.addEventListener('error', reject, { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.dataset.genieUploader = globalName;
+    script.onload = () => globalThis[globalName] ? resolve(globalThis[globalName]) : reject(new Error(`${globalName} did not load`));
+    script.onerror = () => reject(new Error(`Could not load ${globalName}`));
+    document.head.appendChild(script);
+  });
+  const ensureWebLibraries = () => {
+    if (Platform.OS !== 'web') return Promise.resolve();
+    if (!webLibrariesPromiseRef.current) {
+      const cropCss = document.querySelector('link[data-genie-uploader="cropper-css"]') || document.createElement('link');
+      if (!cropCss.parentNode) {
+        cropCss.rel = 'stylesheet';
+        cropCss.href = 'https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css';
+        cropCss.dataset.genieUploader = 'cropper-css';
+        document.head.appendChild(cropCss);
+      }
+      webLibrariesPromiseRef.current = Promise.all([
+        loadWebScript('https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js', 'Cropper'),
+        loadWebScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js', 'pdfjsLib'),
+        loadWebScript('https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js', 'Tesseract'),
+        loadWebScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'jspdf'),
+      ]).catch((error) => {
+        webLibrariesPromiseRef.current = null;
+        throw error;
+      });
+    }
+    return webLibrariesPromiseRef.current;
+  };
 
   // Keep DOM OCR/barcode handlers on the latest closure (web engine parity).
   // applyScanResultRef.current is refreshed right after applyScanResult's
@@ -214,28 +369,39 @@ export default function UploaderScreen({
   // ── Web Cropper lifecycle (web initCropper parity) ──────────────────────────
   useEffect(() => {
     if (Platform.OS !== 'web' || !cropMode || !currentImage) return;
-    const Cropper = globalThis.Cropper;
-    if (typeof Cropper !== 'function') {
-      setMessage('Cropper library not loaded; using center crop.', true);
-      setCropMode(false);
-      return;
-    }
     const imgEl = webCropperImgRef.current;
     if (!imgEl) return;
     if (webCropperRef.current) { webCropperRef.current.destroy(); webCropperRef.current = null; }
-    imgEl.src = currentImage;
     setEnhancements({ brightness: 0, contrast: 0, sharpen: false, greyscale: false, bw: false });
-    webCropperRef.current = new Cropper(imgEl, {
-      viewMode: 1, background: false, autoCrop: true, autoCropArea: 0.95,
-      zoomable: true, movable: true, scalable: true,
+    let timer;
+    let initialized = false;
+    let cancelled = false;
+    const initialize = () => {
+      if (cancelled || initialized || !imgEl.naturalWidth || typeof globalThis.Cropper !== 'function') return;
+      initialized = true;
+      webCropperRef.current = new globalThis.Cropper(imgEl, {
+        viewMode: 1, background: false, autoCrop: true, autoCropArea: 0.95,
+        zoomable: true, movable: true, scalable: true,
+      });
+      // web initCropper parity: auto-enhance + reveal controls after 200ms
+      timer = setTimeout(() => {
+        setEnhancements({ brightness: 10, contrast: 10, sharpen: true, greyscale: false, bw: false });
+        setEnhanceVisible(true);
+      }, 200);
+    };
+    imgEl.onload = initialize;
+    imgEl.src = currentImage;
+    ensureWebLibraries().then(() => {
+      if (cancelled) return;
+      if (imgEl.complete) initialize();
+    }).catch((error) => {
+      if (!cancelled) { setMessage(`Uploader libraries could not load: ${error.message}`, true); setCropMode(false); }
     });
-    // web initCropper parity: auto-enhance + reveal controls after 200ms
-    const timer = setTimeout(() => {
-      setEnhancements({ brightness: 10, contrast: 10, sharpen: true, greyscale: false, bw: false });
-      setEnhanceVisible(true);
-    }, 200);
+    if (imgEl.complete) initialize();
     return () => {
-      clearTimeout(timer);
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      imgEl.onload = null;
       if (webCropperRef.current) { webCropperRef.current.destroy(); webCropperRef.current = null; }
     };
   }, [cropMode, currentImage]);
@@ -265,6 +431,10 @@ export default function UploaderScreen({
   useEffect(() => () => {
     if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
     if (webCropperRef.current) { webCropperRef.current.destroy(); webCropperRef.current = null; }
+    if (Platform.OS !== 'web' && pdfPageUrisRef.current.size) {
+      PdfPageImageModule.cleanupPages([...pdfPageUrisRef.current]).catch(() => {});
+      pdfPageUrisRef.current.clear();
+    }
   }, []);
 
   // Web preview selection-OCR listeners (web onSelectionStart/Move/Up parity)
@@ -417,6 +587,53 @@ export default function UploaderScreen({
     setWebCaptured(false);
   };
 
+  const startNativeCamera = async () => {
+    if (processingImage || nativeCameraActive) return;
+    resetUploader();
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) { setMessage('Camera permission is required.', true); return; }
+    setImageQueue([]);
+    setImageIndex(0);
+    setNativeCameraReady(false);
+    setNativeCameraCaptured(false);
+    setNativeCameraActive(true);
+    setMessage('Starting camera...');
+  };
+
+  const stopNativeCamera = () => {
+    setNativeCameraActive(false);
+    setNativeCameraReady(false);
+    setNativeCameraCaptured(false);
+  };
+
+  const captureNativeFrame = async () => {
+    if (processingImage || !nativeCameraRef.current || !nativeCameraReady) {
+      setMessage('Camera is still starting…', true);
+      return;
+    }
+    if (imageQueue.length >= MAX_FILES) { setMessage(`Maximum of ${MAX_FILES} images reached.`, true); return; }
+    setProcessingImage(true);
+    try {
+      const picture = await nativeCameraRef.current.takePictureAsync({ base64: true, quality: 0.95, skipProcessing: false });
+      const dataUrl = picture?.base64 ? `data:image/jpeg;base64,${picture.base64}` : picture?.uri;
+      if (!dataUrl) throw new Error('Camera returned no image.');
+      setImageQueue((queue) => [...queue, dataUrl]);
+      setImageIndex(0);
+      setNativeCameraCaptured(true);
+      setMessage(`${imageQueue.length + 1} image(s) captured.`);
+    } catch (error) { setMessage(`Capture failed: ${error.message}`, true); }
+    finally { setProcessingImage(false); }
+  };
+
+  const doneNativeCamera = () => {
+    const firstImage = imageQueue[0];
+    stopNativeCamera();
+    if (firstImage) {
+      setImageIndex(0);
+      openNativeCrop(firstImage);
+    }
+  };
+
   const captureWebFrame = async () => {
     const video = webVideoRef.current;
     if (!video || !streamRef.current) return;
@@ -425,6 +642,7 @@ export default function UploaderScreen({
     if (!vw || !vh) { setMessage('Camera is still starting…', true); return; }
     const size = Math.min(vw, vh);
     const sx = (vw - size) / 2, sy = (vh - size) / 2;
+    const canvas = document.createElement('canvas');
     canvas.width = size; canvas.height = size;
     canvas.getContext('2d').drawImage(video, sx, sy, size, size, 0, 0, size, size);
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.95));
@@ -443,6 +661,7 @@ export default function UploaderScreen({
   const startWebCamera = async () => {
     if (processingImage) return;
     if (streamRef.current) { captureWebFrame(); return; } // 'Capture' while streaming
+    resetUploader();
     setMessage('Starting camera...');
     let opened = null;
     for (const vc of CAM_CONSTRAINTS) {
@@ -467,6 +686,35 @@ export default function UploaderScreen({
   };
 
   // ── Scan / OCR result handling (web scanBarcodeFromPreview + OCR parity) ──
+  const runNativeOcr = async (source = currentImage) => {
+    if (!source) { setMessage('No image in preview. Capture or upload an image first.', true); return; }
+    setProcessingImage(true);
+    setMessage('Running OCR…');
+    try {
+      const localUri = await dataUrlToCacheUri(source);
+      const result = await recognizeText(localUri);
+      const text = String(result?.text || '').trim();
+      const cleanText = text.replace(/\s+/g, ' ');
+      const mobiles = [...new Set(cleanText.match(/(?:\+91|91)?\s*[6-9]\d{9}/g) || [])];
+      const gsts = [...new Set(cleanText.match(/\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}/gi) || [])];
+      const pins = [...new Set(cleanText.match(/\b\d{6}\b/g) || [])];
+      if (!text) { setMessage('OCR found no text.', true); return; }
+      const candidate = text.replace(/\s+/g, '').trim();
+      const matched = normalized.orders.find((order) => String(order.REFERENCE) === candidate || String(order.AWB_NUMBER) === candidate);
+      if (matched) {
+        selectOrder(matched);
+        setMessage(`OCR matched: ${candidate}. Loading tasks...`);
+      } else if (selectedTaskIndex != null && tasks[selectedTaskIndex]?.type && tasks[selectedTaskIndex].type !== 'complete') {
+        applyScanResult(candidate);
+      } else {
+        Alert.alert('OCR extraction complete', `Mobiles: ${mobiles.length ? mobiles.join(', ') : 'None found'}\nGSTs: ${gsts.length ? gsts.join(', ') : 'None found'}\nPINs: ${pins.length ? pins.join(', ') : 'None found'}\n\nText: ${text.slice(0, 500)}`);
+        setMessage('OCR extraction complete.');
+      }
+    } catch (error) {
+      setMessage(`OCR failed: ${error.message}`, true);
+    } finally { setProcessingImage(false); }
+  };
+
   const applyScanResult = (value) => {
     const task = selectedTaskIndex != null ? tasks[selectedTaskIndex] : null;
     if (task && task.type && task.type !== 'empty' && task.type !== 'complete') {
@@ -527,11 +775,12 @@ export default function UploaderScreen({
 
   // Extract Data (OCR) — web runOcrExtraction parity (mobiles / GSTs / PINs)
   const runOcrExtraction = async () => {
-    if (Platform.OS !== 'web' || !webCropperRef.current) return;
-    if (!globalThis.Tesseract) { setMessage('OCR library not loaded.', true); return; }
+    if (Platform.OS !== 'web') return;
     setProcessingImage(true);
     setMessage('Running OCR extraction... Please wait.');
     try {
+      await ensureWebLibraries();
+      if (!webCropperRef.current) throw new Error('Cropper is not ready.');
       const extractCanvas = webCropperRef.current.getCroppedCanvas({
         minWidth: 256, minHeight: 256, maxWidth: 2048, maxHeight: 2048,
         fillColor: '#fff', imageSmoothingEnabled: true,
@@ -558,43 +807,102 @@ export default function UploaderScreen({
   };
 
   const selectImageAt = (index) => {
-    if (Platform.OS === 'web') { setImageIndex(index); setCropMode(true); }
-    else setImageIndex(index);
+    setImageIndex(index);
+    if (Platform.OS === 'web') setCropMode(true);
+    else if (imageQueue[index]) openNativeCrop(imageQueue[index]);
   };
 
   const onPressCrop = () => {
     if (Platform.OS === 'web') { setCropMode(true); return; }
-    cropCurrentImage();
+    openNativeCrop(currentImage);
   };
 
-  const cropCurrentImage = async () => {
-    if (!currentImage) return;
+  // ── Native crop modal (web initCropper parity) ─────────────────────────────
+  // autoCropArea 0.95 like the web, drag to move, corner handles to resize,
+  // Rotate (90°) applied to the source, Crop bakes + compresses the selection
+  // (mini 100 KB/1024 px, full 200 KB/2048 px) and replaces the queue item.
+  const openNativeCrop = (uri) => {
+    if (!uri) { setMessage('No image in preview. Capture or upload an image first.', true); return; }
+    setCropImageUri(uri);
+    setCropRect(null);
+    setCropBusy(false);
+    setNativeCropVisible(true);
+  };
+
+  const measureCrop = async () => {
+    const stageW = cropStageSizeRef.current?.width;
+    const stageH = cropStageSizeRef.current?.height;
+    if (!stageW || !stageH || !cropImageUri) return;
     try {
-      let cropped;
-      if (Platform.OS === 'web' && currentImage.startsWith('data:image/')) {
-        cropped = await new Promise((resolve) => {
-          const image = new globalThis.Image();
-          image.onload = () => {
-            const side = Math.min(image.naturalWidth, image.naturalHeight);
-            const canvas = document.createElement('canvas'); canvas.width = side; canvas.height = side;
-            canvas.getContext('2d').drawImage(image, (image.naturalWidth - side) / 2, (image.naturalHeight - side) / 2, side, side, 0, 0, side, side);
-            resolve(canvas.toDataURL('image/jpeg', 0.95));
-          };
-          image.onerror = () => resolve(currentImage);
-          image.src = currentImage;
-        });
-      } else if (Platform.OS !== 'web') {
-        cropped = await processNativeImage(currentImage, 0, true, 100, 1024);
-      } else {
-        setMessage('Center crop is available for image files.', true);
-        return;
-      }
-      setImageQueue((queue) => queue.map((item, index) => index === imageIndex ? cropped : item));
-      setRotation(0);
-      setMessage('Center crop applied.');
-    } catch (error) {
-      setMessage(`Crop failed: ${error.message}`, true);
+      const src = await dataUrlToCacheUri(cropImageUri);
+      const size = await new Promise((resolve, reject) => Image.getSize(src, (width, height) => resolve({ width, height }), reject));
+      const scale = Math.min(stageW / size.width, stageH / size.height);
+      const renderedW = size.width * scale;
+      const renderedH = size.height * scale;
+      const offsetX = (stageW - renderedW) / 2;
+      const offsetY = (stageH - renderedH) / 2;
+      const rectW = renderedW * 0.95;
+      const rectH = renderedH * 0.95;
+      cropBoundsRef.current = { stageW, stageH, natW: size.width, natH: size.height, renderedW, renderedH, offsetX, offsetY };
+      const rect = { x: offsetX + (renderedW - rectW) / 2, y: offsetY + (renderedH - rectH) / 2, w: rectW, h: rectH };
+      cropRectRef.current = rect;
+      setCropRect({ ...rect });
+    } catch (_) {
+      setMessage('Could not load the image for cropping.', true);
     }
+  };
+
+  const onCropLayout = (event) => {
+    cropStageSizeRef.current = { width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height };
+    measureCrop();
+  };
+
+  // Re-measure after a rotate swaps the image dimensions.
+  useEffect(() => {
+    if (nativeCropVisible && cropImageUri) measureCrop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cropImageUri, nativeCropVisible]);
+
+  const rotateNativeCrop = async () => {
+    if (cropBusy || !cropImageUri) return;
+    setCropBusy(true);
+    try {
+      const src = await dataUrlToCacheUri(cropImageUri);
+      const result = await manipulateAsync(src, [{ rotate: 90 }], { compress: 0.92, format: SaveFormat.JPEG, base64: true });
+      if (result?.base64) setCropImageUri(`data:image/jpeg;base64,${result.base64}`);
+      else setMessage('Rotate failed.', true);
+    } catch (error) { setMessage(`Rotate failed: ${error.message}`, true); }
+    finally { setCropBusy(false); }
+  };
+
+  const confirmNativeCrop = async () => {
+    if (cropBusy) return;
+    const bounds = cropBoundsRef.current;
+    const rect = cropRectRef.current;
+    if (!bounds || !rect) return;
+    setCropBusy(true);
+    try {
+      // Map the on-screen crop box back to source pixel coordinates.
+      const scaleX = bounds.natW / bounds.renderedW;
+      const scaleY = bounds.natH / bounds.renderedH;
+      let sx = (rect.x - bounds.offsetX) * scaleX;
+      let sy = (rect.y - bounds.offsetY) * scaleY;
+      let sw = rect.w * scaleX;
+      let sh = rect.h * scaleY;
+      sx = Math.max(0, Math.min(bounds.natW, sx));
+      sy = Math.max(0, Math.min(bounds.natH, sy));
+      sw = Math.max(1, Math.min(bounds.natW - sx, sw));
+      sh = Math.max(1, Math.min(bounds.natH - sy, sh));
+      const cropped = await processNativeImage(
+        cropImageUri, 0, false, modalMode ? 100 : 200, modalMode ? 1024 : 2048,
+        { originX: Math.round(sx), originY: Math.round(sy), width: Math.round(sw), height: Math.round(sh) },
+      );
+      setImageQueue((queue) => queue.map((item, index) => (index === imageIndex ? cropped : item)));
+      setRotation(0);
+      setNativeCropVisible(false);
+      setMessage('Crop applied.');
+    } catch (error) { setMessage(`Crop failed: ${error.message}`, true); }
+    finally { setCropBusy(false); }
   };
 
   const autoEnhance = () => { setEnhancements((value) => ({ ...value, brightness: 10, contrast: 10, sharpen: true, greyscale: false, bw: false })); setMessage('Auto enhancement enabled.'); };
@@ -619,8 +927,10 @@ export default function UploaderScreen({
 
   const runOCR = async () => {
     if (!currentImage) { setMessage('No image in preview. Capture or upload an image first.', true); return; }
-    if (Platform.OS !== 'web' || !globalThis.Tesseract) { setMessage('OCR is available on the web build (drag a region or tap OCR).', true); return; }
+    if (Platform.OS !== 'web') { await runNativeOcr(currentImage); return; }
     try {
+      await ensureWebLibraries();
+      if (!globalThis.Tesseract) throw new Error('OCR library did not load.');
       setMessage('Running OCR…');
       const result = await globalThis.Tesseract.recognize(currentImage, 'eng');
       const value = String(result?.data?.text || '').trim().replace(/\s+/g, ' ');
@@ -629,12 +939,60 @@ export default function UploaderScreen({
     } catch (error) { setMessage(`OCR failed: ${error.message}`, true); }
   };
 
+  // Native Upload parity: the web file input accepts image/* + application/pdf.
+  // expo-document-picker covers both on Android/iOS; native PDFs are rendered
+  // into PNG page images before entering the same queue as photographs.
+  const pickDocuments = async () => {
+    if (busy || processingImage) return;
+    const sessionGeneration = sessionGenerationRef.current;
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['image/*', 'application/pdf'],
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets?.length || sessionGeneration !== sessionGenerationRef.current) return;
+      const next = [];
+      for (const asset of result.assets) {
+        if (next.length >= MAX_FILES) break;
+        if (!asset?.uri) continue;
+        const isPdf = asset.mimeType === 'application/pdf' || /\.pdf$/i.test(asset.name || asset.uri);
+        if (isPdf) {
+          if (Platform.OS === 'web') {
+            const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+            next.push(`data:application/pdf;base64,${base64}`);
+          } else {
+            setMessage(`Rendering PDF ${asset.name || ''}...`);
+            const pages = await PdfPageImageModule.generateAllPages(asset.uri, 2);
+            pages.slice(0, MAX_FILES - next.length).forEach((page) => {
+              if (page?.uri) { pdfPageUrisRef.current.add(page.uri); next.push(page.uri); }
+            });
+          }
+        } else {
+          const dataUrl = await assetData(asset);
+          if (dataUrl) next.push(dataUrl);
+        }
+      }
+      if (sessionGeneration !== sessionGenerationRef.current) return;
+      if (!next.length) { setMessage('No valid files selected.', true); return; }
+      setImageQueue(next);
+      setImageIndex(0);
+      setRotation(0);
+      setMessage(`${next.length} file(s) loaded.`);
+      if (Platform.OS !== 'web') openNativeCrop(next[0]);
+    } catch (error) { setMessage(`Could not load file: ${error.message}`, true); }
+  };
+
   const chooseAssets = async (camera = false) => {
     if (busy || processingImage) return;
     const sessionGeneration = sessionGenerationRef.current;
     if (camera && Platform.OS === 'web') {
       // Web parity: live getUserMedia feed with click-to-capture (not a picker)
       startWebCamera();
+      return;
+    }
+    if (camera && Platform.OS !== 'web') {
+      startNativeCamera();
       return;
     }
     if (!camera && Platform.OS === 'web') {
@@ -656,6 +1014,9 @@ export default function UploaderScreen({
       setImageIndex(0);
       setRotation(0);
       setMessage(`${next.length} image(s) loaded.`);
+      // Web parity: a camera capture enters the crop flow immediately.
+      if (camera && Platform.OS !== 'web') openNativeCrop(next[0]);
+      if (camera && Platform.OS === 'web') setCropMode(true);
     } catch (error) { setMessage(`Could not load image: ${error.message}`, true); }
   };
 
@@ -678,11 +1039,13 @@ export default function UploaderScreen({
         // The browser web module rasterizes PDF pages when pdfjsLib is loaded.
         // Preserve the original PDF as a valid upload when the optional worker
         // is not present rather than silently discarding the selected file.
-        if (file.type === 'application/pdf' && globalThis.pdfjsLib?.getDocument) {
+        if (file.type === 'application/pdf') {
+          await ensureWebLibraries();
           // web handlePdfFile parity: worker CDN fallback + 2x render + JPEG 0.9
-          if (globalThis.pdfjsLib.GlobalWorkerOptions) {
+          if (globalThis.pdfjsLib?.GlobalWorkerOptions) {
             globalThis.pdfjsLib.GlobalWorkerOptions.workerSrc = globalThis.pdfjsLib.GlobalWorkerOptions.workerSrc || 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
           }
+          if (!globalThis.pdfjsLib?.getDocument) throw new Error('PDF renderer did not load.');
           const buffer = await file.arrayBuffer();
           const pdf = await globalThis.pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
           for (let pageNo = 1; pageNo <= pdf.numPages && data.length < MAX_FILES; pageNo += 1) {
@@ -703,8 +1066,18 @@ export default function UploaderScreen({
       setImageIndex(0);
       setRotation(0);
       setMessage(`${Math.min(data.length, MAX_FILES)} file(s) loaded.`);
+      // uploader.js file-input flow calls displayImage(0), which opens the
+      // inline Cropper immediately for the first selected image/page.
+      if (Platform.OS === 'web') setCropMode(true);
     } catch (error) { setMessage(`Could not process files: ${error.message}`, true); }
     finally { if (event?.target) event.target.value = ''; }
+  };
+
+  const cleanupPdfPages = () => {
+    if (Platform.OS === 'web' || !pdfPageUrisRef.current.size) return;
+    const uris = [...pdfPageUrisRef.current];
+    pdfPageUrisRef.current.clear();
+    PdfPageImageModule.cleanupPages(uris).catch(() => {});
   };
 
   const resetUploader = () => {
@@ -716,8 +1089,13 @@ export default function UploaderScreen({
       if (webCropperRef.current) { webCropperRef.current.destroy(); webCropperRef.current = null; }
       setCropMode(false);
       setEnhanceVisible(false);
+    } else {
+      stopNativeCamera();
+      cleanupPdfPages();
     }
     setNativeScanVisible(false);
+    setNativeCropVisible(false);
+    setKycPickerVisible(false);
     setSelectedTaskIndex(null);
     setImageQueue([]); setImageIndex(0); setStagedRows([]); setRowFields({}); setSubmitStates({}); setLocked(false); setRotation(0); setEnhancements({ brightness: 0, contrast: 0, sharpen: false, greyscale: false, bw: false });
     setMessage('Select an order or start capture.');
@@ -729,7 +1107,13 @@ export default function UploaderScreen({
     setDeletedUploadIds(new Set());
     setUploadType(null);
     setMobileOrderListCollapsed(true);
+    setNativeCropVisible(false);
+    setKycPickerVisible(false);
     setSelectedTaskIndex(null);
+    if (Platform.OS !== 'web') {
+      stopNativeCamera();
+      cleanupPdfPages();
+    }
     if (Platform.OS === 'web') {
       stopWebCamera();
       if (webCropperRef.current) { webCropperRef.current.destroy(); webCropperRef.current = null; }
@@ -744,20 +1128,34 @@ export default function UploaderScreen({
     setRotation(0);
     setEnhancements({ brightness: 0, contrast: 0, sharpen: false, greyscale: false, bw: false });
     setExistingViewer(null);
-    setExistingVisible(false);
     setSubmitStates({});
+    setKycPickerVisible(false);
     setMessage(`Ready. Uploading for: ${order.AWB_NUMBER || order.REFERENCE}`);
   };
 
-  const setField = (key, value) => setRowFields((current) => ({ ...current, [key]: value }));
+  // Each web pickup-table row owns its own inputs. Keeping fields keyed by the
+  // task prevents POD/receipt rows and the two KYC rows from sharing values.
+  const taskKey = (task, index = 0) => [task?.type || '', task?.ref || '', task?.customerUid || task?.docNumber || task?.awb || '', index].join('|');
+  const getTaskFields = (task, index = 0) => rowFields[taskKey(task, index)] || {};
+  const setTaskField = (task, index, key, value) => setRowFields((current) => ({
+    ...current,
+    [taskKey(task, index)]: { ...(current[taskKey(task, index)] || {}), [key]: value },
+  }));
+  const setField = (key, value) => {
+    if (selectedTaskIndex == null || !tasks[selectedTaskIndex]) return;
+    setTaskField(tasks[selectedTaskIndex], selectedTaskIndex, key, value);
+  };
 
-  const processNativeImage = async (dataUrl, degrees = 0, centerCrop = false, targetKB = 100, maxDimension = 1024) => {
+  const processNativeImage = async (dataUrl, degrees = 0, centerCrop = false, targetKB = 100, maxDimension = 1024, customCrop = null) => {
     const sourceUri = await dataUrlToCacheUri(dataUrl);
     const size = await new Promise((resolve, reject) => Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject));
-    let crop;
+    let crop = customCrop || null;
     let workingWidth = size.width;
     let workingHeight = size.height;
-    if (centerCrop) {
+    if (customCrop) {
+      workingWidth = customCrop.width;
+      workingHeight = customCrop.height;
+    } else if (centerCrop) {
       const side = Math.min(size.width, size.height);
       crop = { originX: Math.floor((size.width - side) / 2), originY: Math.floor((size.height - side) / 2), width: side, height: side };
       workingWidth = side;
@@ -782,11 +1180,24 @@ export default function UploaderScreen({
   };
 
   const prepareImageForUpload = async (dataUrl) => {
-    // Web parity (jawaS/uploader.js pick): getRotatedImage(preview, rotation) then
-    // compressImage — mini 100 KB/1024 px, full 200 KB/2048 px. Enhancements are
-    // NOT baked here; the web bakes CSS filters only at crop-confirm time.
+    // Web parity (jawaS/uploader.js pick): rotate the preview and compress it
+    // to mini 100 KB/1024 px or full 200 KB/2048 px. Native FilterImage is
+    // captured before this compression so enhancement controls affect bytes.
     try {
-      if (Platform.OS !== 'web') return await processNativeImage(dataUrl, rotation, false, modalMode ? 100 : 200, modalMode ? 1024 : 2048);
+      if (Platform.OS !== 'web') {
+        // Capture the same native FilterImage used by the preview so native
+        // brightness/contrast/greyscale/B&W adjustments are present in bytes,
+        // then run the normal size/quality compressor.
+        if (nativeProcessingRef.current && !isPdfItem) {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          const filteredBase64 = await captureRef(nativeProcessingRef.current, {
+            format: 'jpg', quality: 0.95, result: 'base64',
+            width: nativeProcessingSize.width, height: nativeProcessingSize.height,
+          });
+          if (filteredBase64) return await processNativeImage(`data:image/jpeg;base64,${filteredBase64}`, rotation, false, modalMode ? 100 : 200, modalMode ? 1024 : 2048);
+        }
+        return await processNativeImage(dataUrl, rotation, false, modalMode ? 100 : 200, modalMode ? 1024 : 2048);
+      }
       if (!String(dataUrl).startsWith('data:image/')) return dataUrl;
       const rotated = rotation ? await getRotatedImage(dataUrl, rotation) : dataUrl;
       return await compressImage(rotated, modalMode ? 100 : 200, modalMode ? 1024 : 2048);
@@ -795,13 +1206,13 @@ export default function UploaderScreen({
     }
   };
 
-  const pickTask = async (task) => {
+  const pickTask = async (task, taskIndex = tasks.indexOf(task)) => {
     if (task.type === 'empty' || task.type === 'complete' || processingImage) return;
     if (!currentImage) { setMessage('No image in preview. Capture or upload an image first.', true); return; }
     const sessionGeneration = sessionGenerationRef.current;
     setProcessingImage(true);
     try {
-      const fields = { ...rowFields, branch: selectedOrder?.BRANCH || '', code: selectedOrder?.CODE || '' };
+      const fields = { ...getTaskFields(task, taskIndex), branch: selectedOrder?.BRANCH || '', code: selectedOrder?.CODE || '' };
       const preparedImage = await prepareImageForUpload(currentImage);
       if (sessionGeneration !== sessionGenerationRef.current) return;
       const row = { ...makeUploadRow(task, fields, preparedImage), rowId: `${Date.now()}-${Math.random().toString(36).slice(2)}` };
@@ -811,13 +1222,25 @@ export default function UploaderScreen({
       setRowFields({});
       setMessage(`Added ${task.type} for ${task.ref} to the table.`);
       if (!locked) {
-        // Web pick parity: splice the used image and open the next one (or reset)
+        // Web pick parity: splice the used image and open the next one while
+        // preserving the staged submit table.
         if (imageQueue.length > 0) {
           const remaining = imageQueue.length - 1;
           const nextIndex = imageIndex < remaining ? imageIndex : 0;
           setImageQueue((q) => q.filter((_, i) => i !== imageIndex));
-          if (remaining > 0) selectImageAt(nextIndex); else resetUploader();
-        } else { resetUploader(); }
+          if (remaining > 0) {
+            selectImageAt(nextIndex);
+          } else {
+            // Keep stagedRows and the selected order alive: the web reset only
+            // clears the media preview after the last image is picked, so the
+            // submit table remains visible and usable.
+            setImageIndex(0);
+            setRotation(0);
+            setMessage(`Added ${task.type} for ${task.ref}. Review the table and submit.`);
+          }
+        } else {
+          setMessage(`Added ${task.type} for ${task.ref}. Review the table and submit.`);
+        }
       }
     } finally { setProcessingImage(false); }
   };
@@ -831,6 +1254,11 @@ export default function UploaderScreen({
     if (Platform.OS === 'web' && webCameraActive) {
       if (webCaptured && imageQueue.length > 0) doneWebCamera();
       else stopWebCamera();
+      return;
+    }
+    if (Platform.OS !== 'web' && nativeCameraActive) {
+      if (nativeCameraCaptured && imageQueue.length > 0) doneNativeCamera();
+      else stopNativeCamera();
       return;
     }
     if (locked || imageQueue.length === 0) { resetUploader(); return; }
@@ -881,6 +1309,12 @@ export default function UploaderScreen({
 
   const getJsPdfConstructor = () => Platform.OS === 'web' && typeof globalThis !== 'undefined' ? globalThis.jspdf?.jsPDF : null;
 
+  const nativeImagesAsDataUrls = async (images) => Promise.all(images.map(async (image) => {
+    if (String(image).startsWith('data:')) return image;
+    const base64 = await FileSystem.readAsStringAsync(image, { encoding: FileSystem.EncodingType.Base64 });
+    return `data:image/png;base64,${base64}`;
+  }));
+
   const submitRows = async () => {
     if (busy) return;
     if (!stagedRows.length) { setMessage('No data in the table to submit.', true); return; }
@@ -911,6 +1345,7 @@ export default function UploaderScreen({
           let contentType = firstImage.startsWith('data:application/pdf') ? 'application/pdf' : 'image/jpeg';
           const hasPdf = images.some((image) => String(image).startsWith('data:application/pdf'));
           if (images.length > 1 && hasPdf) throw new Error('PDF files cannot be bundled with other images. Submit the PDF separately.');
+          if (Platform.OS === 'web') await ensureWebLibraries();
           const Pdf = getJsPdfConstructor();
           if (images.length > 1 && Platform.OS === 'web' && !Pdf) {
             throw new Error('PDF bundling is unavailable in this web build. Please select one image or enable jsPDF.');
@@ -920,8 +1355,9 @@ export default function UploaderScreen({
             const dataUri = await createPdfFromImages(images);
             fileData = dataUri.split(',')[1]; contentType = 'application/pdf';
           } else if (images.length > 1 && Platform.OS !== 'web') {
-            const html = `<html><body style="margin:0">${images.map((image) => `<div style="page-break-after:always"><img src="${image}" style="width:100%;max-height:100%;object-fit:contain" /></div>`).join('')}</body></html>`;
-            const pdf = await Print.printToFileAsync({ html });
+            const printableImages = await nativeImagesAsDataUrls(images);
+            const html = `<html><head><style>@page{size:A4;margin:10mm}html,body{margin:0;padding:0} .page{page-break-after:always;width:190mm;height:277mm;display:flex;align-items:flex-start;justify-content:center;overflow:hidden}.page:last-child{page-break-after:auto}img{max-width:190mm;max-height:277mm;object-fit:contain}</style></head><body>${printableImages.map((image) => `<div class="page"><img src="${image}" /></div>`).join('')}</body></html>`;
+            const pdf = await Print.printToFileAsync({ html, width: 794, height: 1123, margins: { left: 38, right: 38, top: 38, bottom: 38 } });
             fileData = await FileSystem.readAsStringAsync(pdf.uri, { encoding: FileSystem.EncodingType.Base64 });
             contentType = 'application/pdf';
           }
@@ -946,7 +1382,9 @@ export default function UploaderScreen({
         // Web leaves the green rows visible briefly, then clears the table.
         setTimeout(() => {
           if (submitGeneration !== sessionGenerationRef.current) return;
-          setStagedRows([]); setSubmitStates({}); setMessage('Table cleared.');
+          setStagedRows([]); setSubmitStates({});
+          cleanupPdfPages();
+          setMessage('Table cleared.');
         }, 2000);
         onRefresh?.();
       }
@@ -979,290 +1417,501 @@ export default function UploaderScreen({
               return <TouchableOpacity key={order.REFERENCE} style={[styles.orderItem, selectedOrder?.REFERENCE === order.REFERENCE && styles.orderSelected]} onPress={() => selectOrder(order)}><Text style={styles.orderAwb}>{order.AWB_NUMBER || order.REFERENCE}</Text><Text style={styles.orderParties}>{party.consignorName} → {party.consigneeName}</Text><Text style={styles.orderMeta}>{order.DEST_CITY || 'N/A'} · {displayDate(order.ORDER_DATE)}</Text></TouchableOpacity>;
             })}
             {!visibleOrders.length ? <Text style={styles.emptyText}>No matching orders found.</Text> : null}
-            {visibleOrders.length >= 1 && <TouchableOpacity style={styles.loadMore} onPress={() => setDisplayDays((value) => value + 90)}><Text style={styles.loadMoreText}>{Platform.OS === 'web' ? `Load More (${visibleOrders.length} / ${totalOrders})` : 'Load More (+90 days)'}</Text></TouchableOpacity>}
+            {visibleOrders.length > 0 && visibleOrders.length < totalOrders && <TouchableOpacity style={styles.loadMore} onPress={() => setDisplayDays((value) => value + 90)}><Text style={styles.loadMoreText}>{Platform.OS === 'web' ? `Load More (${visibleOrders.length} / ${totalOrders})` : 'Load More (+90 days)'}</Text></TouchableOpacity>}
           </ScrollView>
         </>
       ) : null}
     </View>
   );
 
-  const renderTask = (task, index) => {
-    if (task.type === 'empty' || task.type === 'complete') return <Text key={`${task.type}-${index}`} style={task.type === 'complete' ? styles.completeTask : styles.emptyTask}>{task.message}</Text>;
-    const fields = task.type === 'KYC'
-      ? [
-        ['kycNumber', 'KYC Number', 'numeric'],
-        ['kycType', 'KYC Type', 'default'],
-      ]
-      : task.type === 'Product'
-        ? [['remark', 'Remark', 'default']]
-        : task.type === 'MultiBox'
-          ? [['childAwb', 'Child AWB', 'default']]
-          : [['status', 'Status', 'default']];
-    const blocked = task.type === 'KYC' && fields[0] && !rowFields.kycNumber;
+  // ── Unified web-mobile tables (render on EVERY platform — web + native) ────
+  // These mirror the web mini-uploader tables (TYPE/REFERENCE/DETAILS/INPUT/
+  // ACTION pickup table, staged data table, existing-uploads table). Rows are
+  // laid out with fixed column widths inside a horizontal ScrollView, exactly
+  // like the web tables overflow on a phone.
+  const tableHeaderCell = (label, width, hidden = false) => (
+    <Text key={label} style={[styles.tblTh, { width }, hidden && styles.tblHidden]}>{label}</Text>
+  );
+
+  const renderPickupTable = () => {
+    if (!tasks.length) return null;
+    const headers = ['TYPE', 'REFERENCE', 'DETAILS', 'INPUT', 'ACTION'];
+    const widths = [72, 128, 148, 208, 78];
     return (
-      <View key={`${task.type}-${index}`} style={styles.taskCard}>
-        <View style={styles.taskHeading}>
-          <Text style={styles.taskType}>{task.type}</Text>
-          <Text style={styles.taskRef}>{task.ref}{task.awb ? ` · ${task.awb}` : ''}</Text>
-        </View>
-        {task.customerName ? <Text style={styles.taskHint}>{task.customerName} · UID: {task.customerUid}</Text> : null}
-        {fields.map(([key, label, kind]) => kind === 'default' ? (
-          <TextInput key={key} style={styles.field} placeholder={`${label}${task.defaultValue ? ` (${task.defaultValue})` : ''}`} value={rowFields[key] || ''} onChangeText={(value) => setField(key, value)} />
-        ) : (
-          <TextInput key={key} style={styles.field} placeholder={label} keyboardType="default" value={rowFields[key] || ''} onChangeText={(value) => setField(key, value)} />
-        ))}
-        {task.type === 'KYC' ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.kycOptions}>
-            {KYC_OPTIONS.map((option) => <TouchableOpacity key={option} style={[styles.optionChip, rowFields.kycType === option && styles.optionChipActive]} onPress={() => setField('kycType', option)}><Text style={[styles.optionText, rowFields.kycType === option && styles.optionTextActive]}>{option}</Text></TouchableOpacity>)}
-          </ScrollView>
-        ) : null}
-        <TouchableOpacity style={[styles.pickButton, (blocked || processingImage) && styles.disabled]} disabled={blocked || processingImage} onPress={() => pickTask(task)}><Text style={styles.pickButtonText}>{processingImage ? 'Processing…' : 'Pick current image'}</Text></TouchableOpacity>
+      <View style={[styles.tblWrap, styles.pickupTblWrap]}>
+        <ScrollView horizontal showsHorizontalScrollIndicator>
+          <View>
+            <View style={styles.tblHeaderRow}>{headers.map((h, i) => tableHeaderCell(h, widths[i]))}</View>
+            {tasks.map((task, index) => {
+              if (task.type === 'empty' || task.type === 'complete') {
+                return <Text key={`${task.type}-${index}`} style={[styles.tblMessage, task.type === 'complete' && styles.tblMessageOk]}>{task.message}</Text>;
+              }
+              let details = 'Status';
+              if (task.type === 'KYC') details = task.customerName || '';
+              else if (task.type === 'Product') details = `Doc: ${task.docNumber || 'N/A'} (${task.docType || 'N/A'})`;
+              else if (task.type === 'MultiBox') details = 'Child AWB';
+              const inputKey = task.type === 'Product' ? 'remark' : task.type === 'MultiBox' ? 'childAwb' : 'status';
+              const placeholder = task.type === 'POD' ? 'Delivered (default)' : task.type === 'Reciept' ? 'Booked (default)' : task.type === 'Product' ? 'PAPERS UPLOADED (default)' : `Enter Child AWB (default: ${task.awb || ''})`;
+              const selected = selectedTaskIndex === index;
+              const fields = getTaskFields(task, index);
+              return (
+                <TouchableOpacity key={`${task.type}-${index}`} style={[styles.tblRow, selected && styles.tblRowSelected]} activeOpacity={0.75} onPress={() => setSelectedTaskIndex(index)}>
+                  <Text style={[styles.tblCell, { width: 72 }]}>{task.type}</Text>
+                  <Text style={[styles.tblCell, { width: 128 }]}>{task.type === 'MultiBox' ? `${task.ref} / ${task.awb || ''}` : task.ref}</Text>
+                  <Text style={[styles.tblCell, { width: 148 }]}>{details}</Text>
+                  <View style={[styles.tblCell, { width: 208 }]}>
+                    {task.type === 'KYC' ? (
+                      <View style={styles.kycCell}>
+                        <TextInput style={styles.tblInput} placeholder="KYC Number" placeholderTextColor="#94a3b8" value={fields.kycNumber || ''} onFocus={() => setSelectedTaskIndex(index)} onChangeText={(value) => setTaskField(task, index, 'kycNumber', value)} />
+                        <TouchableOpacity style={styles.kycSelect} onPress={() => { setSelectedTaskIndex(index); setKycPickerVisible(true); }}>
+                          <Text style={styles.kycSelectText} numberOfLines={1}>{fields.kycType || KYC_OPTIONS[0]}</Text>
+                          <Text style={styles.kycSelectChevron}>▾</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <TextInput style={styles.tblInput} placeholder={placeholder} placeholderTextColor="#94a3b8" value={fields[inputKey] || ''} onFocus={() => setSelectedTaskIndex(index)} onChangeText={(value) => setTaskField(task, index, inputKey, value)} />
+                    )}
+                  </View>
+                  <TouchableOpacity style={[styles.pickCellBtn, processingImage && styles.disabled]} disabled={processingImage} onPress={() => pickTask(task, index)}>
+                    <Text style={styles.pickCellText}>{processingImage ? 'Picking...' : 'Pick'}</Text>
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </ScrollView>
       </View>
     );
   };
 
-  // ── Web pickup table (web renderDynamicInputs parity: TYPE/REFERENCE/DETAILS/INPUT/ACTION) ──
-  const renderWebPickupTable = () => {
-    if (!tasks.length) return null;
-    const rows = tasks.map((task, index) => {
-      if (task.type === 'empty' || task.type === 'complete') {
-        return React.createElement('tr', { key: `${task.type}-${index}` }, React.createElement('td', { colSpan: 5, style: task.type === 'complete' ? { textAlign: 'center', padding: 15, color: '#15803d', fontWeight: 700 } : { textAlign: 'center', padding: 15, color: '#888' } }, task.message));
-      }
-      let details = 'Status';
-      if (task.type === 'KYC') details = task.customerName || '';
-      else if (task.type === 'Product') details = `Doc: ${task.docNumber || 'N/A'} (${task.docType || 'N/A'})`;
-      else if (task.type === 'MultiBox') details = 'Child AWB';
-      const inputCell = task.type === 'KYC'
-        ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 5 } },
-            React.createElement('input', { type: 'text', style: webInput, placeholder: 'KYC Number', value: rowFields.kycNumber || '', onChange: (e) => setField('kycNumber', e.target.value) }),
-            React.createElement('select', { style: webInput, value: rowFields.kycType || KYC_OPTIONS[0], onChange: (e) => setField('kycType', e.target.value) },
-              KYC_OPTION_GROUPS.map((group) => React.createElement('optgroup', { key: group.label, label: group.label },
-                group.options.map((option) => React.createElement('option', { key: option, value: option }, option))
-              ))
-            )
-          )
-        : (() => {
-          const placeholder = task.type === 'POD' ? 'Delivered (default)' : task.type === 'Reciept' ? 'Booked (default)' : task.type === 'Product' ? 'PAPERS UPLOADED (default)' : `Enter Child AWB (default: ${task.awb || ''})`;
-          const key = task.type === 'Product' ? 'remark' : task.type === 'MultiBox' ? 'childAwb' : 'status';
-          return React.createElement('input', { type: 'text', style: webInput, placeholder, value: rowFields[key] || '', onChange: (e) => setField(key, e.target.value) });
-        })();
-      const cells = [
-        React.createElement('td', { key: 'type', style: webPickupTd }, task.type),
-        React.createElement('td', { key: 'ref', style: webPickupTd }, task.type === 'MultiBox' ? `${task.ref} / ${task.awb || ''}` : task.ref),
-        React.createElement('td', { key: 'details', style: webPickupTd }, details),
-        React.createElement('td', { key: 'input', style: webPickupTd }, inputCell),
-        React.createElement('td', { key: 'action', style: webPickupTd },
-          React.createElement('button', { style: { ...webBtnDanger, fontSize: '0.8rem' }, disabled: processingImage, onClick: () => pickTask(task) }, processingImage ? 'Picking...' : 'Pick')
-        ),
-      ];
-      return React.createElement('tr', {
-        key: `${task.type}-${index}`,
-        onClick: () => setSelectedTaskIndex(index),
-        style: selectedTaskIndex === index ? { backgroundColor: '#e0e7ff', fontWeight: 600 } : {},
-      }, cells);
-    });
-    return React.createElement('div', { style: webPickupWrap },
-      React.createElement('table', { style: webPickupTable },
-        React.createElement('thead', null, React.createElement('tr', null, ['TYPE', 'REFERENCE', 'DETAILS', 'INPUT', 'ACTION'].map((h) => React.createElement('th', { key: h, style: webPickupTh }, h)))),
-        React.createElement('tbody', null, rows)
-      )
+  const renderDataTable = () => {
+    if (!stagedRows.length) return null;
+    const headers = ['STATUS', 'REFERENCE / AWB', 'CUSTOMER / KYC INFO', 'DOCUMENT INFO', 'ACTION'];
+    const widths = [150, 190, 210, 190, 92];
+    return (
+      <>
+      <View style={styles.tblWrap}>
+        <ScrollView horizontal showsHorizontalScrollIndicator>
+          <View>
+            <View style={styles.tblHeaderRow}>{headers.map((h, i) => tableHeaderCell(h, widths[i]))}</View>
+            {stagedRows.map((row, index) => {
+              const detail = describeStagedRow(row);
+              const state = submitStates[stagedRowKey(row, index)];
+              const grouped = !!bundleKey(row);
+              const statusText = grouped
+                ? `${detail.type} (${detail.imageCount} image${detail.imageCount > 1 ? 's' : ''})`
+                : `${detail.type}${detail.status ? ` - ${detail.status}` : ''}`;
+              const images = row.images?.length ? row.images : [row.imageData];
+              const refLines = detail.refAwb.split('·');
+              const kycLines = detail.customerKyc ? detail.customerKyc.split('·') : ['N/A'];
+              const docLines = detail.docInfo ? detail.docInfo.split('·') : ['N/A'];
+              return (
+                <View key={stagedRowKey(row, index)} style={[styles.tblRow, state === 'success' && styles.tblRowSuccess, state === 'error' && styles.tblRowError]}>
+                  <Text style={[styles.tblCell, { width: 150 }]}>{statusText}</Text>
+                  <View style={[styles.tblCell, { width: 190 }]}>{refLines.map((line, i) => <Text key={i} style={styles.tblCellLine}>{line}</Text>)}</View>
+                  <View style={[styles.tblCell, { width: 210 }]}>{kycLines.map((line, i) => <Text key={i} style={styles.tblCellLine}>{line}</Text>)}</View>
+                  <View style={[styles.tblCell, { width: 190 }]}>{docLines.map((line, i) => <Text key={i} style={styles.tblCellLine}>{line}</Text>)}</View>
+                  <TouchableOpacity style={styles.previewCellBtn} onPress={() => setExistingViewer({ uri: images[0], title: `${detail.type} — staged`, isPdf: false })}><Text style={styles.previewCellText}>Preview</Text></TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        </ScrollView>
+      </View>
+      <View style={styles.tblActions}>
+        <TouchableOpacity style={styles.tblDangerBtn} onPress={deleteLastStagedRow}><Text style={styles.tblDangerText}>Delete Last</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.tblDangerBtn} onPress={() => { setStagedRows([]); setSubmitStates({}); }}><Text style={styles.tblDangerText}>Clear All</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.tblPrimaryBtn} disabled={busy} onPress={submitRows}><Text style={styles.tblPrimaryText}>{busy ? 'Submitting...' : 'Submit'}</Text></TouchableOpacity>
+      </View>
+      </>
     );
   };
 
-  // ── Web staged data table (STATUS/REFERENCE/CUSTOMER-KYC/DOC INFO/ACTION) ──
-  const renderWebDataTable = () => {
-    const rows = stagedRows.map((row, index) => {
-      const detail = describeStagedRow(row);
-      const state = submitStates[stagedRowKey(row, index)];
-      const images = row.images?.length ? row.images : [row.imageData];
-      const grouped = !!bundleKey(row);
-      const statusText = grouped
-        ? `${detail.type} (${detail.imageCount} image${detail.imageCount > 1 ? 's' : ''})`
-        : `${detail.type}${detail.status ? ` - ${detail.status}` : ''}`;
-      const br = (value) => ({ __html: String(value || '').replace(/·/g, '<br>') });
-      return React.createElement('tr', { key: `${detail.type}-${index}`, style: state === 'success' ? { backgroundColor: '#d4edda' } : state === 'error' ? { backgroundColor: '#f8d7da' } : {} },
-        React.createElement('td', { style: webTd }, statusText),
-        React.createElement('td', { style: webTd, dangerouslySetInnerHTML: br(detail.refAwb) }),
-        React.createElement('td', { style: webTd }, detail.customerKyc ? React.createElement('span', { dangerouslySetInnerHTML: br(detail.customerKyc) }) : 'N/A'),
-        React.createElement('td', { style: webTd }, detail.docInfo ? React.createElement('span', { dangerouslySetInnerHTML: br(detail.docInfo) }) : 'N/A'),
-        React.createElement('td', { style: webTd }, React.createElement('button', { style: webBtn, onClick: () => setExistingViewer({ uri: images[0], title: `${detail.type} — staged`, isPdf: false }) }, 'Preview')),
-        React.createElement('td', { style: { display: 'none' } }, `Branch: ${row.branch}, Code: ${row.code}`),
-      );
-    });
-    return React.createElement('div', { style: webTableWrap },
-      React.createElement('table', { style: webTable },
-        React.createElement('thead', null, React.createElement('tr', null, ['STATUS', 'REFERENCE / AWB', 'CUSTOMER / KYC INFO', 'DOCUMENT INFO', 'ACTION', 'BRANCH / CODE'].map((h, i) => React.createElement('th', { key: i, style: i === 5 ? { ...webTh, display: 'none' } : webTh }, h)))),
-        React.createElement('tbody', null, rows)
-      )
-    );
-  };
-
-  // ── Web existing-uploads table (web renderExistingUploadsForOrder parity) ──
-  const renderWebExistingTable = () => {
+  const renderExistingTable = () => {
     if (!existingUploads.length) return null;
-    const rows = existingUploads.map((upload, index) => {
-      const uri = resolveUploadUri(upload.FILE_URL || upload.url, apiBase);
-      const canDelete = (ROLE_LEVELS[role] || 0) >= ROLE_LEVELS.MANAGER;
-      const refAwb = upload.UPLOAD_TYPE === 'MultiBox'
-        ? `Ref: ${upload.REFERENCE || upload.AWB_NUMBER} <br> Child: ${upload.CHILD_AWB}`
-        : `Ref: ${upload.REFERENCE || ''} <br> AWB: ${upload.AWB_NUMBER || ''}`;
-      const customerKyc = upload.UPLOAD_TYPE === 'KYC'
-        ? `Cust: ${parties?.consignorName || 'N/A'} <br> UID: ${upload.CUSTOMER_UID || ''} <br> KYC: ${upload.KYC_NUMBER} (${upload.KYC_TYPE})`
-        : '';
-      const docInfo = upload.UPLOAD_TYPE === 'Product'
-        ? `Doc: ${upload.DOC_NUMBER || ''} <br> Type: ${upload.DOC_TYPE || ''} <br> Remark: ${upload.STATUS_REMARK || ''}`
-        : '';
-      let statusText = `${upload.UPLOAD_TYPE || 'N/A'} - ${upload.STATUS_REMARK || ''}`;
-      if (upload.UPLOAD_TYPE === 'Reciept' && !upload.STATUS_REMARK) statusText = 'Reciept - Booked';
-      if (upload.UPLOAD_TYPE === 'POD' && !upload.STATUS_REMARK) statusText = 'POD - Delivered';
-      const html = (value) => ({ __html: value });
-      return React.createElement('tr', { key: upload.UPLOAD_UID || index },
-        React.createElement('td', { style: webTd }, statusText),
-        React.createElement('td', { style: webTd, dangerouslySetInnerHTML: html(refAwb) }),
-        React.createElement('td', { style: webTd }, customerKyc ? React.createElement('span', { dangerouslySetInnerHTML: html(customerKyc) }) : 'N/A'),
-        React.createElement('td', { style: webTd }, docInfo ? React.createElement('span', { dangerouslySetInnerHTML: html(docInfo) }) : 'N/A'),
-        React.createElement('td', { style: webTd },
-          uri ? React.createElement('button', { style: webBtn, onClick: () => setExistingViewer({ uri, title: `${upload.UPLOAD_TYPE || 'Upload'} — ${selectedOrder?.AWB_NUMBER || selectedOrder?.REFERENCE}`, isPdf: isPdfUpload(upload) }) }, 'Preview') : null,
-          canDelete ? React.createElement('button', { style: { ...webBtnDanger, marginLeft: 4 }, onClick: () => deleteExistingUpload(upload) }, 'Delete') : null
-        ),
-        React.createElement('td', { style: { display: 'none' } }, `Branch: ${upload.BRANCH}, Code: ${upload.CODE}`),
-      );
-    });
-    return React.createElement('div', { style: { display: 'block', marginTop: 25, borderTop: '2px solid #1E3A8A', paddingTop: 10 } },
-      React.createElement('h3', { style: { fontSize: 18, fontWeight: 600, marginBottom: 10, color: '#1E3A8A' } }, 'Existing Uploads for this Order'),
-      React.createElement('div', { style: { ...webTableWrap, maxHeight: 300 } },
-        React.createElement('table', { style: webTable },
-          React.createElement('thead', null, React.createElement('tr', null, ['STATUS', 'REFERENCE / AWB', 'CUSTOMER / KYC INFO', 'DOCUMENT INFO', 'ACTION', 'BRANCH / CODE'].map((h, i) => React.createElement('th', { key: i, style: i === 5 ? { ...webTh, display: 'none' } : webTh }, h)))),
-          React.createElement('tbody', null, rows)
-        )
-      )
+    const headers = ['STATUS', 'REFERENCE / AWB', 'CUSTOMER / KYC INFO', 'DOCUMENT INFO', 'ACTION'];
+    const widths = [150, 190, 210, 190, 110];
+    const canDelete = (ROLE_LEVELS[role] || 0) >= ROLE_LEVELS.MANAGER;
+    return (
+      <View style={styles.existingSection}>
+        <Text style={styles.existingHeading}>Existing Uploads for this Order</Text>
+        <View style={styles.tblWrap}>
+          <ScrollView horizontal showsHorizontalScrollIndicator>
+            <View>
+              <View style={styles.tblHeaderRow}>{headers.map((h, i) => tableHeaderCell(h, widths[i]))}</View>
+              {existingUploads.map((upload, index) => {
+                const uri = resolveUploadUri(upload.FILE_URL || upload.url, apiBase);
+                const refAwb = upload.UPLOAD_TYPE === 'MultiBox'
+                  ? `Ref: ${upload.REFERENCE || upload.AWB_NUMBER} · Child: ${upload.CHILD_AWB}`
+                  : `Ref: ${upload.REFERENCE || ''} · AWB: ${upload.AWB_NUMBER || ''}`;
+                const customerKyc = upload.UPLOAD_TYPE === 'KYC'
+                  ? `Cust: ${parties?.consignorName || 'N/A'} · UID: ${upload.CUSTOMER_UID || ''} · KYC: ${upload.KYC_NUMBER} (${upload.KYC_TYPE})`
+                  : '';
+                const docInfo = upload.UPLOAD_TYPE === 'Product'
+                  ? `Doc: ${upload.DOC_NUMBER || ''} · Type: ${upload.DOC_TYPE || ''} · Remark: ${upload.STATUS_REMARK || ''}`
+                  : '';
+                let statusText = `${upload.UPLOAD_TYPE || 'N/A'} - ${upload.STATUS_REMARK || ''}`;
+                if (upload.UPLOAD_TYPE === 'Reciept' && !upload.STATUS_REMARK) statusText = 'Reciept - Booked';
+                if (upload.UPLOAD_TYPE === 'POD' && !upload.STATUS_REMARK) statusText = 'POD - Delivered';
+                const refLines = refAwb.split('·');
+                const kycLines = customerKyc ? customerKyc.split('·') : ['N/A'];
+                const docLines = docInfo ? docInfo.split('·') : ['N/A'];
+                return (
+                  <View key={upload.UPLOAD_UID || index} style={styles.tblRow}>
+                    <Text style={[styles.tblCell, { width: 150 }]}>{statusText}</Text>
+                    <View style={[styles.tblCell, { width: 190 }]}>{refLines.map((line, i) => <Text key={i} style={styles.tblCellLine}>{line}</Text>)}</View>
+                    <View style={[styles.tblCell, { width: 210 }]}>{kycLines.map((line, i) => <Text key={i} style={styles.tblCellLine}>{line}</Text>)}</View>
+                    <View style={[styles.tblCell, { width: 190 }]}>{docLines.map((line, i) => <Text key={i} style={styles.tblCellLine}>{line}</Text>)}</View>
+                    <View style={[styles.tblCell, { width: 110, flexDirection: 'row', gap: 4 }]}>
+                      {uri ? <TouchableOpacity style={styles.previewCellBtn} onPress={() => setExistingViewer({ uri, title: `${upload.UPLOAD_TYPE || 'Upload'} — ${selectedOrder?.AWB_NUMBER || selectedOrder?.REFERENCE}`, isPdf: isPdfUpload(upload) })}><Text style={styles.previewCellText}>Preview</Text></TouchableOpacity> : null}
+                      {canDelete ? <TouchableOpacity style={[styles.previewCellBtn, styles.previewCellBtnDanger]} onPress={() => deleteExistingUpload(upload)}><Text style={[styles.previewCellText, { color: '#b91c1c' }]}>Delete</Text></TouchableOpacity> : null}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          </ScrollView>
+        </View>
+      </View>
     );
   };
+
+  // ── Web-mobile card mode (uploader.html ≤1023px: thead hidden, each row
+  //     becomes a white card; td::before shows the label, td the value; N/A
+  //     cells are hidden; the ACTION cell is a full-width button) ────────────
+  const cardRow = (label, value, valueFlex = true) => (
+    <View style={styles.cardRow}><Text style={styles.cardLabel}>{label}</Text><Text style={[styles.cardValue, !valueFlex && styles.cardValueStatic]}>{value}</Text></View>
+  );
+
+  const renderPickupCards = () => {
+    if (!tasks.length) return null;
+    // Web parity: the pickup cards live inside #dynamic-input-area (border
+    // #e2e8f0, bg #fafafa) — the table becomes cards but the box stays.
+    return (
+      <View style={styles.dynamicInputBox}>
+        {tasks.map((task, index) => {
+          if (task.type === 'empty' || task.type === 'complete') {
+            return <Text key={`${task.type}-${index}`} style={[styles.cardMessage, task.type === 'complete' && styles.cardMessageOk]}>{task.message}</Text>;
+          }
+          let details = 'Status';
+          if (task.type === 'KYC') details = task.customerName || '';
+          else if (task.type === 'Product') details = `Doc: ${task.docNumber || 'N/A'} (${task.docType || 'N/A'})`;
+          else if (task.type === 'MultiBox') details = 'Child AWB';
+          const inputKey = task.type === 'Product' ? 'remark' : task.type === 'MultiBox' ? 'childAwb' : 'status';
+          const placeholder = task.type === 'POD' ? 'Delivered (default)' : task.type === 'Reciept' ? 'Booked (default)' : task.type === 'Product' ? 'PAPERS UPLOADED (default)' : `Enter Child AWB (default: ${task.awb || ''})`;
+          const selected = selectedTaskIndex === index;
+          const fields = getTaskFields(task, index);
+          return (
+            <TouchableOpacity key={`${task.type}-${index}`} style={[styles.card, selected && styles.cardSelected]} activeOpacity={0.8} onPress={() => setSelectedTaskIndex(index)}>
+              {cardRow('TYPE', task.type)}
+              {cardRow('REFERENCE', task.type === 'MultiBox' ? `${task.ref} / ${task.awb || ''}` : task.ref)}
+              {cardRow('DETAILS', details)}
+              <View style={styles.cardRow}>
+                <Text style={styles.cardLabel}>INPUT</Text>
+                {task.type === 'KYC' ? (
+                  <View style={[styles.kycCell, styles.cardValueFlex]}>
+                    <TextInput style={[styles.tblInput, styles.cardInput]} placeholder="KYC Number" placeholderTextColor="#94a3b8" value={fields.kycNumber || ''} onFocus={() => setSelectedTaskIndex(index)} onChangeText={(value) => setTaskField(task, index, 'kycNumber', value)} />
+                    <TouchableOpacity style={styles.kycSelect} onPress={() => { setSelectedTaskIndex(index); setKycPickerVisible(true); }}>
+                      <Text style={styles.kycSelectText} numberOfLines={1}>{fields.kycType || KYC_OPTIONS[0]}</Text>
+                      <Text style={styles.kycSelectChevron}>▾</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TextInput style={[styles.tblInput, styles.cardInput, styles.cardValueFlex]} placeholder={placeholder} placeholderTextColor="#94a3b8" value={fields[inputKey] || ''} onFocus={() => setSelectedTaskIndex(index)} onChangeText={(value) => setTaskField(task, index, inputKey, value)} />
+                )}
+              </View>
+              <TouchableOpacity style={[styles.pickBtnFull, processingImage && styles.disabled]} disabled={processingImage} onPress={() => pickTask(task, index)}>
+                <Text style={styles.pickBtnFullText}>{processingImage ? 'Picking...' : 'Pick'}</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    );
+  };
+
+  const renderDataCards = () => {
+    if (!stagedRows.length) return null;
+    // Web parity: staged cards live inside .data-table-container (border #ccc)
+    // and #table-actions sits OUTSIDE it as a sibling (web HTML order).
+    return (
+      <View style={styles.cardSection}>
+        <View style={styles.dataTableBox}>
+        {stagedRows.map((row, index) => {
+          const detail = describeStagedRow(row);
+          const state = submitStates[stagedRowKey(row, index)];
+          const grouped = !!bundleKey(row);
+          const statusText = grouped
+            ? `${detail.type} (${detail.imageCount} image${detail.imageCount > 1 ? 's' : ''})`
+            : `${detail.type}${detail.status ? ` - ${detail.status}` : ''}`;
+          const images = row.images?.length ? row.images : [row.imageData];
+          const refLines = detail.refAwb.split('·');
+          const kycLines = detail.customerKyc ? detail.customerKyc.split('·') : [];
+          const docLines = detail.docInfo ? detail.docInfo.split('·') : [];
+          return (
+            <View key={stagedRowKey(row, index)} style={[styles.card, state === 'success' && styles.cardSuccess, state === 'error' && styles.cardError]}>
+              {cardRow('STATUS', statusText)}
+              {cardRow('REFERENCE / AWB', refLines.join(' · '))}
+              {kycLines.length ? cardRow('CUSTOMER / KYC INFO', kycLines.join(' · ')) : null}
+              {docLines.length ? cardRow('DOCUMENT INFO', docLines.join(' · ')) : null}
+              <View style={[styles.cardRow, styles.cardRowLast]}>
+                <Text style={styles.cardLabel}>ACTION</Text>
+                <TouchableOpacity style={styles.v1Btn} onPress={() => setExistingViewer({ uri: images[0], title: `${detail.type} — staged`, isPdf: false })}><Text style={styles.v1BtnText}>Preview</Text></TouchableOpacity>
+              </View>
+            </View>
+          );
+        })}
+        </View>
+        <View style={[styles.tableActions, isCompactMobile && styles.tableActionsCenter]}>
+          <TouchableOpacity style={styles.dangerBtn} onPress={deleteLastStagedRow}><Text style={styles.dangerBtnText}>Delete Last</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.dangerBtn} onPress={() => { setStagedRows([]); setSubmitStates({}); }}><Text style={styles.dangerBtnText}>Clear All</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.primaryBtn} disabled={busy} onPress={submitRows}><Text style={styles.primaryBtnText}>{busy ? 'Submitting...' : 'Submit'}</Text></TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  const renderExistingCards = () => {
+    if (!existingUploads.length) return null;
+    const canDelete = (ROLE_LEVELS[role] || 0) >= ROLE_LEVELS.MANAGER;
+    return (
+      <View style={styles.existingSection}>
+        <Text style={styles.existingHeading}>Existing Uploads for this Order</Text>
+        <View style={styles.dataTableBox}>
+        {existingUploads.map((upload, index) => {
+          const uri = resolveUploadUri(upload.FILE_URL || upload.url, apiBase);
+          const refAwb = upload.UPLOAD_TYPE === 'MultiBox'
+            ? `Ref: ${upload.REFERENCE || upload.AWB_NUMBER} · Child: ${upload.CHILD_AWB}`
+            : `Ref: ${upload.REFERENCE || ''} · AWB: ${upload.AWB_NUMBER || ''}`;
+          const customerKyc = upload.UPLOAD_TYPE === 'KYC'
+            ? `Cust: ${parties?.consignorName || 'N/A'} · UID: ${upload.CUSTOMER_UID || ''} · KYC: ${upload.KYC_NUMBER} (${upload.KYC_TYPE})`
+            : '';
+          const docInfo = upload.UPLOAD_TYPE === 'Product'
+            ? `Doc: ${upload.DOC_NUMBER || ''} · Type: ${upload.DOC_TYPE || ''} · Remark: ${upload.STATUS_REMARK || ''}`
+            : '';
+          let statusText = `${upload.UPLOAD_TYPE || 'N/A'} - ${upload.STATUS_REMARK || ''}`;
+          if (upload.UPLOAD_TYPE === 'Reciept' && !upload.STATUS_REMARK) statusText = 'Reciept - Booked';
+          if (upload.UPLOAD_TYPE === 'POD' && !upload.STATUS_REMARK) statusText = 'POD - Delivered';
+          const refLines = refAwb.split('·');
+          const kycLines = customerKyc ? customerKyc.split('·') : [];
+          const docLines = docInfo ? docInfo.split('·') : [];
+          return (
+            <View key={upload.UPLOAD_UID || index} style={styles.card}>
+              {cardRow('STATUS', statusText)}
+              {cardRow('REFERENCE / AWB', refLines.join(' · '))}
+              {kycLines.length ? cardRow('CUSTOMER / KYC INFO', kycLines.join(' · ')) : null}
+              {docLines.length ? cardRow('DOCUMENT INFO', docLines.join(' · ')) : null}
+              <View style={[styles.cardRow, styles.cardRowLast]}>
+                <Text style={styles.cardLabel}>ACTION</Text>
+                <View style={styles.cardActions}>
+                  {uri ? <TouchableOpacity style={styles.v1Btn} onPress={() => setExistingViewer({ uri, title: `${upload.UPLOAD_TYPE || 'Upload'} — ${selectedOrder?.AWB_NUMBER || selectedOrder?.REFERENCE}`, isPdf: isPdfUpload(upload) })}><Text style={styles.v1BtnText}>Preview</Text></TouchableOpacity> : null}
+                  {canDelete ? <TouchableOpacity style={[styles.v1Btn, styles.v1BtnDanger]} onPress={() => deleteExistingUpload(upload)}><Text style={[styles.v1BtnText, { color: '#dc3545' }]}>Delete</Text></TouchableOpacity> : null}
+                </View>
+              </View>
+            </View>
+          );
+        })}
+        </View>
+      </View>
+    );
+  };
+
+  // ── KYC type picker (web kycOptionsHTML optgroups: Individual / Business) ──
+  const renderKycTypePicker = () => (
+    <Modal visible={kycPickerVisible} transparent animationType="fade" onRequestClose={() => setKycPickerVisible(false)}>
+      <TouchableOpacity style={styles.kycPickerOverlay} activeOpacity={1} onPress={() => setKycPickerVisible(false)}>
+        <View style={styles.kycPickerCard}>
+          <Text style={styles.kycPickerTitle}>KYC Type</Text>
+          {KYC_OPTION_GROUPS.map((group) => (
+            <View key={group.label}>
+              <Text style={styles.kycPickerGroup}>{group.label}</Text>
+              {group.options.map((option) => {
+                const pickerTask = selectedTaskIndex != null ? tasks[selectedTaskIndex] : null;
+                const pickerFields = pickerTask ? getTaskFields(pickerTask, selectedTaskIndex) : {};
+                return (
+                  <TouchableOpacity key={option} style={[styles.kycPickerOption, pickerFields.kycType === option && styles.kycPickerOptionActive]} onPress={() => { if (pickerTask) setTaskField(pickerTask, selectedTaskIndex, 'kycType', option); setKycPickerVisible(false); }}>
+                    <Text style={[styles.kycPickerOptionText, pickerFields.kycType === option && styles.kycPickerOptionTextActive]}>{option}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ))}
+          <TouchableOpacity style={styles.kycPickerCancel} onPress={() => setKycPickerVisible(false)}><Text style={styles.kycPickerCancelText}>Cancel</Text></TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
+
+  const closeWebCropper = () => {
+    if (webCropperRef.current) { webCropperRef.current.destroy(); webCropperRef.current = null; }
+    setCropMode(false);
+    setEnhanceVisible(false);
+  };
+
+  const renderWebCropper = () => (
+    <View style={styles.inlineWebCropper}>
+      <View style={styles.webCropCard}>
+        <View ref={webCropperWrapRef} style={styles.webCropArea}>
+          {React.createElement('img', { ref: webCropperImgRef, alt: 'Crop', style: { display: 'block', maxWidth: '100%' } })}
+        </View>
+        <View style={styles.webCropButtons}>
+          <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#1e3a5f' }]} onPress={() => webCropperRef.current?.rotate(90)}><Text style={styles.actionText}>Rotate</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#1e3a5f' }]} onPress={() => setEnhanceVisible((value) => !value)}><Text style={styles.actionText}>Enhance</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#007bff' }]} onPress={runOcrExtraction}><Text style={styles.actionText}>Extract Data (OCR)</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#15803d' }]} onPress={confirmWebCrop}><Text style={styles.actionText}>Crop</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.cancelButton} onPress={closeWebCropper}><Text style={styles.cancelText}>Cancel</Text></TouchableOpacity>
+        </View>
+        {enhanceVisible ? (
+          <View style={styles.webEnhanceBox}>
+            <View style={styles.webEnhanceRow}>
+              <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#1e3a5f' }]} onPress={autoEnhance}><Text style={styles.actionText}>Auto</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.actionButton, enhancements.greyscale && styles.locked]} onPress={toggleGreyscale}><Text style={styles.actionText}>Greyscale</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.actionButton, enhancements.bw && styles.locked]} onPress={toggleBlackWhite}><Text style={styles.actionText}>B&W Doc</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.actionButton, enhancements.sharpen && styles.locked]} onPress={toggleSharpen}><Text style={styles.actionText}>Sharpen</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.actionButton} onPress={resetEnhancements}><Text style={styles.actionText}>Reset</Text></TouchableOpacity>
+            </View>
+            <View style={styles.webSliderRow}><Text style={styles.webSliderLabel}>Brightness</Text>{React.createElement('input', { type: 'range', min: -50, max: 50, value: String(enhancements.brightness), onChange: (e) => setEnhancementValue('brightness', Number(e.target.value)), style: { flexGrow: 1 } })}</View>
+            <View style={styles.webSliderRow}><Text style={styles.webSliderLabel}>Contrast</Text>{React.createElement('input', { type: 'range', min: -50, max: 50, value: String(enhancements.contrast), onChange: (e) => setEnhancementValue('contrast', Number(e.target.value)), style: { flexGrow: 1 } })}</View>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+
+  const cameraActive = webCameraActive || nativeCameraActive;
+  const showPreviewControls = !!currentImage && !cameraActive && !cropMode && !nativeCropVisible;
+  const showMainControls = !cropMode && !nativeCropVisible;
 
   return (
     <View style={styles.container}>
-      <View style={styles.pageHeader}><Text style={styles.title}>Document Uploader</Text><Text style={styles.subtitle}>Web-parity POD, receipt, KYC, product and multibox uploads</Text></View>
-      {Platform.OS === 'web' ? <>{React.createElement('input', { ref: webInputRef, type: 'file', accept: 'image/*,application/pdf', multiple: true, onChange: handleWebFiles, style: { display: 'none' } })}</> : null}
-      <View style={[styles.controlsStrip, isCompactMobile && styles.controlsStripMobile, Platform.OS === 'web' && isCompactMobile && styles.controlsStripWebMobile]}>
-        {UPLOAD_TYPES.filter((type) => !effectiveHiddenTypes.has(type)).map((type) => <TouchableOpacity key={type} style={[styles.typeButton, isCompactMobile && styles.compactButton, uploadType === type && styles.typeButtonActive]} onPress={() => chooseType(type)}><Text style={[styles.typeText, uploadType === type && styles.typeTextActive]}>{type}</Text></TouchableOpacity>)}
-        <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton]} onPress={() => { if (Platform.OS === 'web') { if (webCameraActive) captureWebFrame(); else startWebCamera(); } else chooseAssets(true); }}><Text style={styles.actionText}>{webCameraActive ? 'Capture' : 'Camera'}</Text></TouchableOpacity>
-        <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton]} onPress={() => chooseAssets(false)}><Text style={styles.actionText}>Upload</Text></TouchableOpacity>
-        {currentImage || webCameraActive ? <>
-          {!isPdfItem ? <>
-            <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton]} onPress={() => setRotation((value) => (value + 90) % 360)}><Text style={styles.actionText}>Rotate</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton]} onPress={onPressCrop}><Text style={styles.actionText}>Crop</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton]} onPress={autoEnhance}><Text style={styles.actionText}>Auto</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton]} onPress={toggleGreyscale}><Text style={styles.actionText}>Gray</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton]} onPress={toggleBlackWhite}><Text style={styles.actionText}>B/W</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton, enhancements.sharpen && styles.locked]} onPress={toggleSharpen}><Text style={styles.actionText}>Sharpen</Text></TouchableOpacity>
-            {Platform.OS !== 'web' ? <>
-              <View style={[styles.enhancementInputGroup, isCompactMobile && styles.compactEnhancementInputGroup]}><Text style={styles.enhancementLabel}>B</Text><TextInput style={styles.enhancementInput} value={String(enhancements.brightness)} onChangeText={(value) => setEnhancementValue('brightness', value)} keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'default'} maxLength={3} /></View>
-              <View style={[styles.enhancementInputGroup, isCompactMobile && styles.compactEnhancementInputGroup]}><Text style={styles.enhancementLabel}>C</Text><TextInput style={styles.enhancementInput} value={String(enhancements.contrast)} onChangeText={(value) => setEnhancementValue('contrast', value)} keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'default'} maxLength={3} /></View>
-            </> : null}
-            <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton]} onPress={resetEnhancements}><Text style={styles.actionText}>Reset</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton]} onPress={scanBarcode}><Text style={styles.actionText}>Barcode</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton]} onPress={runOCR}><Text style={styles.actionText}>OCR</Text></TouchableOpacity>
-          </> : null}
-          <TouchableOpacity style={[styles.actionButton, isCompactMobile && styles.compactButton, locked && styles.locked]} onPress={() => setLocked((value) => !value)}><Text style={styles.actionText}>{locked ? 'Unlock' : 'Lock'}</Text></TouchableOpacity>
-          <TouchableOpacity style={[styles.cancelButton, isCompactMobile && styles.compactButton]} onPress={cancelCurrentImage}><Text style={styles.cancelText}>{webCameraActive && webCaptured ? 'Done' : 'Cancel'}</Text></TouchableOpacity>
-          <TouchableOpacity style={[styles.cancelButton, isCompactMobile && styles.compactButton]} onPress={resetUploader}><Text style={styles.cancelText}>Cancel All</Text></TouchableOpacity>
-        </> : null}
+      <View style={styles.pageHeader}>
+        <View style={styles.pageHeaderRow}>
+          <View style={styles.pageHeaderTitles}><Text style={styles.title}>Document Uploader</Text><Text style={styles.subtitle}>POD, receipt, KYC, product and multibox uploads</Text></View>
+          {modalMode && onClose ? <TouchableOpacity style={styles.headerClose} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close uploader"><Text style={styles.headerCloseText}>✕</Text></TouchableOpacity> : null}
+        </View>
       </View>
-      <Text style={[styles.status, statusError && styles.statusError]}>{status}</Text>
-      {modalMode && onClose ? <TouchableOpacity style={styles.modalCloseButton} onPress={onClose}><Text style={styles.modalCloseText}>✕ Close</Text></TouchableOpacity> : null}
-      <View style={[styles.body, isCompactMobile && styles.bodyMobile, modalMode && styles.bodyModal]}>
-        {!modalMode && !isCompactMobile ? renderOrderPane(false) : null}
-        <ScrollView nestedScrollEnabled={isCompactMobile} style={styles.workPane} contentContainerStyle={styles.workContent}>
-          {!selectedOrder ? (
+      {Platform.OS === 'web' ? <>{React.createElement('input', { ref: webInputRef, type: 'file', accept: 'image/*,application/pdf', multiple: true, onChange: handleWebFiles, style: { display: 'none' } })}</> : null}
+      {/* Web main-controls-strip: idle = type/Camera/Upload; streaming = Capture/Cancel; preview = Rotate/Lock/Cancel/Cancel All. */}
+      {showMainControls ? (
+        <View style={[styles.controlsStrip, isCompactMobile && styles.controlsStripMobile, Platform.OS === 'web' && isCompactMobile && styles.controlsStripWebMobile]}>
+          {!cameraActive ? (
             <>
-              {isCompactMobile ? <View style={styles.previewEmptyMobile}><Text style={styles.previewEmptyText}>Select an order to begin</Text></View> : null}
+              <View style={styles.typeStrip}>
+                {UPLOAD_TYPES.filter((type) => !effectiveHiddenTypes.has(type)).map((type) => (
+                  <TouchableOpacity key={type} style={[styles.typeBtn, uploadType === type && styles.typeBtnActive]} onPress={() => chooseType(type)}>
+                    <Text style={[styles.typeBtnText, uploadType === type && styles.typeBtnTextActive]}>{type}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {!isCompactMobile ? <View style={styles.stripSeparator} /> : null}
+            </>
+          ) : null}
+          <View style={styles.buttonGroup}>
+            {!showPreviewControls ? (
+              <TouchableOpacity style={styles.actionBtn} onPress={() => {
+                if (Platform.OS === 'web') { if (webCameraActive) captureWebFrame(); else startWebCamera(); }
+                else if (nativeCameraActive) captureNativeFrame();
+                else startNativeCamera();
+              }}><Text style={styles.actionBtnText}>{cameraActive ? 'Capture' : 'Camera'}</Text></TouchableOpacity>
+            ) : null}
+            {!cameraActive && !showPreviewControls ? <TouchableOpacity style={styles.actionBtn} onPress={() => (Platform.OS === 'web' ? chooseAssets(false) : pickDocuments())}><Text style={styles.actionBtnText}>Upload</Text></TouchableOpacity> : null}
+            {showPreviewControls ? <TouchableOpacity style={styles.dangerBtn} onPress={() => setRotation((value) => (value + 90) % 360)}><Text style={styles.dangerBtnText}>Rotate</Text></TouchableOpacity> : null}
+            {showPreviewControls ? <TouchableOpacity style={[styles.dangerBtn, locked && styles.dangerBtnActive]} onPress={() => setLocked((value) => !value)}><Text style={[styles.dangerBtnText, locked && styles.dangerBtnTextActive]}>{locked ? 'Unlock' : 'Lock'}</Text></TouchableOpacity> : null}
+            {(cameraActive || showPreviewControls) ? <TouchableOpacity style={styles.dangerBtn} onPress={cancelCurrentImage}><Text style={styles.dangerBtnText}>{(webCameraActive && webCaptured) || (nativeCameraActive && nativeCameraCaptured) ? 'Done' : 'Cancel'}</Text></TouchableOpacity> : null}
+            {showPreviewControls ? <TouchableOpacity style={styles.dangerBtn} onPress={resetUploader}><Text style={styles.dangerBtnText}>Cancel All</Text></TouchableOpacity> : null}
+          </View>
+        </View>
+      ) : null}
+      {Platform.OS !== 'web' && currentImage && !isPdfItem && enhancePanelVisible ? (
+        <View style={styles.enhanceSliderPanel}>
+          <View style={styles.nativeEnhanceButtons}>
+            <TouchableOpacity style={styles.nativeEnhanceBtn} onPress={autoEnhance}><Text style={styles.nativeEnhanceText}>Auto</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.nativeEnhanceBtn, enhancements.greyscale && styles.nativeEnhanceBtnActive]} onPress={toggleGreyscale}><Text style={styles.nativeEnhanceText}>Greyscale</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.nativeEnhanceBtn, enhancements.bw && styles.nativeEnhanceBtnActive]} onPress={toggleBlackWhite}><Text style={styles.nativeEnhanceText}>B&amp;W Doc</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.nativeEnhanceBtn, enhancements.sharpen && styles.nativeEnhanceBtnActive]} onPress={toggleSharpen}><Text style={styles.nativeEnhanceText}>Sharpen</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.nativeEnhanceBtn} onPress={resetEnhancements}><Text style={styles.nativeEnhanceText}>Reset</Text></TouchableOpacity>
+          </View>
+          <View style={styles.enhanceSliderRow}><Text style={styles.enhanceSliderLabel}>Brightness</Text><Slider style={styles.enhanceSlider} minimumValue={-50} maximumValue={50} step={1} minimumTrackTintColor="#1e3a5f" maximumTrackTintColor="#cbd5e1" thumbTintColor="#1e3a5f" value={Number(enhancements.brightness) || 0} onValueChange={(value) => setEnhancementValue('brightness', value)} /></View>
+          <View style={styles.enhanceSliderRow}><Text style={styles.enhanceSliderLabel}>Contrast</Text><Slider style={styles.enhanceSlider} minimumValue={-50} maximumValue={50} step={1} minimumTrackTintColor="#1e3a5f" maximumTrackTintColor="#cbd5e1" thumbTintColor="#1e3a5f" value={Number(enhancements.contrast) || 0} onValueChange={(value) => setEnhancementValue('contrast', value)} /></View>
+        </View>
+      ) : null}
+      <View style={[styles.body, isCompactMobile && styles.bodyMobile, modalMode && styles.bodyModal]}>
+        <ScrollView nestedScrollEnabled={isCompactMobile} style={styles.workPane} contentContainerStyle={styles.workContent}>
+          {!selectedOrder && !webCameraActive && !nativeCameraActive ? (
+            <>
+              <View style={styles.viewArea}><Text style={styles.viewAreaPlaceholder}>Select Camera or Upload to begin</Text></View>
+              <View style={[styles.statusBar, statusError && styles.statusBarError]}><Text style={[styles.statusBarText, statusError && styles.statusBarErrorText]}>{status}</Text></View>
               {isCompactMobile && !modalMode ? renderOrderPane(true) : null}
               <Text style={styles.placeholder}>Select an order from the list to begin.</Text>
             </>
           ) : (
             <>
-              {webCameraActive ? (
-                <View style={[styles.previewCard, styles.previewCardMobile, { position: 'relative' }]}>
-                  {Platform.OS === 'web' ? React.createElement('video', { ref: webVideoRef, autoPlay: true, playsInline: true, onClick: captureWebFrame, style: { width: '100%', height: '100%', objectFit: 'cover' } }) : null}
-                  <Text style={styles.previewHint}>Tap the feed to capture · {imageQueue.length} captured</Text>
+              {imageQueue.length > 1 ? (
+                <View style={styles.scrollerWrap}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.scrollerContent}>
+                    {imageQueue.map((image, index) => (
+                      <TouchableOpacity key={`${index}-${image.slice(-12)}`} onPress={() => selectImageAt(index)}>
+                        <Image source={{ uri: image }} style={[styles.scrollerImg, index === imageIndex && styles.scrollerImgActive]} />
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
+              {Platform.OS === 'web' && cropMode ? renderWebCropper() : webCameraActive || nativeCameraActive ? (
+                <View style={[styles.viewArea, styles.cameraViewArea, { position: 'relative' }]}>
+                  {Platform.OS === 'web' ? React.createElement('video', { ref: webVideoRef, autoPlay: true, playsInline: true, onClick: captureWebFrame, style: { width: '100%', height: '100%', objectFit: 'cover' } }) : (
+                    <CameraView ref={nativeCameraRef} style={styles.nativeCamera} facing="back" mode="picture" onCameraReady={() => setNativeCameraReady(true)} />
+                  )}
+                  <View style={styles.cameraOverlayControls}>
+                    <Text style={styles.cameraOverlayText}>Tap the feed or Capture · {imageQueue.length} captured</Text>
+                    {Platform.OS !== 'web' ? <TouchableOpacity style={styles.inlineCaptureBtn} onPress={captureNativeFrame}><Text style={styles.inlineCaptureText}>Capture photo</Text></TouchableOpacity> : null}
+                  </View>
                 </View>
               ) : currentImage ? (
-                <View ref={webPreviewRef} style={[styles.previewCard, isCompactMobile && styles.previewCardMobile, { position: 'relative' }]}>
-                  <TouchableOpacity style={styles.previewCardFill} onPress={() => setPreviewVisible(true)}>{currentImage.startsWith('data:application/pdf') ? <View style={[styles.pdfPreview, isCompactMobile && styles.pdfPreviewMobile]}><Text style={styles.pdfBadge}>PDF</Text><Text style={styles.pdfPreviewText}>PDF document ready for upload</Text></View> : <Image source={{ uri: currentImage }} style={[styles.preview, isCompactMobile && styles.previewMobile, { transform: [{ rotate: `${rotation}deg` }] }]} resizeMode="contain" />}</TouchableOpacity>
+                <View ref={webPreviewRef} style={[styles.viewArea, { position: 'relative' }]}>
+                  <TouchableOpacity style={styles.viewAreaFill} onPress={() => setPreviewVisible(true)}>
+                    {currentImage.startsWith('data:application/pdf') ? (
+                      <View style={styles.pdfPreview}><Text style={styles.pdfBadge}>PDF</Text><Text style={styles.pdfPreviewText}>PDF document ready for upload</Text></View>
+                    ) : Platform.OS !== 'web' ? (
+                      <FilterImage source={{ uri: currentImage }} filters={nativeFilters} style={[styles.viewImage, { transform: [{ rotate: `${rotation}deg` }] }]} resizeMode="contain" />
+                    ) : (
+                      <Image source={{ uri: currentImage }} style={[styles.viewImage, { transform: [{ rotate: `${rotation}deg` }] }]} resizeMode="contain" />
+                    )}
+                  </TouchableOpacity>
                   {Platform.OS === 'web' ? React.createElement('canvas', { ref: webSelectionCanvasRef, style: { position: 'absolute', top: 0, left: 0, zIndex: 10, display: 'none' } }) : null}
-                  <Text style={[styles.previewHint, isCompactMobile && styles.previewHintMobile]}>{imageQueue.length} file(s) · Tap to preview{Platform.OS === 'web' ? ' · Drag to OCR' : ''}</Text>
+                  <Text style={styles.viewAreaHint}>{imageQueue.length} file(s) · Tap to preview{Platform.OS === 'web' ? ' · Drag to OCR' : ''}</Text>
                 </View>
-              ) : <View style={[styles.previewEmpty, isCompactMobile && styles.previewEmptyMobile]}><Text style={styles.previewEmptyText}>Select Camera or Upload to begin</Text></View>}
+              ) : (
+                <View style={styles.viewArea}><Text style={styles.viewAreaPlaceholder}>Select Camera or Upload to begin</Text></View>
+              )}
               {Platform.OS === 'web' ? React.createElement('img', { ref: webImageRef, src: currentImage || '', style: { display: 'none' } }) : null}
-              {imageQueue.length > 1 ? <ScrollView horizontal style={styles.thumbs}>{imageQueue.map((image, index) => <TouchableOpacity key={`${index}-${image.slice(-12)}`} onPress={() => selectImageAt(index)}><Image source={{ uri: image }} style={[styles.thumb, index === imageIndex && styles.thumbActive]} /></TouchableOpacity>)}</ScrollView> : null}
+              {Platform.OS !== 'web' && currentImage && !isPdfItem ? (
+                <View ref={nativeProcessingRef} pointerEvents="none" style={[styles.nativeProcessingStage, { width: nativeProcessingSize.width, height: nativeProcessingSize.height }]}>
+                  <FilterImage source={{ uri: currentImage }} filters={nativeFilters} style={styles.nativeProcessingImage} resizeMode="contain" />
+                </View>
+              ) : null}
+              {Platform.OS !== 'web' && currentImage && !isPdfItem && !cropMode ? (
+                <View style={styles.utilityRow}>
+                  <TouchableOpacity style={[styles.utilBtn, isCompactMobile && styles.utilBtnSmall]} onPress={onPressCrop}><Text style={styles.utilBtnText}>Crop</Text></TouchableOpacity>
+                  {Platform.OS !== 'web' ? <TouchableOpacity style={[styles.utilBtn, isCompactMobile && styles.utilBtnSmall, enhancePanelVisible && styles.utilBtnActive]} onPress={() => setEnhancePanelVisible((value) => !value)}><Text style={styles.utilBtnText}>Enhance</Text></TouchableOpacity> : null}
+                  <TouchableOpacity style={[styles.utilBtn, isCompactMobile && styles.utilBtnSmall]} onPress={scanBarcode}><Text style={styles.utilBtnText}>Barcode</Text></TouchableOpacity>
+                  <TouchableOpacity style={[styles.utilBtn, isCompactMobile && styles.utilBtnSmall]} onPress={runOCR}><Text style={styles.utilBtnText}>OCR</Text></TouchableOpacity>
+                </View>
+              ) : null}
+              {/* Web #status-bar parity: grey rounded bar below the view area */}
+              <View style={[styles.statusBar, statusError && styles.statusBarError]}><Text style={[styles.statusBarText, statusError && styles.statusBarErrorText]}>{status}</Text></View>
               {isCompactMobile && !modalMode ? renderOrderPane(true) : null}
-              <View style={styles.selectedCard}><Text style={styles.selectedTitle}>{parties.consignorName} → {parties.consigneeName}</Text><Text style={styles.selectedMeta}>Ref: {selectedOrder.REFERENCE} · AWB: {selectedOrder.AWB_NUMBER || 'N/A'}</Text></View>
-              <View style={styles.taskHeader}><Text style={styles.sectionTitle}>Upload tasks</Text>{Platform.OS === 'web' && !isCompactMobile ? (existingUploads.length ? <Text style={styles.link}>{`Existing (${existingUploads.length})`}</Text> : null) : <TouchableOpacity onPress={() => setExistingVisible((value) => !value)}><Text style={styles.link}>{existingVisible ? 'Hide existing' : `Existing (${existingUploads.length})`}</Text></TouchableOpacity>}</View>
-              {Platform.OS === 'web' && !isCompactMobile ? renderWebExistingTable() : existingVisible ? <View style={styles.existingBox}>{existingUploads.length ? existingUploads.map((item, index) => {
-                const uri = resolveUploadUri(item.FILE_URL || item.url, apiBase);
-                const canDelete = (ROLE_LEVELS[role] || 0) >= ROLE_LEVELS.MANAGER;
-                return <View key={item.UPLOAD_UID || index} style={styles.existingRow}>
-                  <View style={styles.existingInfo}><Text style={styles.existingType}>{item.UPLOAD_TYPE || 'Upload'}</Text><Text style={styles.existingDetail}>{item.STATUS_REMARK || (item.UPLOAD_TYPE === 'POD' ? 'Delivered' : item.UPLOAD_TYPE === 'Reciept' ? 'Booked' : item.FILE_URL || 'No file URL')}</Text></View>
-                  <View style={styles.existingActions}>{uri ? <TouchableOpacity style={styles.existingAction} onPress={() => setExistingViewer({ uri, title: `${item.UPLOAD_TYPE || 'Upload'} — ${selectedOrder.AWB_NUMBER || selectedOrder.REFERENCE}`, isPdf: isPdfUpload(item) })}><Text style={styles.existingActionText}>View</Text></TouchableOpacity> : null}{canDelete ? <TouchableOpacity style={[styles.existingAction, styles.existingDelete]} onPress={() => deleteExistingUpload(item)}><Text style={[styles.existingActionText, { color: '#b91c1c' }]}>Delete</Text></TouchableOpacity> : null}</View>
-                </View>;
-              }) : <Text style={styles.emptyText}>No existing uploads.</Text>}</View> : null}
-              {Platform.OS === 'web' && !isCompactMobile
-                ? renderWebPickupTable()
-                : <View style={isCompactMobile ? styles.dynamicInputMobile : null}>{tasks.map(renderTask)}</View>}
-              {Platform.OS === 'web' && !isCompactMobile ? (
-                <>
-                  {renderWebDataTable()}
-                  <View style={styles.webTableActions}>
-                    {React.createElement('button', { style: webBtnDanger, onClick: deleteLastStagedRow }, 'Delete Last')}
-                    {React.createElement('button', { style: webBtnDanger, onClick: () => { setStagedRows([]); setSubmitStates({}); } }, 'Clear All')}
-                    {React.createElement('button', { style: webBtnPrimary, disabled: busy, onClick: submitRows }, busy ? 'Submitting...' : 'Submit')}
-                  </View>
-                </>
-              ) : stagedRows.length ? <View style={styles.stagedBox}><View style={styles.stagedHeader}><Text style={styles.sectionTitle}>Ready to submit ({stagedRows.length})</Text><View style={styles.stagedHeaderActions}><TouchableOpacity onPress={deleteLastStagedRow}><Text style={styles.link}>Delete last</Text></TouchableOpacity><TouchableOpacity onPress={() => { setStagedRows([]); setSubmitStates({}); }}><Text style={[styles.link, { color: '#b91c1c' }]}>Clear all</Text></TouchableOpacity></View></View>{stagedRows.map((row, index) => { const detail = describeStagedRow(row); const rowState = submitStates[stagedRowKey(row, index)]; return <View key={`${detail.type}-${index}`} style={[styles.stagedRow, rowState === 'success' && styles.stagedSuccess, rowState === 'error' && styles.stagedFailure]}><Text style={styles.stagedMain}>{detail.type} · {detail.imageCount} image(s){rowState === 'success' ? ' · Submitted' : rowState === 'error' ? ' · Failed' : ''}</Text><Text style={styles.stagedSub}>{detail.refAwb}{detail.customerKyc ? ` · ${detail.customerKyc}` : ''}{detail.docInfo ? ` · ${detail.docInfo}` : ''}</Text></View>; })}<TouchableOpacity style={styles.submitButton} disabled={busy} onPress={submitRows}>{busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitText}>Submit {stagedRows.length} Upload(s)</Text>}</TouchableOpacity></View> : null}
+              {isCompactMobile ? renderPickupCards() : renderPickupTable()}
+              {isCompactMobile ? renderDataCards() : renderDataTable()}
+              {isCompactMobile ? renderExistingCards() : renderExistingTable()}
             </>
           )}
         </ScrollView>
+        {!modalMode && !isCompactMobile ? renderOrderPane(false) : null}
       </View>
       <Modal visible={previewVisible} transparent animationType="fade" onRequestClose={() => setPreviewVisible(false)}><View style={styles.modal}><TouchableOpacity onPress={() => setPreviewVisible(false)}><Text style={styles.close}>✕ Close</Text></TouchableOpacity>{currentImage?.startsWith('data:application/pdf') ? <View style={styles.pdfLargePreview}><Text style={styles.pdfBadge}>PDF</Text><Text style={styles.pdfPreviewText}>The original PDF will be sent with this upload.</Text></View> : currentImage ? <Image source={{ uri: currentImage }} style={styles.largePreview} resizeMode="contain" /> : null}</View></Modal>
       <UploadViewer visible={!!existingViewer} uri={existingViewer?.uri} title={existingViewer?.title} isPdf={existingViewer?.isPdf} onClose={() => setExistingViewer(null)} />
-
-      {/* ── Web inline Cropper modal (web inline-cropper-wrapper parity) ── */}
-      {Platform.OS === 'web' ? (
-        <Modal
-          visible={cropMode}
-          transparent
-          animationType="fade"
-          onRequestClose={() => { if (webCropperRef.current) { webCropperRef.current.destroy(); webCropperRef.current = null; } setCropMode(false); setEnhanceVisible(false); }}
-        >
-          <View style={styles.webCropOverlay}>
-            <View style={styles.webCropCard}>
-              <View ref={webCropperWrapRef} style={styles.webCropArea}>
-                {React.createElement('img', { ref: webCropperImgRef, alt: 'Crop', style: { display: 'block', maxWidth: '100%' } })}
-              </View>
-              <View style={styles.webCropButtons}>
-                <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#1e3a5f' }]} onPress={() => webCropperRef.current?.rotate(90)}><Text style={styles.actionText}>Rotate</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#1e3a5f' }]} onPress={() => setEnhanceVisible((value) => !value)}><Text style={styles.actionText}>Enhance</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#007bff' }]} onPress={runOcrExtraction}><Text style={styles.actionText}>Extract Data (OCR)</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#15803d' }]} onPress={confirmWebCrop}><Text style={styles.actionText}>Crop</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.cancelButton} onPress={() => { if (webCropperRef.current) { webCropperRef.current.destroy(); webCropperRef.current = null; } setCropMode(false); setEnhanceVisible(false); }}><Text style={styles.cancelText}>Cancel</Text></TouchableOpacity>
-              </View>
-              {enhanceVisible ? (
-                <View style={styles.webEnhanceBox}>
-                  <View style={styles.webEnhanceRow}>
-                    <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#1e3a5f' }]} onPress={autoEnhance}><Text style={styles.actionText}>Auto</Text></TouchableOpacity>
-                    <TouchableOpacity style={[styles.actionButton, enhancements.greyscale && styles.locked]} onPress={toggleGreyscale}><Text style={styles.actionText}>Greyscale</Text></TouchableOpacity>
-                    <TouchableOpacity style={[styles.actionButton, enhancements.bw && styles.locked]} onPress={toggleBlackWhite}><Text style={styles.actionText}>B&W Doc</Text></TouchableOpacity>
-                    <TouchableOpacity style={[styles.actionButton, enhancements.sharpen && styles.locked]} onPress={toggleSharpen}><Text style={styles.actionText}>Sharpen</Text></TouchableOpacity>
-                    <TouchableOpacity style={styles.actionButton} onPress={resetEnhancements}><Text style={styles.actionText}>Reset</Text></TouchableOpacity>
-                  </View>
-                  <View style={styles.webSliderRow}><Text style={styles.webSliderLabel}>Brightness</Text>{React.createElement('input', { type: 'range', min: -50, max: 50, value: String(enhancements.brightness), onChange: (e) => setEnhancementValue('brightness', Number(e.target.value)), style: { flexGrow: 1 } })}</View>
-                  <View style={styles.webSliderRow}><Text style={styles.webSliderLabel}>Contrast</Text>{React.createElement('input', { type: 'range', min: -50, max: 50, value: String(enhancements.contrast), onChange: (e) => setEnhancementValue('contrast', Number(e.target.value)), style: { flexGrow: 1 } })}</View>
-                </View>
-              ) : null}
-            </View>
-          </View>
-        </Modal>
-      ) : null}
 
       {/* ── Native live barcode/QR scanner (expo-camera) ── */}
       <Modal visible={nativeScanVisible} animationType="slide" onRequestClose={() => setNativeScanVisible(false)}>
@@ -1280,6 +1929,46 @@ export default function UploaderScreen({
           <Text style={styles.scanHint}>Point the camera at a barcode or QR code. It auto-detects and fills the selected task row, matches an order, or filters the list.</Text>
         </View>
       </Modal>
+
+      {/* ── Native crop modal (web inline-cropper parity: 95% box, drag-move, corner-resize, rotate) ── */}
+      <Modal visible={nativeCropVisible} transparent animationType="fade" onRequestClose={() => setNativeCropVisible(false)}>
+        <View style={styles.cropOverlay}>
+          <View style={styles.cropCard}>
+            <View style={styles.cropHeader}>
+              <Text style={styles.cropTitle}>Crop image</Text>
+              <TouchableOpacity onPress={() => setNativeCropVisible(false)} accessibilityRole="button" accessibilityLabel="Cancel crop"><Text style={styles.cropHeaderClose}>✕</Text></TouchableOpacity>
+            </View>
+            <View style={styles.cropStage} onLayout={onCropLayout}>
+              {cropImageUri ? <FilterImage source={{ uri: cropImageUri }} filters={nativeFilters} style={styles.cropImage} resizeMode="contain" /> : null}
+              {cropRect ? (
+                <>
+                  <View style={[styles.cropMask, { top: 0, left: 0, right: 0, height: cropRect.y }]} />
+                  <View style={[styles.cropMask, { top: cropRect.y + cropRect.h, left: 0, right: 0, bottom: 0 }]} />
+                  <View style={[styles.cropMask, { top: cropRect.y, left: 0, width: cropRect.x, height: cropRect.h }]} />
+                  <View style={[styles.cropMask, { top: cropRect.y, left: cropRect.x + cropRect.w, right: 0, height: cropRect.h }]} />
+                  <View {...(cropPanResponderRef.current?.panHandlers || {})} style={[styles.cropBox, { left: cropRect.x, top: cropRect.y, width: cropRect.w, height: cropRect.h }]}>
+                    {/* pointerEvents="none" keeps the box as the touch target so
+                        locationX/Y stay box-relative for corner detection */}
+                    <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleTL]} />
+                    <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleTR]} />
+                    <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleBL]} />
+                    <View pointerEvents="none" style={[styles.cropHandle, styles.cropHandleBR]} />
+                  </View>
+                </>
+              ) : null}
+            </View>
+            <View style={styles.cropButtons}>
+              <TouchableOpacity style={styles.dangerBtn} disabled={cropBusy} onPress={rotateNativeCrop}><Text style={styles.dangerBtnText}>Rotate</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.dangerBtn} disabled={cropBusy} onPress={() => runNativeOcr(cropImageUri)}><Text style={styles.dangerBtnText}>OCR</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.dangerBtn} onPress={() => setNativeCropVisible(false)}><Text style={styles.dangerBtnText}>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.primaryBtn} disabled={cropBusy} onPress={confirmNativeCrop}><Text style={styles.primaryBtnText}>{cropBusy ? 'Cropping…' : 'Crop'}</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── KYC type picker (web optgroups: Individual / Business) ── */}
+      {renderKycTypePicker()}
     </View>
   );
 }
@@ -1287,13 +1976,32 @@ export default function UploaderScreen({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
   pageHeader: { padding: 14, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  pageHeaderRow: { flexDirection: 'row', alignItems: 'center' },
+  pageHeaderTitles: { flex: 1, paddingRight: 10 },
+  headerClose: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' },
+  headerCloseText: { color: '#b91c1c', fontSize: 16, fontWeight: '900' },
   title: { fontSize: 19, fontWeight: '900', color: '#0f172a' }, subtitle: { marginTop: 3, fontSize: 11, color: '#64748b' },
-  controlsStrip: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 6, padding: 9, backgroundColor: '#e9ecef', borderBottomWidth: 1, borderBottomColor: '#cbd5e1' },
+  controlsStrip: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 10, padding: 8, backgroundColor: '#e9ecef', borderBottomWidth: 1, borderBottomColor: '#cbd5e1' },
+  typeStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'center' },
+  buttonGroup: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'center' },
+  stripSeparator: { width: 1, height: 28, backgroundColor: '#ced4da' },
+  typeBtn: { borderWidth: 2, borderColor: '#1e3a5f', backgroundColor: '#fff', borderRadius: 6, paddingHorizontal: 14, paddingVertical: 8 },
+  typeBtnActive: { backgroundColor: '#1e3a5f' },
+  typeBtnText: { color: '#1e3a5f', fontSize: 14, fontWeight: '600' },
+  typeBtnTextActive: { color: '#fff' },
+  actionBtn: { borderWidth: 2, borderColor: '#9C2007', backgroundColor: '#fff', borderRadius: 6, paddingHorizontal: 14, paddingVertical: 8 },
+  actionBtnText: { color: '#9C2007', fontSize: 14, fontWeight: '600' },
+  dangerBtn: { borderWidth: 2, borderColor: '#1e3a5f', backgroundColor: 'transparent', borderRadius: 6, paddingHorizontal: 14, paddingVertical: 8 },
+  dangerBtnActive: { backgroundColor: '#1e3a5f' },
+  dangerBtnText: { color: '#1e3a5f', fontSize: 14, fontWeight: '600' },
+  dangerBtnTextActive: { color: '#fff' },
+  primaryBtn: { borderWidth: 2, borderColor: '#9C2007', backgroundColor: '#fff', borderRadius: 6, paddingHorizontal: 18, paddingVertical: 8 },
+  primaryBtnText: { color: '#9C2007', fontSize: 14, fontWeight: '700' },
   controlsStripMobile: { gap: 4, padding: 6 }, controlsStripWebMobile: { position: 'sticky', top: 0, zIndex: 20 },
   typeButton: { borderWidth: 1, borderColor: '#94a3b8', borderRadius: 7, paddingHorizontal: 9, paddingVertical: 7, backgroundColor: '#fff' }, compactButton: { paddingHorizontal: 7, paddingVertical: 5, borderRadius: 5 }, typeButtonActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary }, typeText: { fontSize: 11, fontWeight: '800', color: '#334155' }, typeTextActive: { color: '#fff' },
   actionButton: { borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7, backgroundColor: '#1e3a5f' }, actionText: { color: '#fff', fontSize: 11, fontWeight: '800' }, locked: { backgroundColor: '#15803d' }, cancelButton: { borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7, backgroundColor: '#fee2e2' }, cancelText: { color: '#b91c1c', fontSize: 11, fontWeight: '800' },
   enhancementInputGroup: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#fff', borderRadius: 7, paddingHorizontal: 5 }, compactEnhancementInputGroup: { paddingHorizontal: 3, borderRadius: 5 }, enhancementLabel: { color: '#334155', fontSize: 10, fontWeight: '900' }, enhancementInput: { width: 34, height: 28, paddingHorizontal: 3, paddingVertical: 2, color: '#0f172a', fontSize: 10, textAlign: 'center' },
-  status: { paddingHorizontal: 12, paddingVertical: 7, color: '#475569', fontSize: 11, fontWeight: '700', backgroundColor: '#fff' }, statusError: { color: '#b91c1c', backgroundColor: '#fef2f2' },  body: { flex: 1, flexDirection: 'row' }, bodyMobile: { flexDirection: 'column' }, bodyModal: { flexDirection: 'column' }, orderPane: { width: '34%', minWidth: 230, borderRightWidth: 1, borderRightColor: '#e2e8f0', backgroundColor: '#fff', padding: 10 },  orderPaneMobile: { width: '100%', minWidth: 0, maxHeight: 360, borderRightWidth: 0, borderBottomWidth: 1, borderBottomColor: '#e2e8f0', padding: 8, marginTop: 10, borderRadius: 8, overflow: 'hidden' },
+  status: { paddingHorizontal: 12, paddingVertical: 7, color: '#475569', fontSize: 11, fontWeight: '700', backgroundColor: '#fff' }, statusError: { color: '#b91c1c', backgroundColor: '#fef2f2' },  body: { flex: 1, flexDirection: 'row' }, bodyMobile: { flexDirection: 'column' }, bodyModal: { flexDirection: 'column' },  orderPane: { width: '20%', minWidth: 0, borderLeftWidth: 1, borderLeftColor: '#e2e8f0', backgroundColor: '#f7fafc', padding: 10 },  orderPaneMobile: { width: '100%', minWidth: 0, maxHeight: 360, borderLeftWidth: 0, borderBottomWidth: 1, borderBottomColor: '#e2e8f0', padding: 8, marginTop: 10, borderRadius: 8, overflow: 'hidden' },
   orderPaneCollapsed: { maxHeight: 56, height: 56, paddingBottom: 6 },
   mobileOrderHeader: { minHeight: 42, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 5 },
   mobileOrderTitle: { color: '#0f172a', fontSize: 12, fontWeight: '900' },
@@ -1308,6 +2016,7 @@ const styles = StyleSheet.create({
   previewCardFill: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center' },
 
   // Web cropper modal
+  inlineWebCropper: { width: '100%', paddingVertical: 10, backgroundColor: '#fff' },
   webCropOverlay: { flex: 1, backgroundColor: 'rgba(2, 6, 23, 0.82)', padding: 10, justifyContent: 'center' },
   webCropCard: { width: '100%', maxWidth: 860, alignSelf: 'center', backgroundColor: '#f0f0f0', borderRadius: 10, padding: 10, borderWidth: 2, borderStyle: 'dashed', borderColor: '#1E3A8A' },
   webCropArea: { width: '100%', height: '60vh', backgroundColor: '#0f172a', overflow: 'hidden' },
@@ -1316,7 +2025,6 @@ const styles = StyleSheet.create({
   webEnhanceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' },
   webSliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, width: '100%', maxWidth: 280, justifyContent: 'center', marginTop: 10, alignSelf: 'center' },
   webSliderLabel: { color: '#334155', fontSize: 11, fontWeight: '700', width: 64 },
-  webTableActions: { width: '100%', marginTop: 15, flexDirection: 'row', gap: 8, justifyContent: 'flex-end' },
 
   // Native live scanner
   scanModal: { flex: 1, backgroundColor: '#020617' },
@@ -1325,4 +2033,133 @@ const styles = StyleSheet.create({
   scanClose: { color: '#e2e8f0', fontSize: 13, fontWeight: '700', padding: 4 },
   scanner: { flex: 1 },
   scanHint: { color: '#94a3b8', fontSize: 11, textAlign: 'center', padding: 12, lineHeight: 16 },
+  cameraViewArea: { backgroundColor: '#020617' },
+  nativeCamera: { width: '100%', height: '100%' },
+  cameraOverlayControls: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center', padding: 10, backgroundColor: 'rgba(2,6,23,0.45)' },
+  cameraOverlayText: { color: '#fff', fontSize: 11, fontWeight: '700', textAlign: 'center', marginBottom: 6 },
+  inlineCaptureBtn: { borderRadius: 20, paddingHorizontal: 18, paddingVertical: 9, backgroundColor: '#9C2007' },
+  inlineCaptureText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+
+  // Unified web-mobile tables (all platforms)
+  tblWrap: { width: '100%', marginTop: 12, borderWidth: 1, borderColor: '#ccc', borderRadius: 4, backgroundColor: '#fff', overflow: 'hidden', maxHeight: 400 },
+  pickupTblWrap: { maxHeight: 280 },
+  tblHeaderRow: { flexDirection: 'row', backgroundColor: '#f0f0f0', borderBottomWidth: 1, borderBottomColor: '#ccc' },
+  tblTh: { paddingHorizontal: 8, paddingVertical: 8, fontSize: 12, fontWeight: '700', color: '#334155', textAlign: 'left' },
+  tblHidden: { display: 'none' },
+  tblRow: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#f1f5f9', paddingVertical: 6, minHeight: 40 },
+  tblRowSelected: { backgroundColor: '#e0e7ff' },
+  tblRowSuccess: { backgroundColor: '#d4edda' },
+  tblRowError: { backgroundColor: '#f8d7da' },
+  tblCell: { paddingHorizontal: 8, paddingVertical: 4, fontSize: 12, color: '#334155' },
+  tblCellLine: { fontSize: 11, color: '#475569', lineHeight: 15 },
+  tblMessage: { padding: 14, textAlign: 'center', color: '#888' },
+  tblMessageOk: { color: '#15803d', fontWeight: '700' },
+  tblInput: { borderWidth: 1, borderColor: '#ccc', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 6, fontSize: 12, backgroundColor: '#fff', minWidth: 120 },
+  kycCell: { gap: 5 },
+  kycSelect: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#ccc', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 6, backgroundColor: '#fff' },
+  kycSelectText: { fontSize: 12, color: '#334155', flex: 1 },
+  kycSelectChevron: { color: '#64748b', fontSize: 12, marginLeft: 6 },
+  pickCellBtn: { backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fca5a5', borderRadius: 5, paddingHorizontal: 12, paddingVertical: 7, alignItems: 'center', justifyContent: 'center' },
+  pickCellText: { color: '#b91c1c', fontSize: 11, fontWeight: '800' },
+  previewCellBtn: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 5, paddingHorizontal: 10, paddingVertical: 6, alignItems: 'center' },
+  previewCellBtnDanger: { backgroundColor: '#f8d7da', borderColor: '#f5c6cb' },
+  previewCellText: { color: '#0369a1', fontSize: 10, fontWeight: '800' },
+  tblActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, padding: 10, borderTopWidth: 1, borderTopColor: '#eee' },
+  tblDangerBtn: { backgroundColor: '#f8d7da', borderWidth: 1, borderColor: '#f5c6cb', borderRadius: 5, paddingHorizontal: 12, paddingVertical: 8 },
+  tblDangerText: { color: '#b91c1c', fontSize: 12, fontWeight: '700' },
+  tblPrimaryBtn: { backgroundColor: '#1e3a5f', borderRadius: 5, paddingHorizontal: 16, paddingVertical: 8 },
+  tblPrimaryText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  existingSection: { marginTop: 20, borderTopWidth: 2, borderTopColor: '#1E3A8A', paddingTop: 10 },
+  existingHeading: { fontSize: 17, fontWeight: '700', color: '#1E3A8A', marginBottom: 8 },
+
+  // Native enhance sliders panel (web brightness/contrast sliders parity)
+  enhanceSliderPanel: { backgroundColor: '#eef2f7', borderBottomWidth: 1, borderBottomColor: '#cbd5e1', paddingHorizontal: 12, paddingVertical: 8 },
+  nativeEnhanceButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'center', marginBottom: 6 },
+  nativeEnhanceBtn: { borderWidth: 1, borderColor: '#1e3a5f', borderRadius: 5, backgroundColor: '#fff', paddingHorizontal: 9, paddingVertical: 6 },
+  nativeEnhanceBtnActive: { backgroundColor: '#d4edda' },
+  nativeEnhanceText: { color: '#1e3a5f', fontSize: 10, fontWeight: '700' },
+  enhanceSliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 3 },
+  enhanceSliderLabel: { width: 72, color: '#334155', fontSize: 11, fontWeight: '700' },
+  enhanceSlider: { flex: 1, height: 32 },
+
+  // KYC type picker modal
+  kycPickerOverlay: { flex: 1, backgroundColor: 'rgba(2,6,23,0.55)', justifyContent: 'center', padding: 24 },
+  kycPickerCard: { backgroundColor: '#fff', borderRadius: 12, padding: 16, maxHeight: '78%' },
+  kycPickerTitle: { fontSize: 16, fontWeight: '900', color: '#0f172a', marginBottom: 10 },
+  kycPickerGroup: { fontSize: 12, fontWeight: '800', color: '#1e3a8a', textTransform: 'uppercase', marginTop: 8, marginBottom: 4 },
+  kycPickerOption: { paddingVertical: 10, paddingHorizontal: 8, borderRadius: 6, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  kycPickerOptionActive: { backgroundColor: '#e0e7ff' },
+  kycPickerOptionText: { fontSize: 13, color: '#334155' },
+  kycPickerOptionTextActive: { color: '#1e3a8a', fontWeight: '800' },
+  kycPickerCancel: { marginTop: 12, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8 },
+  kycPickerCancelText: { color: '#475569', fontSize: 13, fontWeight: '800' },
+
+  // Web view area (uploader.html #image-view-area: square dashed box)
+  viewArea: { borderWidth: 2, borderStyle: 'dashed', borderColor: '#ccc', backgroundColor: '#f0f0f0', width: '100%', aspectRatio: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  nativeProcessingStage: { position: 'absolute', left: -10000, top: 0, backgroundColor: '#fff', overflow: 'hidden' },
+  nativeProcessingImage: { width: '100%', height: '100%' },
+  viewAreaFill: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center' },
+  viewImage: { width: '100%', height: '100%' },
+  viewAreaPlaceholder: { color: '#888', fontSize: 14, padding: 20, textAlign: 'center' },
+  viewAreaHint: { position: 'absolute', bottom: 5, left: 0, right: 0, textAlign: 'center', color: '#cbd5e1', fontSize: 10 },
+  // Web image scroller (80px strip of 70px thumbs)
+  scrollerWrap: { width: '100%', height: 80, backgroundColor: '#eee', borderWidth: 1, borderColor: '#ddd', borderRadius: 4, padding: 5, marginBottom: 15 },
+  scrollerContent: { alignItems: 'center', gap: 5 },
+  scrollerImg: { width: 70, height: 66, borderRadius: 2, borderWidth: 2, borderColor: 'transparent' },
+  scrollerImgActive: { borderColor: '#1E3A8A' },
+  // Web #status-bar (grey rounded bar)
+  statusBar: { minHeight: 40, justifyContent: 'center', alignItems: 'center', backgroundColor: '#e9ecef', borderRadius: 4, marginTop: 15, paddingHorizontal: 10, paddingVertical: 6 },
+  statusBarText: { color: '#495057', fontSize: 13, textAlign: 'center' },
+  statusBarError: { backgroundColor: '#fef2f2' },
+  statusBarErrorText: { color: '#dc3545', fontWeight: '700' },
+  // Utility row (Crop / Enhance / Barcode / OCR) — kept out of the strip to
+  // match the web strip exactly (web does these inside the cropper/preview)
+  utilityRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 10 },
+  utilBtn: { borderWidth: 1, borderColor: '#ccc', backgroundColor: '#fff', borderRadius: 4, paddingHorizontal: 12, paddingVertical: 6 },
+  utilBtnSmall: { paddingHorizontal: 9, paddingVertical: 5 },
+  utilBtnText: { color: '#333', fontSize: 12, fontWeight: '500' },
+  utilBtnActive: { backgroundColor: '#e0e7ff', borderColor: '#c7d2fe' },
+  // Web-mobile table-to-card (uploader.html ≤1023px). The cards keep living
+  // inside the web's bordered boxes (#dynamic-input-area / .data-table-container).
+  cardSection: { marginTop: 15 },
+  dynamicInputBox: { marginTop: 15, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 4, backgroundColor: '#fafafa', padding: 10 },
+  dataTableBox: { marginTop: 15, borderWidth: 1, borderColor: '#ccc', borderRadius: 4, backgroundColor: '#fff', padding: 10 },
+  cardRowLast: { borderBottomWidth: 0 },
+  cardInput: { fontSize: 14 },
+  card: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, padding: 12, marginBottom: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  cardSelected: { backgroundColor: '#e0e7ff' },
+  cardSuccess: { backgroundColor: '#d4edda' },
+  cardError: { backgroundColor: '#f8d7da' },
+  cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#eee', borderStyle: 'dashed' },
+  cardLabel: { color: '#333', fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginRight: 12 },
+  cardValue: { color: '#333', fontSize: 13, flex: 1, textAlign: 'right' },
+  cardValueStatic: { flex: 0 },
+  cardValueFlex: { flex: 1 },
+  cardMessage: { color: '#888', fontSize: 13, textAlign: 'center', padding: 16 },
+  cardMessageOk: { color: '#15803d', fontWeight: '700' },
+  cardActions: { flexDirection: 'row', gap: 6 },
+  pickBtnFull: { borderWidth: 2, borderColor: '#1e3a5f', backgroundColor: 'transparent', borderRadius: 6, paddingVertical: 10, alignItems: 'center', marginTop: 10 },
+  pickBtnFullText: { color: '#1e3a5f', fontSize: 14, fontWeight: '700' },
+  v1Btn: { borderWidth: 1, borderColor: '#ccc', backgroundColor: '#fff', borderRadius: 4, paddingHorizontal: 10, paddingVertical: 5 },
+  v1BtnDanger: { backgroundColor: '#f8d7da', borderColor: '#f5c6cb' },
+  v1BtnText: { color: '#0369a1', fontSize: 12, fontWeight: '500' },
+  tableActions: { width: '100%', marginTop: 15, flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' },
+  tableActionsCenter: { justifyContent: 'center' },
+
+  // Native crop modal
+  cropOverlay: { flex: 1, backgroundColor: 'rgba(2,6,23,0.82)', justifyContent: 'center', padding: 12 },
+  cropCard: { backgroundColor: '#fff', borderRadius: 10, padding: 10 },
+  cropHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 8 },
+  cropTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  cropHeaderClose: { color: '#64748b', fontSize: 16, fontWeight: '800', padding: 4 },
+  cropStage: { width: '100%', aspectRatio: 1, backgroundColor: '#0f172a', borderRadius: 4, overflow: 'hidden', position: 'relative' },
+  cropImage: { width: '100%', height: '100%' },
+  cropMask: { position: 'absolute', backgroundColor: 'rgba(2,6,23,0.55)' },
+  cropBox: { position: 'absolute', borderWidth: 1.5, borderColor: '#fff', backgroundColor: 'transparent' },
+  cropHandle: { position: 'absolute', width: 22, height: 22, borderWidth: 2, borderColor: '#fff', backgroundColor: '#1e3a5f' },
+  cropHandleTL: { top: -2, left: -2, borderTopLeftRadius: 4 },
+  cropHandleTR: { top: -2, right: -2, borderTopRightRadius: 4 },
+  cropHandleBL: { bottom: -2, left: -2, borderBottomLeftRadius: 4 },
+  cropHandleBR: { bottom: -2, right: -2, borderBottomRightRadius: 4 },
+  cropButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 10 },
 });

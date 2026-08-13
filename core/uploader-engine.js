@@ -68,7 +68,8 @@ export const filterOrders = (orders, contacts, searchTerm = '', displayDays = 90
       if (!q) return true;
       const cnor = contacts.get(String(order.CONSIGNOR)) || {};
       const cnee = contacts.get(String(order.CONSIGNEE)) || {};
-      return [order.REFERENCE, order.AWB_NUMBER, cnor.NAME, cnee.NAME, order.DEST_CITY]
+      const formattedDate = Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString();
+      return [order.REFERENCE, order.AWB_NUMBER, cnor.NAME, cnee.NAME, order.DEST_CITY, formattedDate]
         .filter(Boolean).map(String).join('|').toLowerCase().includes(q);
     })
     .sort((a, b) => {

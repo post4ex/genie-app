@@ -128,13 +128,37 @@ export default function BottomMenuSheet({ activeTab, onNavigate, userRole = 'CLI
               {/* Category 4: Tools & Business */}
               <Text style={styles.sectionHeader}>BUSINESS & TOOLS</Text>
               <View style={styles.gridRow}>
-                <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('book')}>
+                <TouchableOpacity style={[styles.menuChip, activeTab === 'calc' && styles.menuChipActive]} onPress={() => handleSelect('calc')}>
                   <Text style={styles.chipIcon}>🧮</Text>
                   <Text style={styles.chipLabel}>Rate Estimate</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('track')}>
+                <TouchableOpacity style={[styles.menuChip, activeTab === 'pincode' && styles.menuChipActive]} onPress={() => handleSelect('pincode')}>
                   <Text style={styles.chipIcon}>📍</Text>
                   <Text style={styles.chipLabel}>Pincode Search</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.menuChip, activeTab === 'zipfinder' && styles.menuChipActive]} onPress={() => handleSelect('zipfinder')}>
+                  <Text style={styles.chipIcon}>🌐</Text>
+                  <Text style={styles.chipLabel}>Global ZIP Finder</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.menuChip, activeTab === 'complaint' && styles.menuChipActive]} onPress={() => handleSelect('complaint')}>
+                  <Text style={styles.chipIcon}>⚠️</Text>
+                  <Text style={styles.chipLabel}>Raise Complaint</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.menuChip, activeTab === 'calendar' && styles.menuChipActive]} onPress={() => handleSelect('calendar')}>
+                  <Text style={styles.chipIcon}>🗓️</Text>
+                  <Text style={styles.chipLabel}>Operations Calendar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.menuChip, activeTab === 'memos' && styles.menuChipActive]} onPress={() => handleSelect('memos')}>
+                  <Text style={styles.chipIcon}>📣</Text>
+                  <Text style={styles.chipLabel}>Company Memos</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.menuChip, activeTab === 'invoice' && styles.menuChipActive]} onPress={() => handleSelect('invoice')}>
+                  <Text style={styles.chipIcon}>🧾</Text>
+                  <Text style={styles.chipLabel}>Tax Invoice</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.menuChip, activeTab === 'docs' && styles.menuChipActive]} onPress={() => handleSelect('docs')}>
+                  <Text style={styles.chipIcon}>📄</Text>
+                  <Text style={styles.chipLabel}>Document Center</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('uploader')}>
                   <Text style={styles.chipIcon}>📤</Text>
@@ -144,9 +168,13 @@ export default function BottomMenuSheet({ activeTab, onNavigate, userRole = 'CLI
                   <Text style={styles.chipIcon}>👥</Text>
                   <Text style={styles.chipLabel}>CRM & Clients</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('dashboard')}>
+                <TouchableOpacity style={[styles.menuChip, activeTab === 'vault' && styles.menuChipActive]} onPress={() => handleSelect('vault')}>
                   <Text style={styles.chipIcon}>🔐</Text>
                   <Text style={styles.chipLabel}>The Vault</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.menuChip, activeTab === 'services' && styles.menuChipActive]} onPress={() => handleSelect('services')}>
+                  <Text style={styles.chipIcon}>🧩</Text>
+                  <Text style={styles.chipLabel}>Services</Text>
                 </TouchableOpacity>
                 {(ROLE_LEVELS[userRole] || 0) >= (ROLE_LEVELS.CLIENT || 1) && (
                   <TouchableOpacity style={[styles.menuChip, activeTab === 'admin' && styles.menuChipActive]} onPress={() => handleSelect('admin')}>

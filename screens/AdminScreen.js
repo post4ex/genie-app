@@ -19,6 +19,7 @@ import { COLORS } from '../styles/theme';
 import { ROLE_LEVELS } from '../core/config';
 import { getAppData } from '../core/storage';
 import { getPincodeCount, searchPin } from '../utils/searchpin';
+import * as Location from 'expo-location';
 
 const TILE_MIN_ROLE = {
   users: 'ADMIN', registrations: 'ADMIN', services: 'ADMIN', branches: 'CLIENT',
@@ -55,6 +56,10 @@ const SERVICES = [
   ['turso', '🗃️', 'Turso', 'Tracking/WA/mail logs'],
   ['ds-objects', '🗂️', 'HF Objects', 'Media files dataset'],
   ['ds-track-db', '💾', 'HF Track DB', 'Tracking SQLite dataset'],
+  ['ds-pb', '💽', 'HF PocketBase', 'PocketBase dataset'],
+  ['ds-todo', '📋', 'HF Todo', 'Todo/docs dataset'],
+  ['r2', '🪣', 'R2 Bucket', 'Cloudflare R2 objects'],
+  ['hfbucket', '🗑️', 'HF Bucket', 'HF S3 objects bucket'],
 ];
 
 const FORM_FIELDS = {
@@ -105,7 +110,7 @@ const FORM_FIELDS = {
     ['EXPRESS_TAT', 'Express TAT', 'numeric'], ['AIRLINE_TAT', 'Airline TAT', 'numeric'], ['SURFACE_TAT', 'Surface TAT', 'numeric'], ['PREMIUM_TAT', 'Premium TAT', 'numeric'],
   ],
   attendance: [
-    ['STATUS', 'Status', 'text'], ['SHIFT', 'Shift', 'text'], ['LEAVE_TYPE', 'Leave type', 'text'], ['IN_TIME', 'In time (HH:MM)', 'default'], ['OUT_TIME', 'Out time (HH:MM)', 'default'], ['REMARKS', 'Remarks', 'text'],
+    ['STATUS', 'Status', 'text'], ['SHIFT', 'Shift', 'text'], ['LEAVE_TYPE', 'Leave type', 'text'], ['IN_TIME', 'In time (HH:MM)', 'default'], ['OUT_TIME', 'Out time (HH:MM)', 'default'], ['GEO_TAG_IN', 'GPS in location', 'text'], ['GEO_TAG_OUT', 'GPS out location', 'text'], ['REMARKS', 'Remarks', 'text'],
   ],
   shifts: [
     ['SHIFT', 'Shift', 'text'], ['STATUS', 'Status', 'text'], ['LEAVE_TYPE', 'Leave type', 'text'], ['START_DATE', 'Start date (YYYY-MM-DD)', 'default'], ['END_DATE', 'End date (YYYY-MM-DD)', 'default'], ['REMARKS', 'Remarks', 'text'],
@@ -116,11 +121,14 @@ const FORM_FIELDS = {
   ],
   modes: [
     ['MODE', 'Mode', 'text'], ['SHORT', 'Short name', 'text'], ['VOL_INGR', 'Volumetric divisor', 'numeric'], ['MIN_WT', 'Minimum weight', 'numeric'],
-    ['MAX_WT', 'Maximum weight', 'numeric'], ['ZONE', 'Zones', 'text'], ['STATUS', 'Status', 'text'],
+    ...Array.from({ length: 14 }, (_, index) => [`Z${index + 1}`, `Zone Z${index + 1} availability (Y/N)`, 'text']),
   ],
   carriers: [
-    ['COMPANY_CODE', 'Company code', 'text'], ['COMPANY_NAME', 'Company name', 'text'], ['STATUS', 'Status', 'text'],
-    ['CONTACT', 'Contact', 'text'], ['EMAIL', 'Email', 'email-address'], ['PINCODE', 'Pincode', 'numeric'], ['API_URL', 'API URL', 'text'],
+    ['COMPANY_CODE', 'Company code', 'text'], ['COMPANY_NAME', 'Company name', 'text'], ['LOGO_URL_GDRIVE', 'Logo URL (G-Drive)', 'url'],
+    ['LOGO_URL_POSTIMG', 'Logo URL (PostIMG)', 'url'], ['GSTIN', 'GSTIN', 'text'], ['TRANSPORT_ID', 'Transport ID', 'text'],
+    ['COMPANY_ADDRESS', 'Address', 'text'], ['COMPANY_PINCODE', 'Pincode', 'numeric'], ['COMPANY_CITY', 'City', 'text'], ['COMPANY_STATE', 'State', 'text'],
+    ['EMAIL', 'Email', 'email-address'], ['MOBILE', 'Company mobile', 'phone-pad'], ['CONTACT_PERSON', 'Contact person', 'text'],
+    ['CONTACT_MOBILE', 'Contact mobile', 'phone-pad'], ['BANK_NAME', 'Bank name', 'text'], ['BANK_AC', 'Bank account', 'numeric'], ['IFSC', 'IFSC', 'text'], ['UPI', 'UPI ID', 'text'],
   ],
 };
 
@@ -180,8 +188,16 @@ export default function AdminScreen({
   const [b2bOtpResolver, setB2bOtpResolver] = useState(null);
   const [b2bOtpRejecter, setB2bOtpRejecter] = useState(null);
   const [serviceStatuses, setServiceStatuses] = useState({});
+  const [serviceLog, setServiceLog] = useState(null);
+  const [serviceLogLoading, setServiceLogLoading] = useState(false);
   const [pinResult, setPinResult] = useState(null);
   const [pinLoading, setPinLoading] = useState(false);
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [addUserOtpVisible, setAddUserOtpVisible] = useState(false);
+  const [addUserOtp, setAddUserOtp] = useState('');
+  const [addUserOtpBusy, setAddUserOtpBusy] = useState(false);
+  const [addUserOtpError, setAddUserOtpError] = useState('');
+  const [pendingUserPayload, setPendingUserPayload] = useState(null);
 
   const apiCall = useCallback(async (path, body = {}, method = 'POST') => {
     const response = await fetch(`${apiBase}${path}`, {
@@ -351,12 +367,24 @@ export default function AdminScreen({
       return;
     }
     if (activeTile === 'users') {
-      if (!selected) { setMessage('Adding a user requires the web OTP confirmation flow; select an existing user to edit.'); return; }
       setSaving(true); setMessage('');
       try {
-        const sudoToken = await getSudoToken();
-        await apiCall('/api/adminUpdateUser', { username: selected.USER, sudo_token: sudoToken, fields: { ...form, USER: undefined } }, 'PATCH');
-        setMessage('User updated successfully.'); await reload(); setShowForm(false);
+        if (!selected) {
+          const payload = {
+            USER: String(form.USER || '').trim(), NAME: String(form.NAME || '').trim(), EMAIL: String(form.EMAIL || '').trim(),
+            MOBILE: String(form.MOBILE || '').trim(), BRANCH: String(form.BRANCH || '').trim(), ROLE: form.ROLE || 'CLIENT',
+            CODE: String(form.CODE || '').trim(), STATUS: form.STATUS || 'ACTIVE', COL_FILTER: form.COL_FILTER || '', FILTER_VALUE: form.FILTER_VALUE || '', PASS: '',
+          };
+          if (!payload.USER || !payload.NAME) throw new Error('Username and name are required.');
+          await apiCall('/api/initiateAddUser', payload, 'POST');
+          setPendingUserPayload(payload); setAddUserOtp(''); setAddUserOtpError(''); setAddUserOtpVisible(true);
+          setMessage('OTP sent. Verify it to create the user.');
+        } else {
+          const sudoToken = await getSudoToken();
+          const fields = { ...form }; delete fields.USER;
+          await apiCall('/api/adminUpdateUser', { username: selected.USER, sudo_token: sudoToken, fields }, 'PATCH');
+          setMessage('User updated successfully.'); await reload(); setShowForm(false);
+        }
       } catch (error) { setMessage(error.message); } finally { setSaving(false); }
       return;
     }
@@ -379,6 +407,19 @@ export default function AdminScreen({
       await onRefresh?.(); await reload(); setSelected(saved); setShowForm(false);
     } catch (error) { setMessage(error.message); }
     finally { setSaving(false); }
+  };
+
+  const confirmAddUser = async () => {
+    if (!pendingUserPayload || addUserOtp.trim().length !== 6) { setAddUserOtpError('Enter the 6-digit OTP.'); return; }
+    setAddUserOtpBusy(true); setAddUserOtpError('');
+    try {
+      await apiCall(`/api/confirmAddUser?username=${encodeURIComponent(pendingUserPayload.USER)}`, { otp: addUserOtp.trim() }, 'POST');
+      setAddUserOtpVisible(false); setPendingUserPayload(null); setShowForm(false); setMessage('User added successfully.'); await reload();
+    } catch (error) {
+      setAddUserOtpError(error.message);
+    } finally {
+      setAddUserOtpBusy(false);
+    }
   };
 
   const deleteRecord = async (record) => {
@@ -430,12 +471,101 @@ export default function AdminScreen({
     finally { setPinLoading(false); }
   };
 
-  const selectRecord = (record) => {
-    setSelected(record); setMobileDetailVisible(true); setShowForm(false); setMessage('');
-    if (activeTile === 'services') {
-      if (record.id === 'managerio') return;
+  const captureLocation = async (field = 'BRANCH_GEO_TEG') => {
+    if (Platform.OS === 'web') {
+      setMessage('Use the browser location permission to capture GPS on web.');
       return;
     }
+    setLocationLoading(true);
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== 'granted') throw new Error('Location permission was denied.');
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const { latitude, longitude } = position.coords;
+      setForm(current => ({ ...current, [field]: `${latitude.toFixed(6)},${longitude.toFixed(6)}` }));
+      setMessage('GPS location captured.');
+    } catch (error) {
+      setMessage(error.message || 'Could not read the device location.');
+    } finally {
+      setLocationLoading(false);
+    }
+  };
+
+  const handleFormChange = async (name, value) => {
+    const normalized = ['EMAIL'].includes(name) ? value : value.toUpperCase();
+    setForm(current => ({ ...current, [name]: normalized }));
+    const pinFields = {
+      branches: { pin: 'BRANCH_PINCODE', city: 'BRANCH_CITY', state: 'BRANCH_STATE', stateCode: 'CODE_STATE', gst: 'GST_CODE' },
+      staff: { pin: 'PINCODE', city: 'CITY', state: 'STATE', stateCode: 'CODE_STATE', gst: 'GST_CODE' },
+      clients: { pin: 'B2B_PINCODE', city: 'B2B_CITY', state: 'B2B_STATE', stateCode: 'CODE_STATE', gst: 'GST_CODE' },
+      b2b2c: { pin: 'PINCODE', city: 'CITY', state: 'STATE' },
+      carriers: { pin: 'COMPANY_PINCODE', city: 'COMPANY_CITY', state: 'COMPANY_STATE' },
+    }[activeTile];
+    if (pinFields && name === pinFields.pin && /^\d{6}$/.test(value)) {
+      try {
+        const result = await searchPin(value);
+        if (result?.found) {
+          setForm(current => ({
+            ...current,
+            [pinFields.city]: result.CITY || '',
+            [pinFields.state]: result.STATE_NAME || result.STATE || '',
+            ...(pinFields.stateCode ? { [pinFields.stateCode]: result.STATE_CODE || '' } : {}),
+            ...(pinFields.gst ? { [pinFields.gst]: result.GST_CODE || '' } : {}),
+            ...(activeTile === 'b2b2c' ? { ZONE: result.ZONE || current.ZONE || '', ODA: result.ODA || current.ODA || '' } : {}),
+          }));
+        }
+      } catch (_) {}
+    }
+  };
+
+  const loadServiceLogs = async () => {
+    if (!selected?.id) return;
+    setServiceLogLoading(true);
+    try {
+      const logPath = {
+        app: '/api/services/logs/app', pocketbase: '/api/services/logs/app', tracking: '/api/services/logs/tracking',
+        managerio: '/api/services/logs/app', whatsapp: '/api/services/logs/wa', captcha: '/api/services/logs/hf/captcha',
+        mailjet: '/api/services/logs/mail', brevo: '/api/services/logs/mail', render: '/api/services/logs/render',
+        turso: '/api/services/logs/tracking',
+      }[selected.id];
+      if (!logPath) {
+        setServiceLog({ message: 'This storage service exposes its files through the web dashboard only.' });
+        return;
+      }
+      const result = await apiCall(logPath, {}, 'GET');
+      setServiceLog(result.data || result.logs || result);
+    } catch (error) {
+      setServiceLog({ error: error.message });
+    } finally {
+      setServiceLogLoading(false);
+    }
+  };
+
+  const runServiceAction = async (action) => {
+    if (!selected?.id) return;
+    setSaving(true); setMessage('');
+    try {
+      let result;
+      if (action === 'worker') result = await apiCall('/api/services/tracking/triggerWorker?ignore_interval=true', {}, 'POST');
+      if (action === 'restart') result = await apiCall('/api/services/render/restart', {}, 'POST');
+      if (action === 'waStatus') result = await apiCall('/api/services/wa/status', {}, 'GET');
+      if (action === 'waLogout') result = await apiCall('/api/services/wa/logout', {}, 'POST');
+      if (action === 'managerToggle') result = await apiCall('/api/toggleManagerIO', { enabled: !selected.enabled }, 'POST');
+      if (action === 'ping') result = await apiCall(`/api/services/ping/${selected.id}`, {}, 'GET');
+      if (action === 'ping' || action === 'managerToggle') {
+        setServiceStatuses(current => ({ ...current, [selected.id]: { ...current[selected.id], ...(result?.data || result), enabled: action === 'managerToggle' ? !selected.enabled : current[selected.id]?.enabled } }));
+        setSelected(current => ({ ...current, ...(result?.data || result), enabled: action === 'managerToggle' ? !selected.enabled : current.enabled }));
+      }
+      setMessage(action === 'worker' ? `Worker completed: ${result?.tracked_count ?? result?.active_shipments ?? 'done'}.` : `${selected.name} action completed.`);
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const selectRecord = (record) => {
+    setSelected(record); setMobileDetailVisible(true); setShowForm(false); setMessage(''); setServiceLog(null);
   };
 
   const visibleTiles = useMemo(() => TILES.filter(item => can(role, item[3])), [role]);
@@ -465,12 +595,56 @@ export default function AdminScreen({
     if (activeTile === 'attendance' || activeTile === 'shifts') return <View style={styles.detailCard}><Text style={styles.detailHeading}>🧑‍💼 {displayValue(selected.STAFF_NAME || selected.STAFF_CODE)}</Text><Text style={styles.detailDescription}>{displayValue(selected.BRANCH)} · {activeTile === 'shifts' ? 'Shifts & leaves' : 'Today attendance'}</Text><TouchableOpacity style={styles.primaryButton} onPress={() => startForm(selected)}><Text style={styles.primaryText}>{activeTile === 'shifts' ? 'Record shift / leave' : 'Record attendance'}</Text></TouchableOpacity></View>;
     if (activeTile === 'users') return <View style={styles.detailCard}><View style={styles.detailHeader}><Text style={styles.detailHeading}>{displayValue(selected.USER)}</Text><View style={styles.headerButtons}>{can(role, 'ADMIN') && <TouchableOpacity style={styles.smallButton} onPress={() => startForm(selected)}><Text style={styles.smallButtonText}>Edit</Text></TouchableOpacity>}{can(role, 'MASTER') && <TouchableOpacity style={styles.dangerButton} onPress={() => deleteRecord(selected)}><Text style={styles.dangerText}>Delete</Text></TouchableOpacity>}</View></View>{Object.entries(selected).filter(([key]) => !['PASS', 'RESET_TOKEN', 'id', 'created', 'updated'].includes(key)).map(([key, value]) => <View style={styles.detailPair} key={key}><Text style={styles.detailKey}>{key}</Text><Text style={styles.detailValue}>{displayValue(value)}</Text></View>)}{can(role, 'ADMIN') && selected.USER !== user?.USER && <TouchableOpacity style={styles.secondaryButton} onPress={async () => { try { const sudoToken = await getSudoToken(); const status = selected.STATUS === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'; await apiCall('/api/adminUpdateUser', { username: selected.USER, sudo_token: sudoToken, fields: { STATUS: status, CASCADED_BLOCK: false } }, 'PATCH'); setMessage(`User ${status.toLowerCase()}.`); await reload(); } catch (e) { setMessage(e.message); } }}><Text style={styles.secondaryText}>{selected.STATUS === 'ACTIVE' ? 'Deactivate user' : 'Activate user'}</Text></TouchableOpacity>}</View>;
     if (activeTile === 'clients' && editingRates) return <View style={styles.detailCard}><View style={styles.detailHeader}><Text style={styles.detailHeading}>Rates: {selected.CODE}</Text><TouchableOpacity style={styles.smallButton} onPress={() => setEditingRates(false)}><Text style={styles.smallButtonText}>Back</Text></TouchableOpacity></View>{rateRows.map((rate, index) => <View key={`${rate.UID || index}`} style={styles.rateRow}><TextInput style={[styles.input, styles.rateInput]} value={String(rate.MODE || '')} placeholder="MODE" onChangeText={value => setRateRows(rows => rows.map((row, i) => i === index ? { ...row, MODE: value } : row))} autoCapitalize="characters" /><TextInput style={[styles.input, styles.rateInput]} value={String(rate.WEIGHT || '')} placeholder="WEIGHT" onChangeText={value => setRateRows(rows => rows.map((row, i) => i === index ? { ...row, WEIGHT: value } : row))} /><TextInput style={[styles.input, styles.rateInput]} value={String(rate.Z1 || '')} placeholder="Z1" onChangeText={value => setRateRows(rows => rows.map((row, i) => i === index ? { ...row, Z1: value } : row))} keyboardType="numeric" /><TouchableOpacity style={styles.dangerSmall} onPress={() => setRateRows(rows => rows.filter((_, i) => i !== index))}><Text style={styles.dangerText}>×</Text></TouchableOpacity></View>)}<View style={styles.formActions}><TouchableOpacity style={styles.secondaryButton} onPress={() => setRateRows(rows => [...rows, { CODE: selected.CODE, MODE: 'EXPRESS', WEIGHT: '0.5', Z1: '' }])}><Text style={styles.secondaryText}>＋ Add rate</Text></TouchableOpacity><TouchableOpacity style={styles.primaryButton} onPress={saveRates} disabled={saving}>{saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save all rates</Text>}</TouchableOpacity></View></View>;
-    if (activeTile === 'services') return <View style={styles.detailCard}><Text style={styles.detailHeading}>{selected.icon} {selected.name}</Text><Text style={styles.detailDescription}>{selected.desc}</Text><Text style={styles.detailRow}>Status: {displayValue(selected.status)}</Text>{selected.id === 'managerio' && <View style={styles.switchRow}><Text style={styles.detailRow}>Enable Manager.io sync</Text><Switch value={Boolean(selected.enabled)} onValueChange={async enabled => { try { await apiCall('/api/toggleManagerIO', { enabled }); setServiceStatuses(s => ({ ...s, managerio: { ...s.managerio, enabled, status: enabled ? 'online' : 'offline' } })); } catch (e) { setMessage(e.message); } }} /></View>}<TouchableOpacity style={styles.secondaryButton} onPress={async () => { try { const result = await apiCall(`/api/services/ping/${selected.id}`, {}, 'GET'); setServiceStatuses(s => ({ ...s, [selected.id]: result.data || result })); } catch (e) { setMessage(e.message); } }}><Text style={styles.secondaryText}>Ping this service</Text></TouchableOpacity><TouchableOpacity style={styles.secondaryButton} onPress={() => openTile('services')}><Text style={styles.secondaryText}>Refresh all statuses</Text></TouchableOpacity></View>;
+    if (activeTile === 'services') return <View style={styles.detailCard}>
+      <Text style={styles.detailHeading}>{selected.icon} {selected.name}</Text>
+      <Text style={styles.detailDescription}>{selected.desc}</Text>
+      <Text style={styles.detailRow}>Status: {displayValue(selected.status)}{selected.latency_ms != null ? ` · ${selected.latency_ms}ms` : ''}</Text>
+      <View style={styles.serviceActions}>
+        <TouchableOpacity style={styles.secondaryButton} onPress={() => runServiceAction('ping')} disabled={saving}><Text style={styles.secondaryText}>Ping</Text></TouchableOpacity>
+        {selected.id === 'tracking' && <TouchableOpacity style={styles.secondaryButton} onPress={() => runServiceAction('worker')} disabled={saving}><Text style={styles.secondaryText}>⚡ Run worker</Text></TouchableOpacity>}
+        {(selected.id === 'render' || selected.id === 'whatsapp') && <TouchableOpacity style={styles.secondaryButton} onPress={() => runServiceAction('restart')} disabled={saving}><Text style={styles.secondaryText}>Restart</Text></TouchableOpacity>}
+        {selected.id === 'whatsapp' && <><TouchableOpacity style={styles.secondaryButton} onPress={() => runServiceAction('waStatus')} disabled={saving}><Text style={styles.secondaryText}>WA status</Text></TouchableOpacity><TouchableOpacity style={styles.dangerButton} onPress={() => runServiceAction('waLogout')} disabled={saving}><Text style={styles.dangerText}>WA logout</Text></TouchableOpacity></>}
+        {selected.id === 'managerio' && <TouchableOpacity style={styles.secondaryButton} onPress={() => runServiceAction('managerToggle')} disabled={saving}><Text style={styles.secondaryText}>{selected.enabled ? 'Pause sync' : 'Enable sync'}</Text></TouchableOpacity>}
+        <TouchableOpacity style={styles.secondaryButton} onPress={loadServiceLogs} disabled={serviceLogLoading}><Text style={styles.secondaryText}>{serviceLogLoading ? 'Loading…' : 'View logs'}</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.secondaryButton} onPress={() => openTile('services')}><Text style={styles.secondaryText}>Refresh statuses</Text></TouchableOpacity>
+      </View>
+      {serviceLog ? <ScrollView style={styles.serviceLog}><Text style={styles.serviceLogText}>{JSON.stringify(serviceLog, null, 2)}</Text></ScrollView> : null}
+    </View>;
     if (activeTile === 'clients') return <View style={styles.detailCard}><View style={styles.detailHeader}><Text style={styles.detailHeading}>{displayValue(selected.B2B_NAME || selected.CODE)}</Text><View style={styles.headerButtons}>{can(role, 'ADMIN') && <TouchableOpacity style={styles.smallButton} onPress={() => startForm(selected)}><Text style={styles.smallButtonText}>Edit</Text></TouchableOpacity>}<TouchableOpacity style={styles.smallButton} onPress={() => startRates(selected)}><Text style={styles.smallButtonText}>Rates</Text></TouchableOpacity></View></View>{Object.entries(selected).filter(([key]) => !['id', 'created', 'updated', 'CROSSOVER'].includes(key)).map(([key, value]) => <View style={styles.detailPair} key={key}><Text style={styles.detailKey}>{key}</Text><Text style={styles.detailValue}>{displayValue(value)}</Text></View>)}{can(role, 'MANAGER') && <TouchableOpacity style={styles.dangerButton} onPress={() => deleteRecord(selected)}><Text style={styles.dangerText}>Delete</Text></TouchableOpacity>}</View>;
     return <View style={styles.detailCard}><View style={styles.detailHeader}><Text style={styles.detailHeading}>{displayValue(keyFor(activeTile, selected))}</Text>{FORM_FIELDS[activeTile] && can(role, activeTile === 'clients' || activeTile === 'branches' || activeTile === 'staff' || activeTile === 'holidays' || activeTile === 'users' ? 'ADMIN' : 'MASTER') && <TouchableOpacity style={styles.smallButton} onPress={() => startForm(selected)}><Text style={styles.smallButtonText}>Edit</Text></TouchableOpacity>}</View>{Object.entries(selected).filter(([key]) => !['id', 'created', 'updated'].includes(key)).map(([key, value]) => <View style={styles.detailPair} key={key}><Text style={styles.detailKey}>{key}</Text><Text style={styles.detailValue}>{displayValue(value)}</Text></View>)}{FORM_FIELDS[activeTile] && can(role, activeTile === 'users' || activeTile === 'clients' || activeTile === 'staff' || activeTile === 'holidays' ? 'ADMIN' : 'MASTER') && <TouchableOpacity style={styles.dangerButton} onPress={() => deleteRecord(selected)}><Text style={styles.dangerText}>Delete</Text></TouchableOpacity>}</View>;
   };
 
-  const renderForm = () => <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.formWrap}><ScrollView keyboardShouldPersistTaps="handled"><Text style={styles.formHeading}>{selected ? 'Edit' : 'New'} {TILES.find(t => t[0] === activeTile)?.[2]}</Text>{(FORM_FIELDS[activeTile] || []).map(([name, label, keyboardType]) => <View key={name} style={styles.field}><Text style={styles.fieldLabel}>{label}</Text><TextInput style={styles.input} value={String(form[name] ?? '')} onChangeText={value => setForm(current => ({ ...current, [name]: value }))} placeholder={label} placeholderTextColor="#94a3b8" keyboardType={keyboardType} autoCapitalize={['EMAIL'].includes(name) ? 'none' : 'characters'} returnKeyType="next" /></View>)}<View style={styles.formActions}><TouchableOpacity style={styles.secondaryButton} onPress={() => { setShowForm(false); }}><Text style={styles.secondaryText}>Cancel</Text></TouchableOpacity><TouchableOpacity style={styles.primaryButton} disabled={saving} onPress={saveRecord}>{saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save</Text>}</TouchableOpacity></View></ScrollView></KeyboardAvoidingView>;
+  const renderForm = () => <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.formWrap}>
+    <ScrollView keyboardShouldPersistTaps="handled">
+      <Text style={styles.formHeading}>{selected ? 'Edit' : 'New'} {TILES.find(t => t[0] === activeTile)?.[2]}</Text>
+      {(FORM_FIELDS[activeTile] || []).map(([name, label, keyboardType]) => {
+        const isGeo = (activeTile === 'branches' && name === 'BRANCH_GEO_TEG') || (activeTile === 'attendance' && ['GEO_TAG_IN', 'GEO_TAG_OUT'].includes(name));
+        const isReadOnly = (activeTile === 'branches' && ['BRANCH_CITY', 'BRANCH_STATE', 'CODE_STATE', 'GST_CODE'].includes(name))
+          || (activeTile === 'staff' && ['CITY', 'STATE'].includes(name))
+          || (activeTile === 'carriers' && ['COMPANY_CITY', 'COMPANY_STATE'].includes(name));
+        return <View key={name} style={styles.field}>
+          <Text style={styles.fieldLabel}>{label}{isReadOnly ? ' (from pincode)' : ''}</Text>
+          <View style={isGeo ? styles.geoInputRow : null}>
+            <TextInput
+              style={[styles.input, isGeo && styles.geoInput, isReadOnly && styles.readOnlyInput]}
+              value={String(form[name] ?? '')}
+              onChangeText={value => handleFormChange(name, value)}
+              placeholder={label}
+              placeholderTextColor="#94a3b8"
+              keyboardType={keyboardType}
+              autoCapitalize={['EMAIL'].includes(name) ? 'none' : 'characters'}
+              editable={!isReadOnly}
+              returnKeyType="next"
+            />
+            {isGeo ? <TouchableOpacity style={styles.gpsButton} onPress={() => captureLocation(name)} disabled={locationLoading}>
+              <Text style={styles.gpsText}>{locationLoading ? '…' : '📍 GPS'}</Text>
+            </TouchableOpacity> : null}
+          </View>
+        </View>;
+      })}
+      <View style={styles.formActions}><TouchableOpacity style={styles.secondaryButton} onPress={() => { setShowForm(false); }}><Text style={styles.secondaryText}>Cancel</Text></TouchableOpacity><TouchableOpacity style={styles.primaryButton} disabled={saving} onPress={saveRecord}>{saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save</Text>}</TouchableOpacity></View>
+    </ScrollView>
+  </KeyboardAvoidingView>;
 
   const renderPincode = () => <View style={styles.detailCard}><Text style={styles.detailHeading}>📍 Pincode lookup</Text><Text style={styles.detailDescription}>Read-only web parity lookup using the local network map with API fallback.</Text><View style={styles.pinSearch}><TextInput style={[styles.input, { flex: 1 }]} value={query} onChangeText={setQuery} placeholder="6-digit pincode" keyboardType="numeric" maxLength={6} onSubmitEditing={searchPincode} /><TouchableOpacity style={styles.primaryButton} onPress={searchPincode}>{pinLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Search</Text>}</TouchableOpacity></View>{pinResult && <View style={styles.pinGrid}>{[['City', pinResult.CITY], ['State', pinResult.STATE_NAME || pinResult.STATE], ['State code', pinResult.STATE_CODE], ['GST code', pinResult.GST_CODE], ['Zone', pinResult.ZONE], ['ODA', pinResult.ODA], ['Express TAT', pinResult.EXPRESS_TAT], ['Airline TAT', pinResult.AIRLINE_TAT], ['Surface TAT', pinResult.SURFACE_TAT], ['Premium TAT', pinResult.PREMIUM_TAT]].map(([key, value]) => <View style={styles.pinCell} key={key}><Text style={styles.detailKey}>{key}</Text><Text style={styles.detailValue}>{displayValue(value)}</Text></View>)}</View>}</View>;
 
@@ -485,6 +659,7 @@ export default function AdminScreen({
     <Modal visible={sudoVisible} transparent animationType="fade" onRequestClose={closeSudo}><View style={styles.modalOverlay}><View style={styles.modalCard}><Text style={styles.modalTitle}>{sudoStep === 'credentials' ? 'Confirm identity' : 'Verify admin OTP'}</Text><Text style={styles.modalHint}>{sudoStep === 'credentials' ? 'The web admin flow requires a fresh identity check before protected mutations.' : `OTP sent for ${sudoUsername}`}</Text>{sudoError ? <Text style={styles.error}>{sudoError}</Text> : null}{sudoStep === 'credentials' ? <><TextInput style={styles.input} value={sudoUsername} onChangeText={setSudoUsername} placeholder="Username" autoCapitalize="none" /><TextInput style={styles.input} value={sudoPassword} onChangeText={setSudoPassword} placeholder="Password" secureTextEntry /><TouchableOpacity style={styles.primaryButton} onPress={submitSudoCredentials} disabled={sudoBusy}>{sudoBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Send OTP</Text>}</TouchableOpacity></> : <><TextInput style={styles.input} value={sudoOtp} onChangeText={setSudoOtp} placeholder="6-digit OTP" keyboardType="numeric" maxLength={6} onSubmitEditing={submitSudoOtp} /><TouchableOpacity style={styles.primaryButton} onPress={submitSudoOtp} disabled={sudoBusy}>{sudoBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Verify</Text>}</TouchableOpacity></>}<TouchableOpacity style={styles.secondaryButton} onPress={closeSudo}><Text style={styles.secondaryText}>Cancel</Text></TouchableOpacity></View></View></Modal>
     <Modal visible={writeOtpVisible} transparent animationType="fade" onRequestClose={closeStaffOtp}><View style={styles.modalOverlay}><View style={styles.modalCard}><Text style={styles.modalTitle}>Verify staff write OTP</Text><Text style={styles.modalHint}>OTP sent for {writeOtpCode} ({writeOtpAction}).</Text>{writeOtpError ? <Text style={styles.error}>{writeOtpError}</Text> : null}<TextInput style={styles.input} value={writeOtp} onChangeText={setWriteOtp} placeholder="6-digit OTP" keyboardType="numeric" maxLength={6} onSubmitEditing={verifyStaffWriteOtp} /><TouchableOpacity style={styles.primaryButton} onPress={verifyStaffWriteOtp} disabled={writeOtpBusy}>{writeOtpBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Verify</Text>}</TouchableOpacity><TouchableOpacity style={styles.secondaryButton} onPress={closeStaffOtp}><Text style={styles.secondaryText}>Cancel</Text></TouchableOpacity></View></View></Modal>
     <Modal visible={b2bOtpVisible} transparent animationType="fade" onRequestClose={closeB2bOtp}><View style={styles.modalOverlay}><View style={styles.modalCard}><Text style={styles.modalTitle}>Verify client write OTP</Text><Text style={styles.modalHint}>OTP sent for {b2bOtpCode} ({b2bOtpAction}).</Text>{b2bOtpError ? <Text style={styles.error}>{b2bOtpError}</Text> : null}<TextInput style={styles.input} value={b2bOtp} onChangeText={setB2bOtp} placeholder="6-digit OTP" keyboardType="numeric" maxLength={6} onSubmitEditing={verifyB2bOtp} /><TouchableOpacity style={styles.primaryButton} onPress={verifyB2bOtp} disabled={b2bOtpBusy}>{b2bOtpBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Verify</Text>}</TouchableOpacity><TouchableOpacity style={styles.secondaryButton} onPress={closeB2bOtp}><Text style={styles.secondaryText}>Cancel</Text></TouchableOpacity></View></View></Modal>
+    <Modal visible={addUserOtpVisible} transparent animationType="fade" onRequestClose={() => setAddUserOtpVisible(false)}><View style={styles.modalOverlay}><View style={styles.modalCard}><Text style={styles.modalTitle}>Verify add-user OTP</Text><Text style={styles.modalHint}>Enter the 6-digit OTP sent for {pendingUserPayload?.USER || 'this user'}.</Text>{addUserOtpError ? <Text style={styles.error}>{addUserOtpError}</Text> : null}<TextInput style={styles.input} value={addUserOtp} onChangeText={setAddUserOtp} placeholder="6-digit OTP" keyboardType="numeric" maxLength={6} onSubmitEditing={confirmAddUser} /><TouchableOpacity style={styles.primaryButton} onPress={confirmAddUser} disabled={addUserOtpBusy}>{addUserOtpBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Confirm user</Text>}</TouchableOpacity><TouchableOpacity style={styles.secondaryButton} onPress={() => setAddUserOtpVisible(false)}><Text style={styles.secondaryText}>Cancel</Text></TouchableOpacity></View></View></Modal>
   </View>;
 }
 
@@ -557,6 +732,14 @@ const styles = StyleSheet.create({
   loadingBar: { position: 'absolute', bottom: 8, left: 14, right: 14, padding: 8, borderRadius: 8, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', alignItems: 'center', gap: 8 },
   loadingText: { color: '#64748b', fontSize: 11 },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: 8 },
+  serviceActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 8 },
+  serviceLog: { maxHeight: 260, marginTop: 12, padding: 10, borderRadius: 8, backgroundColor: '#0f172a' },
+  serviceLogText: { color: '#dbeafe', fontSize: 10, fontFamily: Platform.OS === 'web' ? 'monospace' : undefined },
+  geoInputRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  geoInput: { flex: 1, marginBottom: 0 },
+  gpsButton: { minHeight: 42, borderRadius: 8, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#e0f2fe', borderWidth: 1, borderColor: '#7dd3fc' },
+  gpsText: { color: '#0369a1', fontSize: 11, fontWeight: '800' },
+  readOnlyInput: { backgroundColor: '#f1f5f9', color: '#64748b' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,.55)', justifyContent: 'center', padding: 20 },
   modalCard: { backgroundColor: '#fff', borderRadius: 14, padding: 18 },
   modalTitle: { color: '#1e293b', fontSize: 18, fontWeight: '800', marginBottom: 5 },
