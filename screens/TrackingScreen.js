@@ -286,9 +286,8 @@ function TrackResult({ result }) {
     return (rn !== null && rn !== undefined) ? Number(rn) : 0;
   };
 
-  // Sort TRACK: Row 1 (latest scan) at top
-  trackMovs.sort((a, b) => getRN(a) - getRN(b));
-  // Sort SYSTEM: Max row number (latest system event) at top
+  // Sort BOTH TRACK and SYSTEM descending by row_number (max row on top down to 1)
+  trackMovs.sort((a, b) => getRN(b) - getRN(a));
   systemMovs.sort((a, b) => getRN(b) - getRN(a));
 
   const rawState = (shipment.state || shipment.STATE || 'pending').toLowerCase();
