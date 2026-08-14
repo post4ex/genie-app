@@ -258,22 +258,38 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
 
 // ── Tracking Result Component ─────────────────────────────────────────────────
 function TrackResult({ result }) {
-  let shipment, movements;
+  let shipment, rawMovements;
   if (result.shipment !== undefined) {
     shipment = result.shipment || {};
-    movements = result.movements || [];
+    rawMovements = result.movements || [];
   } else {
     const inner = result.data || result;
     shipment = inner.shipment || (inner.movements ? inner : {});
-    movements = inner.movements || [];
+    rawMovements = inner.movements || [];
   }
 
-  // Sort newest first
-  movements = [...movements].sort((a, b) => {
-    const aS = a.activity_stamp || a.ACTIVITY_STAMP || 0;
-    const bS = b.activity_stamp || b.ACTIVITY_STAMP || 0;
-    return bS - aS;
+  // Separate TRACK and SYSTEM movements
+  const trackMovs = [];
+  const systemMovs = [];
+
+  rawMovements.forEach(m => {
+    const type = String(m.move_type || m.MOVE_TYPE || 'TRACK').toUpperCase();
+    if (type === 'SYSTEM') {
+      systemMovs.push(m);
+    } else {
+      trackMovs.push(m);
+    }
   });
+
+  const getRN = m => {
+    const rn = m.row_number !== undefined ? m.row_number : m.ROW_NUMBER;
+    return (rn !== null && rn !== undefined) ? Number(rn) : 0;
+  };
+
+  // Sort TRACK: Row 1 (latest scan) at top
+  trackMovs.sort((a, b) => getRN(a) - getRN(b));
+  // Sort SYSTEM: Max row number (latest system event) at top
+  systemMovs.sort((a, b) => getRN(b) - getRN(a));
 
   const rawState = (shipment.state || shipment.STATE || 'pending').toLowerCase();
   const sc = STATE_CONFIG[rawState] || STATE_CONFIG.pending;
@@ -311,23 +327,63 @@ function TrackResult({ result }) {
         </View>
       </View>
 
-      {/* Movement Timeline */}
-      <Text style={styles.sectionHeader}>MOVEMENT TIMELINE</Text>
-      {movements.length > 0 ? movements.map((m, i) => (
-        <View key={i} style={[styles.movCard, i === 0 ? styles.movCardLatest : styles.movCardPast]}>
-          <View style={styles.movHeader}>
-            <Text style={[styles.movAct, i === 0 && styles.movActLatest]} numberOfLines={2}>
-              {m.activity || m.ACTIVITY || ''}
-            </Text>
-            <Text style={styles.movTime}>{m.date || m.DATE || ''} {m.time || m.TIME || ''}</Text>
+      {/* ── Room 1: Courier Tracking Scans ── */}
+      <Text style={styles.sectionHeader}>📍 COURIER TRACKING SCANS ({trackMovs.length})</Text>
+      {trackMovs.length > 0 ? trackMovs.map((m, i) => {
+        const rn = getRN(m);
+        return (
+          <View key={i} style={[styles.movCard, i === 0 ? styles.movCardLatest : styles.movCardPast]}>
+            <View style={styles.movHeader}>
+              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                {rn > 0 ? (
+                  <View style={{ backgroundColor: i === 0 ? '#1d4ed8' : '#64748b', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>#{rn}</Text>
+                  </View>
+                ) : null}
+                <Text style={[styles.movAct, i === 0 && styles.movActLatest]} numberOfLines={2}>
+                  {m.activity || m.ACTIVITY || ''}
+                </Text>
+              </View>
+              <Text style={styles.movTime}>{m.date || m.DATE || ''} {m.time || m.TIME || ''}</Text>
+            </View>
+            {(m.location || m.LOCATION) ? (
+              <Text style={styles.movLoc}>📍 {m.location || m.LOCATION}</Text>
+            ) : null}
           </View>
-          {(m.location || m.LOCATION) ? (
-            <Text style={styles.movLoc}>📍 {m.location || m.LOCATION}</Text>
-          ) : null}
+        );
+      }) : (
+        <View style={[styles.emptyBox, { marginBottom: 16 }]}>
+          <Text style={styles.emptyText}>No courier tracking scans recorded yet.</Text>
         </View>
-      )) : (
+      )}
+
+      {/* ── Room 2: System & Booking Events ── */}
+      <Text style={[styles.sectionHeader, { marginTop: 12 }]}>⚙️ SYSTEM & BOOKING EVENTS ({systemMovs.length})</Text>
+      {systemMovs.length > 0 ? systemMovs.map((m, i) => {
+        const rn = getRN(m);
+        return (
+          <View key={i} style={[styles.movCard, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
+            <View style={styles.movHeader}>
+              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                {rn > 0 ? (
+                  <View style={{ backgroundColor: '#15803d', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>SYS #{rn}</Text>
+                  </View>
+                ) : null}
+                <Text style={[styles.movAct, { color: '#166534' }]} numberOfLines={2}>
+                  {m.activity || m.ACTIVITY || ''}
+                </Text>
+              </View>
+              <Text style={styles.movTime}>{m.date || m.DATE || ''} {m.time || m.TIME || ''}</Text>
+            </View>
+            {(m.location || m.LOCATION) ? (
+              <Text style={styles.movLoc}>📍 {m.location || m.LOCATION}</Text>
+            ) : null}
+          </View>
+        );
+      }) : (
         <View style={styles.emptyBox}>
-          <Text style={styles.emptyText}>No movements recorded yet.</Text>
+          <Text style={styles.emptyText}>No system events recorded.</Text>
         </View>
       )}
     </View>
