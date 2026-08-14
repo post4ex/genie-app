@@ -299,10 +299,22 @@ export default function CalculatorScreen({ b2bList = [], modesMap = {}, carriers
     setMessage(''); setMessageKind('');
   };
 
-  const estimate = () => {
+  const estimate = async () => {
     Keyboard.dismiss();
-    if (!/^\d{6}$/.test(destPin)) { showMessage('Please enter a valid destination pincode first.', 'error'); return; }
-    if (!destData) { showMessage('Pincode not resolved. Please wait for lookup to complete.', 'error'); return; }
+    if (!/^\d{6}$/.test(destPin)) { showMessage('Please enter a valid 6-digit destination pincode.', 'error'); return; }
+    let activeDest = destData;
+    if (!activeDest) {
+      setLookupLoading(prev => ({ ...prev, dest: true }));
+      const res = await searchPin(destPin);
+      setLookupLoading(prev => ({ ...prev, dest: false }));
+      if (res && (res.CITY || res.found)) {
+        activeDest = res;
+        setDestData(res);
+      } else {
+        showMessage(`Destination pincode ${destPin} not found.`, 'error');
+        return;
+      }
+    }
     showMessage('Calculation refreshed ✓', 'success');
   };
 

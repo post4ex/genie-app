@@ -328,29 +328,19 @@ function TrackResult({ result }) {
 
       {/* ── Room 1: Courier Tracking Scans ── */}
       <Text style={styles.sectionHeader}>📍 COURIER TRACKING SCANS ({trackMovs.length})</Text>
-      {trackMovs.length > 0 ? trackMovs.map((m, i) => {
-        const rn = getRN(m);
-        return (
-          <View key={i} style={[styles.movCard, i === 0 ? styles.movCardLatest : styles.movCardPast]}>
-            <View style={styles.movHeader}>
-              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                {rn > 0 ? (
-                  <View style={{ backgroundColor: i === 0 ? '#1d4ed8' : '#64748b', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
-                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>#{rn}</Text>
-                  </View>
-                ) : null}
-                <Text style={[styles.movAct, i === 0 && styles.movActLatest]} numberOfLines={2}>
-                  {m.activity || m.ACTIVITY || ''}
-                </Text>
-              </View>
-              <Text style={styles.movTime}>{m.date || m.DATE || ''} {m.time || m.TIME || ''}</Text>
-            </View>
-            {(m.location || m.LOCATION) ? (
-              <Text style={styles.movLoc}>📍 {m.location || m.LOCATION}</Text>
-            ) : null}
+      {trackMovs.length > 0 ? trackMovs.map((m, i) => (
+        <View key={i} style={[styles.movCard, i === 0 ? styles.movCardLatest : styles.movCardPast]}>
+          <View style={styles.movHeader}>
+            <Text style={[styles.movAct, i === 0 && styles.movActLatest, { flex: 1 }]} numberOfLines={2}>
+              {m.activity || m.ACTIVITY || ''}
+            </Text>
+            <Text style={styles.movTime}>{m.date || m.DATE || ''} {m.time || m.TIME || ''}</Text>
           </View>
-        );
-      }) : (
+          {(m.location || m.LOCATION) ? (
+            <Text style={styles.movLoc}>📍 {m.location || m.LOCATION}</Text>
+          ) : null}
+        </View>
+      )) : (
         <View style={[styles.emptyBox, { marginBottom: 16 }]}>
           <Text style={styles.emptyText}>No courier tracking scans recorded yet.</Text>
         </View>
@@ -358,29 +348,19 @@ function TrackResult({ result }) {
 
       {/* ── Room 2: System & Booking Events ── */}
       <Text style={[styles.sectionHeader, { marginTop: 12 }]}>⚙️ SYSTEM & BOOKING EVENTS ({systemMovs.length})</Text>
-      {systemMovs.length > 0 ? systemMovs.map((m, i) => {
-        const rn = getRN(m);
-        return (
-          <View key={i} style={[styles.movCard, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
-            <View style={styles.movHeader}>
-              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                {rn > 0 ? (
-                  <View style={{ backgroundColor: '#15803d', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
-                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>SYS #{rn}</Text>
-                  </View>
-                ) : null}
-                <Text style={[styles.movAct, { color: '#166534' }]} numberOfLines={2}>
-                  {m.activity || m.ACTIVITY || ''}
-                </Text>
-              </View>
-              <Text style={styles.movTime}>{m.date || m.DATE || ''} {m.time || m.TIME || ''}</Text>
-            </View>
-            {(m.location || m.LOCATION) ? (
-              <Text style={styles.movLoc}>📍 {m.location || m.LOCATION}</Text>
-            ) : null}
+      {systemMovs.length > 0 ? systemMovs.map((m, i) => (
+        <View key={i} style={[styles.movCard, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
+          <View style={styles.movHeader}>
+            <Text style={[styles.movAct, { color: '#166534', flex: 1 }]} numberOfLines={2}>
+              {m.activity || m.ACTIVITY || ''}
+            </Text>
+            <Text style={styles.movTime}>{m.date || m.DATE || ''} {m.time || m.TIME || ''}</Text>
           </View>
-        );
-      }) : (
+          {(m.location || m.LOCATION) ? (
+            <Text style={styles.movLoc}>📍 {m.location || m.LOCATION}</Text>
+          ) : null}
+        </View>
+      )) : (
         <View style={styles.emptyBox}>
           <Text style={styles.emptyText}>No system events recorded.</Text>
         </View>

@@ -94,6 +94,32 @@ export async function searchCity(city) {
     }
 }
 
+export function inferZone(pincode, stateCode) {
+    const pin = String(pincode || '').trim();
+    const sc = String(stateCode || '').toUpperCase();
+    
+    if (['DL', 'HR', 'UP', 'UK'].includes(sc)) return 'Z1';
+    if (['PB', 'HP', 'JK', 'CH'].includes(sc)) return 'Z2';
+    if (['RJ', 'GJ', 'DD', 'DN'].includes(sc)) return 'Z3';
+    if (['MH', 'MP', 'CG'].includes(sc)) return 'Z4';
+    if (['KA', 'GA', 'AP', 'TS'].includes(sc)) return 'Z5';
+    if (['TN', 'KL', 'PY'].includes(sc)) return 'Z6';
+    if (['WB', 'BR', 'JH', 'OR', 'SK'].includes(sc)) return 'Z7';
+    if (['AS', 'AR', 'MN', 'MZ', 'NL', 'TR', 'ML'].includes(sc)) return 'Z8';
+
+    const firstDigit = pin.charAt(0);
+    if (firstDigit === '1') return 'Z1';
+    if (firstDigit === '2') return 'Z2';
+    if (firstDigit === '3') return 'Z3';
+    if (firstDigit === '4') return 'Z4';
+    if (firstDigit === '5') return 'Z5';
+    if (firstDigit === '6') return 'Z6';
+    if (firstDigit === '7') return 'Z7';
+    if (firstDigit === '8') return 'Z8';
+
+    return 'Z1';
+}
+
 export async function searchPin(pincode) {
     const pin = String(pincode).trim();
     
@@ -102,6 +128,7 @@ export async function searchPin(pincode) {
     if (entry) {
         const [CITY, STATE_CODE, ZONE, ODA, EXPRESS_TAT, AIRLINE_TAT, SURFACE_TAT, PREMIUM_TAT] = entry;
         const stateInfo = getStateInfo(STATE_CODE);
+        const resolvedZone = ZONE || inferZone(pin, STATE_CODE);
         return {
             found: true,
             CITY,
@@ -109,7 +136,7 @@ export async function searchPin(pincode) {
             STATE_CODE,
             STATE_NAME: stateInfo?.name || STATE_CODE,
             GST_CODE: stateInfo?.gstCode || '',
-            ZONE,
+            ZONE: resolvedZone,
             ODA,
             EXPRESS_TAT,
             AIRLINE_TAT,
@@ -124,7 +151,6 @@ export async function searchPin(pincode) {
         const data = await res.json();
         if (data?.[0]?.Status === 'Success' && data[0].PostOffice?.length > 0) {
             const po = data[0].PostOffice[0];
-            // Match state name — normalize to plain uppercase, treating & and AND as equivalent
             const normalize = s => s.toUpperCase().replace(/&/g, 'AND').replace(/\s+/g, ' ').trim();
             const apiState = normalize(po.State);
             let stateCode = '';
@@ -138,6 +164,7 @@ export async function searchPin(pincode) {
                     break;
                 }
             }
+            const resolvedZone = inferZone(pin, stateCode);
             return {
                 found: true,
                 CITY: po.District.toUpperCase(),
@@ -145,7 +172,7 @@ export async function searchPin(pincode) {
                 STATE_CODE: stateCode,
                 STATE_NAME: stateName,
                 GST_CODE: gstCode,
-                ZONE: null,
+                ZONE: resolvedZone,
                 ODA: null,
                 EXPRESS_TAT: null,
                 AIRLINE_TAT: null,
@@ -155,6 +182,25 @@ export async function searchPin(pincode) {
         }
     } catch (err) {
         console.warn('Pincode API fallback failed:', err);
+    }
+
+    // Generic fallback if 6-digit pin is entered but unlisted
+    if (/^\d{6}$/.test(pin)) {
+        const resolvedZone = inferZone(pin, '');
+        return {
+            found: true,
+            CITY: 'LOCATION',
+            STATE: 'INDIA',
+            STATE_CODE: '',
+            STATE_NAME: 'INDIA',
+            GST_CODE: '',
+            ZONE: resolvedZone,
+            ODA: null,
+            EXPRESS_TAT: null,
+            AIRLINE_TAT: null,
+            SURFACE_TAT: null,
+            PREMIUM_TAT: null
+        };
     }
 
     return { found: false };
