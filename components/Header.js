@@ -1,10 +1,21 @@
 import React, { useEffect, useRef } from 'react';
 import {
-  StyleSheet, View, Text, TouchableOpacity, Platform, Animated, Easing
+  StyleSheet, View, Text, TouchableOpacity, Platform, Animated, Easing, Image
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path, Polyline, Line, Circle } from 'react-native-svg';
+import Icon, { GradientIcon } from './icons';
 import { COLORS } from '../styles/theme';
+
+// Floating pill shadow — same treatment as the bottom bar (BottomMenuSheet)
+const floatingShadow = Platform.OS === 'web'
+  ? { boxShadow: '0px 6px 20px rgba(15, 23, 42, 0.12)' }
+  : {
+      shadowColor: '#0f172a',
+      shadowOpacity: 0.12,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 5 },
+      elevation: 8,
+    };
 
 // Sync status colors — dot on the refresh (sync) icon
 const STATUS_COLORS = {
@@ -54,57 +65,40 @@ export default function Header({
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
   return (
-    <View style={[styles.webHeader, { paddingTop: Math.max(insets.top, 10), height: 58 + Math.max(insets.top, 10) }]}>
-      {/* Left: Genie Official Logo + Subtitle */}
+    <View style={[styles.webHeader, { marginTop: Math.max(insets.top + 8, 16) }]}>
+      {/* Left: App Logo (web genie-logo) */}
       <View style={styles.webHeaderLeft}>
-        <View style={styles.logoBadgeRow}>
-          <Text style={styles.logoTextBold}>
-            🧞 <Text style={{ color: '#9C2007' }}>Gen</Text>
-            <Text style={{ color: '#F59E0B' }}>i</Text>
-            <Text style={{ color: '#022c5a' }}>e</Text>
-          </Text>
-          <Text style={styles.logoSubtitle}>Assistant to a Postman</Text>
-        </View>
+        <Image source={require('../assets/genie-logo.png')} style={styles.logoImage} resizeMode="contain" />
       </View>
 
-      {/* Right: SVG Action Icons */}
+      {/* Right: Gradient Action Icons */}
       <View style={styles.webHeaderRight}>
         {user ? (
           <>
             {/* Track AWB Icon — switches to Track tab */}
             <TouchableOpacity
-              style={styles.iconBtnCircle}
+              style={styles.iconBtn}
               onPress={onTrack}
               accessibilityLabel="Track AWB"
             >
-              <Svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <Circle cx="11" cy="11" r="8" />
-                <Line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </Svg>
+              <GradientIcon name="track" size={34} iconSize={15} />
             </TouchableOpacity>
 
             {/* Sync Icon — spins while syncing, dot shows connection status */}
             <TouchableOpacity
-              style={styles.iconBtnCircle}
+              style={styles.iconBtn}
               onPress={onRefresh}
               accessibilityLabel={STATUS_LABEL[syncStatus] || 'Sync'}
             >
               <Animated.View style={{ transform: [{ rotate }] }}>
-                <Svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={statusColor} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <Path d="M23 4v6h-6" />
-                  <Path d="M1 20v-6h6" />
-                  <Path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
-                </Svg>
+                <GradientIcon name="refresh" size={34} iconSize={15} />
               </Animated.View>
               <View style={[styles.syncStatusDot, { backgroundColor: statusColor }]} />
             </TouchableOpacity>
 
             {/* Notification Bell Icon */}
-            <TouchableOpacity style={styles.iconBtnCircle} onPress={onNotif}>
-              <Svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <Path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                <Path d="M13.73 21a2 2 0 01-3.46 0" />
-              </Svg>
+            <TouchableOpacity style={styles.iconBtn} onPress={onNotif}>
+              <GradientIcon name="bell" size={34} iconSize={15} />
               {unreadCount > 0 ? (
                 <View style={styles.notifBadgePin}>
                   <Text style={styles.notifBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
@@ -113,12 +107,8 @@ export default function Header({
             </TouchableOpacity>
 
             {/* Logout Icon */}
-            <TouchableOpacity style={[styles.iconBtnCircle, { backgroundColor: '#fef2f2', borderColor: '#fecaca' }]} onPress={onLogout}>
-              <Svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9C2007" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <Path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
-                <Polyline points="16 17 21 12 16 7" />
-                <Line x1="21" y1="12" x2="9" y2="12" />
-              </Svg>
+            <TouchableOpacity style={styles.iconBtn} onPress={onLogout}>
+              <GradientIcon name="logout" size={34} iconSize={15} />
             </TouchableOpacity>
           </>
         ) : null}
@@ -133,13 +123,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginHorizontal: 14,
+    height: 54,
     paddingHorizontal: 16,
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-    ...(Platform.OS === 'web'
-      ? { boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.04)' }
-      : { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 4, elevation: 2 }),
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    ...floatingShadow,
   },
   webHeaderLeft: {
     flexDirection: 'row',
@@ -149,32 +139,19 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     justifyContent: 'center',
   },
-  logoTextBold: {
-    fontFamily: Platform.OS === 'web' ? 'Montserrat, sans-serif' : 'Montserrat_900Black',
-    fontSize: 24,
-    fontWeight: '900',
-    letterSpacing: -1,
-    lineHeight: 26,
-  },
-  logoSubtitle: {
-    fontFamily: Platform.OS === 'web' ? 'Montserrat, sans-serif' : 'Montserrat_600SemiBold',
-    fontSize: 8.5,
-    color: '#64748b',
-    letterSpacing: 0.2,
-    marginTop: 1,
+  logoImage: {
+    width: 132,
+    height: 34,
   },
   webHeaderRight: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  iconBtnCircle: {
+  iconBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',

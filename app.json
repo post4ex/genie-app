@@ -5,20 +5,18 @@
     "version": "1.2.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0f172a"
-    },
+    "userInterfaceStyle": "dark",  "splash": {
+   "image": "./assets/splash.png",
+   "resizeMode": "cover",
+   "backgroundColor": "#ffffff"
+  },
     "ios": {
       "supportsTablet": true
     },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0f172a"
-      },
+    "android": {   "adaptiveIcon": {
+    "foregroundImage": "./assets/adaptive-icon.png",
+    "backgroundColor": "#ffffff"
+   },
       "package": "com.post4ex.geniereact",
       "versionCode": 18,
       "permissions": ["android.permission.POST_NOTIFICATIONS"],

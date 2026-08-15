@@ -5,6 +5,7 @@ yarn-debug.log*
 yarn-error.log*
 .expo/
 web-build/
+dist/
 
 # Environment & Secrets
 .env

@@ -1,7 +1,7 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, FlatList, TextInput,
-  TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator, Share, Platform,
+  TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator, Share, Platform, BackHandler,
   useWindowDimensions
 } from 'react-native';
 import Svg, { Path, Rect, Polyline } from 'react-native-svg';
@@ -15,6 +15,15 @@ import * as Sharing from 'expo-sharing';
 import { UploadViewer, resolveUploadUri, isPdfUpload, downloadUploadNative } from '../utils/upload-viewer';
 import UploaderScreen from './UploaderScreen';
 import UpdateStatusModal from '../components/UpdateStatusModal';
+import SearchBar from '../components/SearchBar';
+import FilterBar from '../components/FilterBar';
+import FilterModal from '../components/FilterModal';
+import ListItem from '../components/ListItem';
+import { accentSparkle } from '../components/Tile';
+import { GradientGlyph } from '../components/icons';
+import GradientText from '../components/GradientText';
+import Tray from '../components/Tray';
+import { LinearGradient } from 'expo-linear-gradient';
 
 // ── Web SVG Icons (Exact GENIE_WEB shipments.js _docIco 1-to-1 match) ──────────
 const CheckmarkCircleIcon = ({ size = 14, color = '#0284c7' }) => (
@@ -93,13 +102,6 @@ const RefreshIcon = ({ size = 14, color = '#64748b' }) => (
   </Svg>
 );
 
-const CalendarIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-    <Path d="M16 2v4M8 2v4M3 10h18" />
-  </Svg>
-);
-
 const EyeIcon = ({ size = 14, color = '#64748b' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
@@ -107,22 +109,25 @@ const EyeIcon = ({ size = 14, color = '#64748b' }) => (
   </Svg>
 );
 
-// ── 14 Web-Matching Shipment Tiles (GENIE_WEB Shipments.html) ──────────────────
+// ── Shipment Tiles (Total → Delivered → OFD → In Transit → TATs → …) ──────────
+// Per-tile identity: bold MaterialCommunityIcons glyph painted in the tile's
+// gradient, plus a soft web-matching tint + border for the card.
+// (Assign Carrier moves to the Scans screen; Reports is a utility tile.)
 const TILES = [
-  { id: 'all',            label: 'Total',            icon: '📦', color: '#374151', border: '#e5e7eb', bg: '#ffffff' },
-  { id: 'assign-carrier', label: 'Assign Carrier',   icon: '🚚', color: '#0369a1', border: '#e0f2fe', bg: '#f0f9ff' },
-  { id: 'overduetat',     label: 'Overdue TAT',      icon: '🔥', color: '#b91c1c', border: '#fca5a5', bg: '#fef2f2' },
-  { id: 'exceptions',     label: 'Exceptions',       icon: '⚠️', color: '#b91c1c', border: '#fee2e2', bg: '#fff1f1' },
-  { id: 'pending-pod',    label: 'Pending PODs',     icon: '📝', color: '#6b21a8', border: '#f3e8ff', bg: '#faf5ff' },
-  { id: 'topay',          label: 'To Pay',           icon: '💰', color: '#d97706', border: '#fef3c7', bg: '#fffbeb' },
-  { id: 'cod',            label: 'COD',              icon: '💵', color: '#6b21a8', border: '#ede9fe', bg: '#f5f3ff' },
-  { id: 'ofd',            label: 'Out for Delivery', icon: '🚐', color: '#1d4ed8', border: '#dbeafe', bg: '#eff6ff' },
-  { id: 'new-bookings',   label: 'New Bookings',     icon: '📅', color: '#a16207', border: '#fefce8', bg: '#fefce8' },
-  { id: 'tat',            label: 'TAT Due (3 Days)', icon: '⏰', color: '#dc2626', border: '#fee2e2', bg: '#fef2f2' },
-  { id: 'heavy',          label: 'Heavy (>25 kg)',   icon: '🏋️', color: '#047857', border: '#d1fae5', bg: '#ecfdf5' },
-  { id: 'highvalue',      label: 'High Value (>1L)', icon: '💎', color: '#1d4ed8', border: '#bfdbfe', bg: '#eff6ff' },
-  { id: 'fov',            label: 'FOV',              icon: '📄', color: '#0f766e', border: '#ccfbf1', bg: '#f0fdf4' },
-  { id: 'delivered',      label: 'Delivered',        icon: '✅', color: '#15803d', border: '#bbf7d0', bg: '#f0fdf4' },
+  { id: 'all',          label: 'Total',            icon: 'package-variant-closed', grad: ['#64748b', '#475569'], bg: '#f8fafc', border: '#e2e8f0' },
+  { id: 'delivered',    label: 'Delivered',        icon: 'check-circle',          grad: ['#16a34a', '#22c55e'], bg: '#f0fdf4', border: '#86efac' },
+  { id: 'ofd',          label: 'Out for Delivery', icon: 'truck-fast',            grad: ['#3b82f6', '#06b6d4'], bg: '#eff6ff', border: '#bfdbfe' },
+  { id: 'intransit',    label: 'In Transit',       icon: 'truck-delivery',        grad: ['#f59e0b', '#d97706'], bg: '#fffbeb', border: '#fde68a' },
+  { id: 'tat',          label: 'TAT Due (3 Days)', icon: 'timer-outline',         grad: ['#ef4444', '#dc2626'], bg: '#fef2f2', border: '#fca5a5' },
+  { id: 'overduetat',   label: 'Overdue TAT',      icon: 'timer-sand',            grad: ['#ef4444', '#f97316'], bg: '#fef2f2', border: '#fecaca' },
+  { id: 'exceptions',   label: 'Exceptions',       icon: 'alert',                 grad: ['#f43f5e', '#ef4444'], bg: '#fff1f1', border: '#fecaca' },
+  { id: 'topay',        label: 'To Pay',           icon: 'cash',                  grad: ['#f59e0b', '#ea580c'], bg: '#fffbeb', border: '#fde68a' },
+  { id: 'cod',          label: 'COD',              icon: 'credit-card',           grad: ['#8b5cf6', '#6d28d9'], bg: '#f5f3ff', border: '#ddd6fe' },
+  { id: 'new-bookings', label: 'New Bookings',     icon: 'calendar-month',        grad: ['#ca8a04', '#f59e0b'], bg: '#fefce8', border: '#fde047' },
+  { id: 'heavy',        label: 'Heavy (>25 kg)',   icon: 'weight-lifter',         grad: ['#059669', '#10b981'], bg: '#ecfdf5', border: '#a7f3d0' },
+  { id: 'highvalue',    label: 'High Value (>1L)', icon: 'diamond-stone',         grad: ['#1d4ed8', '#3b82f6'], bg: '#eff6ff', border: '#93c5fd' },
+  { id: 'fov',          label: 'FOV',              icon: 'file-document',         grad: ['#0d9488', '#14b8a6'], bg: '#f0fdf4', border: '#99f6e4' },
+  { id: 'reports',      label: 'Reports',          icon: 'chart-bar',             grad: ['#6366f1', '#8b5cf6'], bg: '#f5f3ff', border: '#ddd6fe' },
 ];
 
 const STATE_CONFIG = {
@@ -174,9 +179,6 @@ const _isNewBooking = (o) => {
   return msSince >= 0 && msSince <= 86400000;
 };
 
-const _hasPODUpload = (uploads) =>
-  Array.isArray(uploads) && uploads.some(u => (u.UPLOAD_TYPE || '').toUpperCase() === 'POD');
-
 // Shipment state values arrive from different carriers with spaces, hyphens, or
 // underscores (for example, "Out for Delivery"). The web compares canonical
 // values such as `outfordelivery`, so use the same normalization for every tile,
@@ -199,8 +201,22 @@ const parseAssignmentDate = (value) => {
   return date;
 };
 
-const STATUSES_LIST = ['ALL', 'delivered', 'outfordelivery', 'intransit', 'exception', 'pending'];
-const PAY_MODES_LIST = ['ALL', 'TOPAY', 'COD', 'PREPAID'];
+// Full-name option lists for the filter dropdowns (cool, human-readable).
+const STATUS_OPTIONS = [
+  { value: 'ALL', label: 'All Statuses' },
+  { value: 'delivered', label: 'Delivered' },
+  { value: 'outfordelivery', label: 'Out for Delivery' },
+  { value: 'intransit', label: 'In Transit' },
+  { value: 'exception', label: 'Exception' },
+  { value: 'pending', label: 'Pending' },
+];
+const PAY_OPTIONS = [
+  { value: 'ALL', label: 'All Payment Modes' },
+  { value: 'TOPAY', label: 'To Pay' },
+  { value: 'COD', label: 'Cash on Delivery' },
+  { value: 'PREPAID', label: 'Prepaid' },
+];
+const optionLabel = (options, v) => (options.find(o => o.value === v) || {}).label || v;
 
 const DOC_CENTER_ITEMS = [
   { label: 'Label' },
@@ -210,11 +226,9 @@ const DOC_CENTER_ITEMS = [
   { label: 'Docs + Box' },
 ];
 
-const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
 export default function OrdersScreen({
   orders = [], searchQuery, setSearchQuery, refreshing, onRefresh,
-  b2b2cMap = {}, carriersMap = {}, modesMap = {}, productsMap = {}, multiboxMap = {}, uploadsMap = {}, shipmentsMap = {},
+  b2b2cMap = {}, b2bList = [], carriersMap = {}, modesMap = {}, productsMap = {}, multiboxMap = {}, uploadsMap = {}, shipmentsMap = {},
   branchesMap = {}, token = '', apiBase = '', onEditOrder = null, role = 'STAFF'
 }) {
   const [currentView, setCurrentView] = useState('tiles');
@@ -242,11 +256,6 @@ export default function OrdersScreen({
   const [assignMessage, setAssignMessage] = useState('');
   const [assignFormDirty, setAssignFormDirty] = useState(false);
   const { width: screenWidth } = useWindowDimensions();
-
-  // Visual Calendar Picker State
-  const [calendarTarget, setCalendarTarget] = useState(null); // 'start' | 'end' | null
-  const [calYear, setCalYear] = useState(new Date().getFullYear());
-  const [calMonth, setCalMonth] = useState(new Date().getMonth());
 
   // Tracking API State
   const [liveTracking, setLiveTracking] = useState(null);
@@ -295,11 +304,58 @@ export default function OrdersScreen({
   const partyEmails = (o) => [...new Set([b2b2cMap[o?.CONSIGNOR]?.EMAIL, b2b2cMap[o?.CONSIGNEE]?.EMAIL].filter(Boolean))];
   const partyMobiles = (o) => [b2b2cMap[o?.CONSIGNOR]?.MOBILE, b2b2cMap[o?.CONSIGNEE]?.MOBILE].filter(Boolean).join(',');
 
-  const tileCounts = useMemo(() => {
-    const counts = { all: orders.length, topay: 0, cod: 0, tat: 0, overduetat: 0, heavy: 0, highvalue: 0, exceptions: 0, 'pending-pod': 0, ofd: 0, 'new-bookings': 0, fov: 0, delivered: 0, 'assign-carrier': 0 };
-    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; // assign-carrier 30-day window
+  // ── Advanced filters (status/branch/code/carrier/pay-mode/search) ──
+  // Shared by the list view AND the tile counts, so the tiles live-update as
+  // filters are applied. Date bounds are excluded here on purpose: the list
+  // adds the implicit month-start default, the tiles apply only explicit dates.
+  const matchAdvancedFilters = (o) => {
+    const state = getOrderState(o);
+    if (filterStatus !== 'ALL' && state !== filterStatus) return false;
+    // Web uses exact option values for these three dynamically populated
+    // selects; do not silently merge distinct backend codes by case.
+    if (filterBranch !== 'ALL' && String(o.BRANCH ?? '') !== filterBranch) return false;
+    if (filterCode !== 'ALL' && String(o.CODE ?? '') !== filterCode) return false;
+    if (filterCarrier !== 'ALL' && String(o.CARRIER ?? '') !== filterCarrier) return false;
+    if (filterPayMode === 'TOPAY' && o.TOPAY !== 'Yes') return false;
+    if (filterPayMode === 'COD' && (!o.COD || parseFloat(o.COD) <= 0)) return false;
+    if (filterPayMode === 'PREPAID' && (o.TOPAY === 'Yes' || (o.COD && parseFloat(o.COD) > 0))) return false;
 
-    orders.forEach(o => {
+    // ── Search (web parity: ref/awb/names/cities/pincodes) ──
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const cnor = b2b2cMap[o.CONSIGNOR] || {};
+      const cnee = b2b2cMap[o.CONSIGNEE] || {};
+      const haystack = [
+        o.REFERENCE, o.AWB_NUMBER, cnor.NAME || o.CONSIGNOR, cnee.NAME || o.CONSIGNEE,
+        cnee.CITY || o.DEST_CITY, cnee.PINCODE || o.DEST_PINCODE, cnor.CITY || o.ORIGIN_CITY,
+      ].filter(Boolean).map(String).join('|').toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  };
+
+  // Base set the tiles count on: advanced filters + explicit dates only
+  // (no implicit month start, no tile predicate).
+  const tileBaseOrders = useMemo(() => {
+    const startMs = filterStartDate ? new Date(filterStartDate + 'T00:00:00Z').getTime() : 0;
+    const endMs = filterEndDate ? new Date(filterEndDate + 'T23:59:59Z').getTime() : 0;
+    return orders.filter(o => {
+      if (!matchAdvancedFilters(o)) return false;
+      const orderDate = parseDate(o.ORDER_DATE);
+      if (startMs || endMs) {
+        if (!orderDate) return false;
+        if (startMs && orderDate.getTime() < startMs) return false;
+        if (endMs && orderDate.getTime() > endMs) return false;
+      }
+      return true;
+    });
+  }, [orders, filterStatus, filterBranch, filterCode, filterCarrier, filterPayMode,
+    filterStartDate, filterEndDate, searchQuery, b2b2cMap, shipmentsMap]);
+
+  const tileCounts = useMemo(() => {
+    const counts = { all: tileBaseOrders.length, topay: 0, cod: 0, tat: 0, overduetat: 0, heavy: 0, highvalue: 0, exceptions: 0, ofd: 0, 'new-bookings': 0, fov: 0, delivered: 0, intransit: 0 };
+
+    tileBaseOrders.forEach(o => {
       const state = getOrderState(o);
       const isDelivered = state === 'delivered';
       const weight = parseFloat(o.WEIGHT || 0);
@@ -315,20 +371,13 @@ export default function OrdersScreen({
       if (state === 'exception') counts.exceptions++;
       if (state === 'outfordelivery') counts.ofd++;
       if (state === 'delivered') counts.delivered++;
+      if (state === 'intransit') counts.intransit++;
       if (_isNewBooking(o)) counts['new-bookings']++;
       if (o.FOV === 'Yes' && !isDelivered) counts.fov++;
-      if (state === 'delivered' && !_hasPODUpload(uploadsMap[o.REFERENCE])) counts['pending-pod']++;
     });
 
-    // Assign Carrier = no CARRIER/AWB within the last 30 days (web parity)
-    counts['assign-carrier'] = orders.filter(o => {
-      if (o.CARRIER && o.AWB_NUMBER) return false;
-      const orderTs = parseDate(o.ORDER_DATE)?.getTime() || 0;
-      return orderTs >= cutoff;
-    }).length;
-
     return counts;
-  }, [orders, shipmentsMap, uploadsMap]);
+  }, [tileBaseOrders]);
 
   // Web parity (applyFilters): when NO explicit filters, default the view to the
   // 1st of the current month (or 1st of the previous month when today ≤ 10th).
@@ -349,6 +398,43 @@ export default function OrdersScreen({
   const filterBranchOptions = useMemo(() => ['ALL', ...new Set(orders.map(o => String(o?.BRANCH ?? '')).filter(Boolean).sort())], [orders]);
   const filterCodeOptions = useMemo(() => ['ALL', ...new Set(orders.map(o => String(o?.CODE ?? '')).filter(Boolean).sort())], [orders]);
   const filterCarrierOptions = useMemo(() => ['ALL', ...new Set(orders.map(o => String(o?.CARRIER ?? '')).filter(Boolean).sort())], [orders]);
+
+  // Full-name dropdown options — branch/carrier resolve their names from the
+  // master maps (with the code kept as a muted sublabel).
+  const branchFilterOptions = useMemo(() => filterBranchOptions.map(v => {
+    if (v === 'ALL') return { value: 'ALL', label: 'All Branches' };
+    const b = branchesMap[v];
+    const name = (typeof b === 'string' ? b : (b?.BRANCH_NAME || b?.NAME)) || '';
+    return { value: v, label: name || v, sublabel: name ? v : undefined };
+  }), [filterBranchOptions, branchesMap]);
+  // Client-name lookup — the order's CODE is the B2B customer's CODE || UID
+  // (see BookOrderScreen), and the names live in the B2B customers list
+  // (b2bList), NOT the b2b2c contacts map. Index every customer by
+  // CODE and UID so the dropdown always resolves the display name.
+  const clientNameByCode = useMemo(() => {
+    const map = {};
+    (Array.isArray(b2bList) ? b2bList : Object.values(b2bList || {})).forEach(c => {
+      const name = (typeof c === 'string' ? c : (c?.B2B_NAME || c?.NAME)) || '';
+      for (const k of [c?.CODE, c?.UID]) {
+        if (k) map[k] = map[k] || name;
+      }
+    });
+    return map;
+  }, [b2bList]);
+
+  // Client dropdown — filtering stays on the order's CODE, but the dropdown
+  // displays the client's name (B2B name) with the code as a muted sublabel.
+  const codeFilterOptions = useMemo(() => filterCodeOptions.map(v => {
+    if (v === 'ALL') return { value: 'ALL', label: 'All Clients' };
+    const name = clientNameByCode[v] || '';
+    return { value: v, label: name || v, sublabel: name ? v : undefined };
+  }), [filterCodeOptions, clientNameByCode]);
+  const carrierFilterOptions = useMemo(() => filterCarrierOptions.map(v => {
+    if (v === 'ALL') return { value: 'ALL', label: 'All Carriers' };
+    const c = carriersMap[v];
+    const name = (typeof c === 'string' ? c : (c?.COMPANY_NAME || c?.NAME)) || '';
+    return { value: v, label: name || v, sublabel: name ? v : undefined };
+  }), [filterCarrierOptions, carriersMap]);
   const assignmentCarrierOptions = useMemo(() => {
     const fromData = Object.entries(carriersMap || {}).map(([key, value]) => String(value?.COMPANY_CODE || key).trim()).filter(Boolean);
     return [...new Set(fromData.length ? fromData : filterCarrierOptions.filter(v => v !== 'ALL'))].sort();
@@ -382,14 +468,9 @@ export default function OrdersScreen({
       if (selectedTile === 'exceptions' && state !== 'exception') return false;
       if (selectedTile === 'ofd' && state !== 'outfordelivery') return false;
       if (selectedTile === 'delivered' && state !== 'delivered') return false;
+      if (selectedTile === 'intransit' && state !== 'intransit') return false;
       if (selectedTile === 'fov' && (o.FOV !== 'Yes' || isDelivered)) return false;
       if (selectedTile === 'new-bookings' && !_isNewBooking(o)) return false;
-      if (selectedTile === 'pending-pod' && !(state === 'delivered' && !_hasPODUpload(uploadsMap[o.REFERENCE]))) return false;
-      if (selectedTile === 'assign-carrier') {
-        if (o.CARRIER && o.AWB_NUMBER) return false;
-        const orderTs = parseDate(o.ORDER_DATE)?.getTime() || 0;
-        if (orderTs < Date.now() - 30 * 24 * 60 * 60 * 1000) return false; // 30-day window
-      }
       if (selectedTile === 'tat') {
         if (!_isTatDue(o)) return false;
         if (tatQuickFilter) {
@@ -405,16 +486,8 @@ export default function OrdersScreen({
         }
       }
 
-      // ── Advanced filters ──
-      if (filterStatus !== 'ALL' && state !== filterStatus) return false;
-      // Web uses exact option values for these three dynamically populated
-      // selects; do not silently merge distinct backend codes by case.
-      if (filterBranch !== 'ALL' && String(o.BRANCH ?? '') !== filterBranch) return false;
-      if (filterCode !== 'ALL' && String(o.CODE ?? '') !== filterCode) return false;
-      if (filterCarrier !== 'ALL' && String(o.CARRIER ?? '') !== filterCarrier) return false;
-      if (filterPayMode === 'TOPAY' && o.TOPAY !== 'Yes') return false;
-      if (filterPayMode === 'COD' && (!o.COD || parseFloat(o.COD) <= 0)) return false;
-      if (filterPayMode === 'PREPAID' && (o.TOPAY === 'Yes' || (o.COD && parseFloat(o.COD) > 0))) return false;
+      // ── Advanced filters + search (shared with tile counts) ──
+      if (!matchAdvancedFilters(o)) return false;
 
       // ── Date range (web applyFilters parity) ──
       const orderDate = parseDate(o.ORDER_DATE);
@@ -423,18 +496,6 @@ export default function OrdersScreen({
       if (!orderDate) return false;
       if (startMs && orderDate.getTime() < startMs) return false;
       if (endMs && (!orderDate || orderDate.getTime() > endMs)) return false;
-
-      // ── Search (web parity: ref/awb/names/cities/pincodes) ──
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        const cnor = b2b2cMap[o.CONSIGNOR] || {};
-        const cnee = b2b2cMap[o.CONSIGNEE] || {};
-        const haystack = [
-          o.REFERENCE, o.AWB_NUMBER, cnor.NAME || o.CONSIGNOR, cnee.NAME || o.CONSIGNEE,
-          cnee.CITY || o.DEST_CITY, cnee.PINCODE || o.DEST_PINCODE, cnor.CITY || o.ORIGIN_CITY,
-        ].filter(Boolean).map(String).join('|').toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
       return true;
     });
 
@@ -461,54 +522,18 @@ export default function OrdersScreen({
   const hasActiveAdvancedFilters = filterStatus !== 'ALL' || filterBranch !== 'ALL' || filterCode !== 'ALL' ||
     filterCarrier !== 'ALL' || filterPayMode !== 'ALL' || filterStartDate !== '' || filterEndDate !== '';
 
-  // Quick Date Presets Helper
-  const applyDatePreset = (type) => {
-    const today = new Date();
-    const yyyyMmDd = (d) => d.toISOString().split('T')[0];
-    if (type === 'today') {
-      setFilterStartDate(yyyyMmDd(today));
-      setFilterEndDate(yyyyMmDd(today));
-    } else if (type === '7days') {
-      const past = new Date(today);
-      past.setDate(today.getDate() - 7);
-      setFilterStartDate(yyyyMmDd(past));
-      setFilterEndDate(yyyyMmDd(today));
-    } else if (type === 'month') {
-      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-      setFilterStartDate(yyyyMmDd(firstDay));
-      setFilterEndDate(yyyyMmDd(today));
-    } else if (type === 'clear') {
-      setFilterStartDate('');
-      setFilterEndDate('');
-    }
-  };
+  const activeFilterCount = [filterStatus, filterBranch, filterCode, filterCarrier, filterPayMode]
+    .filter(v => v !== 'ALL').length + ((filterStartDate || filterEndDate) ? 1 : 0);
 
-  // Calendar Days Grid Calculator
-  const calendarDays = useMemo(() => {
-    const firstDayIndex = new Date(calYear, calMonth, 1).getDay();
-    const totalDays = new Date(calYear, calMonth + 1, 0).getDate();
-    const days = [];
-    for (let i = 0; i < firstDayIndex; i++) {
-      days.push(null);
-    }
-    for (let d = 1; d <= totalDays; d++) {
-      days.push(d);
-    }
-    return days;
-  }, [calYear, calMonth]);
-
-  const handleSelectCalendarDay = (dayNum) => {
-    if (!dayNum) return;
-    const mStr = String(calMonth + 1).padStart(2, '0');
-    const dStr = String(dayNum).padStart(2, '0');
-    const formatted = `${calYear}-${mStr}-${dStr}`;
-    if (calendarTarget === 'start') {
-      setFilterStartDate(formatted);
-    } else if (calendarTarget === 'end') {
-      setFilterEndDate(formatted);
-    }
-    setCalendarTarget(null);
-  };
+  // Active-filter pills — shared by the tiles and list views.
+  const activeFilterPills = [
+    ...(filterStatus !== 'ALL' ? [`Status: ${optionLabel(STATUS_OPTIONS, filterStatus)}`] : []),
+    ...(filterBranch !== 'ALL' ? [`Branch: ${optionLabel(branchFilterOptions, filterBranch)}`] : []),
+    ...(filterCode !== 'ALL' ? [`Code: ${optionLabel(codeFilterOptions, filterCode)}`] : []),
+    ...(filterCarrier !== 'ALL' ? [`Carrier: ${optionLabel(carrierFilterOptions, filterCarrier)}`] : []),
+    ...(filterPayMode !== 'ALL' ? [`Pay: ${optionLabel(PAY_OPTIONS, filterPayMode)}`] : []),
+    ...((filterStartDate || filterEndDate) ? [`Date: ${filterStartDate || '...'} to ${filterEndDate || '...'}`] : []),
+  ];
 
   // ── Fetch Live Tracking History API Call ──
   const fetchTrackingHistory = async (ref, live = false) => {
@@ -541,6 +566,65 @@ export default function OrdersScreen({
       fetchTrackingHistory(selectedOrder.REFERENCE, false);
     }
   }, [currentView, selectedOrder]);
+
+  // Android hardware back: close the filter sheet first, then walk back
+  // detail → list → tiles. On the tiles grid itself the event is not
+  // consumed, so the OS default (exit) applies.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !BackHandler?.addEventListener) return undefined;
+    const handleHardwareBack = () => {
+      if (filterModalVisible) {
+        setFilterModalVisible(false);
+        return true;
+      }
+      if (currentView === 'detail') {
+        setSelectedOrder(null);
+        setCurrentView('list');
+        return true;
+      }
+      if (currentView === 'list' || currentView === 'assign-carrier') {
+        setSelectedOrder(null);
+        setAssignSelectedOrder(null);
+        setCurrentView('tiles');
+        return true;
+      }
+      return false;
+    };
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleHardwareBack);
+    return () => subscription?.remove?.();
+  }, [currentView, filterModalVisible]);
+
+  // Web browser back: each time we move into a sub-view push a history entry
+  // so the browser's back button walks detail → list → tiles. A backHandledRef
+  // guard prevents the reverse navigation from pushing a duplicate entry.
+  const backHandledRef = useRef(false);
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return undefined;
+    const onPopState = () => {
+      backHandledRef.current = true;
+      if (currentView === 'detail') {
+        setSelectedOrder(null);
+        setCurrentView('list');
+      } else if (currentView === 'list' || currentView === 'assign-carrier') {
+        setSelectedOrder(null);
+        setAssignSelectedOrder(null);
+        setCurrentView('tiles');
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [currentView]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    if (backHandledRef.current) {
+      backHandledRef.current = false;
+      return;
+    }
+    if (currentView !== 'tiles') {
+      window.history.pushState({ view: currentView }, '');
+    }
+  }, [currentView]);
 
   const handleSelectTile = (tileId) => {
     setSelectedTile(tileId);
@@ -966,37 +1050,58 @@ export default function OrdersScreen({
         style={styles.container}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
       >
-        <Text style={styles.pageTitle}>Shipments</Text>
+        <View style={styles.pageTitleBlock}>
+          <GradientText colors={['#0ea5e9', '#2563eb']} style={styles.pageTitle}>Shipments</GradientText>
+          <LinearGradient colors={['#0ea5e9', '#2563eb']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.pageTitleBar} />
+        </View>
         <Text style={styles.pageSubtitle}>Select a category tile to view shipments</Text>
 
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search Ref, AWB, Consignee, City..."
-          placeholderTextColor="#94a3b8"
-          value={searchQuery}
-          onChangeText={(q) => {
-            setSearchQuery(q);
-            if (q) setCurrentView('list');
-          }}
-        />
-
-        <View style={styles.tileGrid}>
-          {TILES.map(tile => {
-            const count = tileCounts[tile.id] ?? 0;
-            return (
-              <TouchableOpacity
-                key={tile.id}
-                activeOpacity={0.8}
-                style={[styles.gridTile, { borderColor: tile.border, backgroundColor: tile.bg }]}
-                onPress={() => handleSelectTile(tile.id)}
-              >
-                <Text style={styles.gridTileIcon}>{tile.icon}</Text>
-                <Text style={[styles.gridTileCount, { color: tile.color }]}>{count}</Text>
-                <Text style={styles.gridTileLabel}>{tile.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
+        <View style={styles.searchFilterRow}>
+          <SearchBar
+            placeholder="Search shipments…"
+            hints={['Try an AWB number…', 'Try a consignee name…', 'Try a reference…', 'Try a destination city…']}
+            value={searchQuery}
+            onChangeText={(q) => {
+              setSearchQuery(q);
+              if (q) setCurrentView('list');
+            }}
+            style={styles.searchFilterInput}
+          />
+          <FilterBar
+            onPress={() => setFilterModalVisible(true)}
+            isActive={hasActiveAdvancedFilters}
+            activeCount={activeFilterCount}
+          />
         </View>
+
+        <FilterBar pills={activeFilterPills} onReset={handleResetAdvancedFilters} />
+
+        <Tray title="Shipment Categories">
+          <View style={styles.tileGrid}>
+            {TILES.map(tile => {
+              const isReports = tile.id === 'reports';
+              const count = isReports ? null : (tileCounts[tile.id] ?? 0);
+              const isSel = selectedTile === tile.id;
+              return (
+                <TouchableOpacity
+                  key={tile.id}
+                  activeOpacity={0.85}
+                  style={[styles.gridTile, { backgroundColor: tile.bg }, accentSparkle(tile.grad[0], isSel)]}
+                  onPress={() => {
+                    if (isReports) { Alert.alert('Reports', 'Reports module coming soon.'); return; }
+                    handleSelectTile(tile.id);
+                  }}
+                >
+                  <GradientGlyph name={tile.icon} size={34} colors={tile.grad} />
+                  {count != null ? (
+                    <GradientText colors={tile.grad} style={styles.gridTileCount}>{count}</GradientText>
+                  ) : null}
+                  <Text style={styles.gridTileLabel}>{tile.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </Tray>
       </ScrollView>
     );
   }
@@ -1009,20 +1114,16 @@ export default function OrdersScreen({
     return (
       <View style={styles.container}>
         <View style={styles.navHeader}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => { setAssignSelectedOrder(null); setCurrentView('tiles'); }}>
-            <Text style={styles.backBtnText}>‹ Tiles</Text>
-          </TouchableOpacity>
           <Text style={styles.navTitle}>🚚 Assign Carrier</Text>
         </View>
         <View style={[styles.assignLayout, isCompact && styles.assignLayoutCompact]}>
           {(!isCompact || !assignSelectedOrder) && (
             <View style={[styles.assignListPane, isCompact && styles.assignListPaneCompact]}>
-              <TextInput
-                style={styles.searchInput}
+              <SearchBar
                 placeholder="Search AWB, Ref, Consignor, Consignee..."
-                placeholderTextColor="#94a3b8"
                 value={assignSearch}
                 onChangeText={setAssignSearch}
+                style={styles.searchGap}
               />
               <Text style={styles.assignListSummary}>{assignRows.length} recent shipment(s)</Text>
               <ScrollView style={styles.assignList}>
@@ -1096,50 +1197,21 @@ export default function OrdersScreen({
   if (currentView === 'list') {
     return (
       <View style={styles.container}>
-        <View style={styles.navHeader}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentView('tiles')}>
-            <Text style={styles.backBtnText}>‹ Tiles</Text>
-          </TouchableOpacity>
-          <Text style={styles.navTitle} numberOfLines={1}>
-            {activeTileObj.icon} {activeTileObj.label} ({filteredOrders.length})
-          </Text>
-        </View>
-
         <View style={styles.searchFilterRow}>
-          <TextInput
-            style={[styles.searchInput, { flex: 1, marginBottom: 0 }]}
+          <SearchBar
             placeholder="Search AWB, Ref, Client..."
-            placeholderTextColor="#94a3b8"
             value={searchQuery}
             onChangeText={setSearchQuery}
+            style={styles.searchFilterInput}
           />
-          <TouchableOpacity
-            style={[styles.filterIconBtn, hasActiveAdvancedFilters && styles.filterIconBtnActive]}
+          <FilterBar
             onPress={() => setFilterModalVisible(true)}
-          >
-            <Text style={[styles.filterIconBtnText, hasActiveAdvancedFilters && styles.filterIconBtnTextActive]}>
-              ⚙️ Filter
-            </Text>
-          </TouchableOpacity>
+            isActive={hasActiveAdvancedFilters}
+            activeCount={activeFilterCount}
+          />
         </View>
 
-        {hasActiveAdvancedFilters && (
-          <View style={styles.activePillsBar}>
-            {filterStatus !== 'ALL' && <Text style={styles.activePill}>Status: {filterStatus}</Text>}
-            {filterBranch !== 'ALL' && <Text style={styles.activePill}>Branch: {filterBranch}</Text>}
-            {filterCode !== 'ALL' && <Text style={styles.activePill}>Code: {filterCode}</Text>}
-            {filterCarrier !== 'ALL' && <Text style={styles.activePill}>Carrier: {filterCarrier}</Text>}
-            {filterPayMode !== 'ALL' && <Text style={styles.activePill}>Pay: {filterPayMode}</Text>}
-            {(filterStartDate || filterEndDate) && (
-              <Text style={styles.activePill}>
-                Date: {filterStartDate || '...'} to {filterEndDate || '...'}
-              </Text>
-            )}
-            <TouchableOpacity onPress={handleResetAdvancedFilters}>
-              <Text style={styles.clearPillsText}>Reset</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        <FilterBar pills={activeFilterPills} onReset={handleResetAdvancedFilters} />
 
         {/* ── TAT Quick Filters (web _renderTatQuickFilters parity) ── */}
         {(selectedTile === 'tat' || selectedTile === 'overduetat') && (
@@ -1164,223 +1236,38 @@ export default function OrdersScreen({
           <Text style={styles.defaultViewNote}>Default view from {implicitDefaultStart} — use filters to widen</Text>
         )}
 
-        <FlatList
-          data={filteredOrders}
-          keyExtractor={(item, index) => item.REFERENCE || item.id || index.toString()}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
-          contentContainerStyle={{ paddingBottom: 20 }}
-          renderItem={({ item }) => (
-            <WebShipmentListItem
-              order={item}
-              b2b2cMap={b2b2cMap}
-              shipmentsMap={shipmentsMap}
-              isSelected={selectedOrder?.REFERENCE === item.REFERENCE}
-              onPress={() => handleSelectOrder(item)}
-              onUpdateStatus={(target) => setUpdateStatusTargetOrder(target)}
-            />
-          )}
-          ListEmptyComponent={
-            <View style={styles.emptyBox}>
-              <Text style={styles.emptyIcon}>📦</Text>
-              <Text style={styles.emptyTitle}>No orders match filters.</Text>
-            </View>
-          }
-        />
-
-        {/* ── Filter Modal (With Interactive Calendar Date Picker) ── */}
-        <Modal
-          visible={filterModalVisible}
-          animationType="slide"
-          transparent={true}
-          onRequestClose={() => setFilterModalVisible(false)}
+        {/* ── Tray-wrapped list (centralized Tray — same as Dashboard) ── */}
+        <Tray
+          title={`${activeTileObj.label} (${filteredOrders.length})`}
+          icon={activeTileObj.icon}
+          iconColors={activeTileObj.grad}
+          headerStyle={styles.listTrayHeader}
+          style={styles.listTrayFill}
         >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Filter Shipments</Text>
-                <TouchableOpacity onPress={() => setFilterModalVisible(false)}>
-                  <Text style={styles.modalCloseX}>✕</Text>
-                </TouchableOpacity>
+          <FlatList
+            data={filteredOrders}
+            keyExtractor={(item, index) => item.REFERENCE || item.id || index.toString()}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
+            contentContainerStyle={{ paddingTop: 12, paddingBottom: 10 }} // top pad keeps the first row's floating status badge visible
+            renderItem={({ item }) => (
+              <WebShipmentListItem
+                order={item}
+                b2b2cMap={b2b2cMap}
+                modesMap={modesMap}
+                shipmentsMap={shipmentsMap}
+                isSelected={selectedOrder?.REFERENCE === item.REFERENCE}
+                onPress={() => handleSelectOrder(item)}
+              />
+            )}
+            ListEmptyComponent={
+              <View style={styles.emptyBox}>
+                <Text style={styles.emptyIcon}>📦</Text>
+                <Text style={styles.emptyTitle}>No orders match filters.</Text>
               </View>
+            }
+          />
+        </Tray>
 
-              <ScrollView style={{ maxHeight: 420 }}>
-                {/* Date Range Section */}
-                <Text style={styles.filterSectionTitle}>DATE RANGE</Text>
-                <View style={styles.chipRow}>
-                  <TouchableOpacity style={styles.chip} onPress={() => applyDatePreset('today')}>
-                    <Text style={styles.chipText}>Today</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.chip} onPress={() => applyDatePreset('7days')}>
-                    <Text style={styles.chipText}>7 Days</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.chip} onPress={() => applyDatePreset('month')}>
-                    <Text style={styles.chipText}>This Month</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.chip, { backgroundColor: '#fee2e2' }]} onPress={() => applyDatePreset('clear')}>
-                    <Text style={[styles.chipText, { color: '#ef4444' }]}>Clear Date</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Calendar Trigger Input Buttons */}
-                <View style={styles.dateInputsRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.dateInputLabel}>From Date:</Text>
-                    <TouchableOpacity style={styles.calendarTriggerBtn} onPress={() => setCalendarTarget('start')}>
-                      <CalendarIcon size={14} color="#0284c7" />
-                      <Text style={styles.calendarTriggerText}>
-                        {filterStartDate || 'Select Date'}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.dateInputLabel}>To Date:</Text>
-                    <TouchableOpacity style={styles.calendarTriggerBtn} onPress={() => setCalendarTarget('end')}>
-                      <CalendarIcon size={14} color="#0284c7" />
-                      <Text style={styles.calendarTriggerText}>
-                        {filterEndDate || 'Select Date'}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                <Text style={styles.filterSectionTitle}>SHIPMENT STATUS</Text>
-                <View style={styles.chipRow}>
-                  {STATUSES_LIST.map(st => (
-                    <TouchableOpacity
-                      key={st}
-                      style={[styles.chip, filterStatus === st && styles.chipActive]}
-                      onPress={() => setFilterStatus(st)}
-                    >
-                      <Text style={[styles.chipText, filterStatus === st && styles.chipTextActive]}>
-                        {st}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={styles.filterSectionTitle}>BRANCH</Text>
-                <View style={styles.chipRow}>
-                  {filterBranchOptions.map((branch) => (
-                    <TouchableOpacity key={branch} style={[styles.chip, filterBranch === branch && styles.chipActive]} onPress={() => setFilterBranch(branch)}>
-                      <Text style={[styles.chipText, filterBranch === branch && styles.chipTextActive]}>{branch}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={styles.filterSectionTitle}>CODE</Text>
-                <View style={styles.chipRow}>
-                  {filterCodeOptions.map((code) => (
-                    <TouchableOpacity key={code} style={[styles.chip, filterCode === code && styles.chipActive]} onPress={() => setFilterCode(code)}>
-                      <Text style={[styles.chipText, filterCode === code && styles.chipTextActive]}>{code}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={styles.filterSectionTitle}>CARRIER</Text>
-                <View style={styles.chipRow}>
-                  {filterCarrierOptions.map((car) => (
-                    <TouchableOpacity key={car} style={[styles.chip, filterCarrier === car && styles.chipActive]} onPress={() => setFilterCarrier(car)}>
-                      <Text style={[styles.chipText, filterCarrier === car && styles.chipTextActive]}>{car}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={styles.filterSectionTitle}>PAYMENT MODE</Text>
-                <View style={styles.chipRow}>
-                  {PAY_MODES_LIST.map(pm => (
-                    <TouchableOpacity
-                      key={pm}
-                      style={[styles.chip, filterPayMode === pm && styles.chipActive]}
-                      onPress={() => setFilterPayMode(pm)}
-                    >
-                      <Text style={[styles.chipText, filterPayMode === pm && styles.chipTextActive]}>
-                        {pm}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </ScrollView>
-
-              <View style={styles.modalActions}>
-                <TouchableOpacity style={styles.resetModalBtn} onPress={handleResetAdvancedFilters}>
-                  <Text style={styles.resetModalBtnText}>Reset Filters</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.applyModalBtn} onPress={() => setFilterModalVisible(false)}>
-                  <Text style={styles.applyModalBtnText}>Apply ({filteredOrders.length})</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-
-        {/* ── Interactive Calendar Modal Picker ── */}
-        <Modal
-          visible={calendarTarget !== null}
-          animationType="fade"
-          transparent={true}
-          onRequestClose={() => setCalendarTarget(null)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.calendarModalContent}>
-              <View style={styles.calendarHeader}>
-                <TouchableOpacity
-                  onPress={() => {
-                    if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); }
-                    else { setCalMonth(m => m - 1); }
-                  }}
-                  style={styles.calNavBtn}
-                >
-                  <Text style={styles.calNavBtnText}>‹</Text>
-                </TouchableOpacity>
-
-                <Text style={styles.calendarMonthTitle}>
-                  {MONTH_NAMES[calMonth]} {calYear}
-                </Text>
-
-                <TouchableOpacity
-                  onPress={() => {
-                    if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); }
-                    else { setCalMonth(m => m + 1); }
-                  }}
-                  style={styles.calNavBtn}
-                >
-                  <Text style={styles.calNavBtnText}>›</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Day Headers */}
-              <View style={styles.calWeekRow}>
-                {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((d, di) => (
-                  <Text key={di} style={styles.calWeekDayText}>{d}</Text>
-                ))}
-              </View>
-
-              {/* Calendar Grid */}
-              <View style={styles.calGrid}>
-                {calendarDays.map((dayNum, idx) => (
-                  <TouchableOpacity
-                    key={idx}
-                    disabled={!dayNum}
-                    style={[
-                      styles.calDayBox,
-                      dayNum && styles.calDayBoxActive
-                    ]}
-                    onPress={() => handleSelectCalendarDay(dayNum)}
-                  >
-                    <Text style={[styles.calDayText, !dayNum && styles.calDayTextEmpty]}>
-                      {dayNum || ''}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <TouchableOpacity style={styles.calCancelBtn} onPress={() => setCalendarTarget(null)}>
-                <Text style={styles.calCancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
       </View>
     );
   }
@@ -1482,14 +1369,6 @@ export default function OrdersScreen({
       <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 30 }}>
         {/* Navigation Header */}
         <View style={styles.navHeader}>
-          <View style={styles.navBackGroup}>
-            <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentView('list')}>
-              <Text style={styles.backBtnText}>‹ List</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.backBtn} onPress={() => { setSelectedOrder(null); setCurrentView('tiles'); }}>
-              <Text style={styles.backBtnText}>‹ Tiles</Text>
-            </TouchableOpacity>
-          </View>
           <Text style={styles.navTitle} numberOfLines={1}>Ref: {o.REFERENCE}</Text>
         </View>
 
@@ -1956,51 +1835,67 @@ return (
         if (onRefresh) onRefresh();
       }}
     />
+
+    {/* ── Filter Modal — mounted for every view (tiles + list) ── */}
+    <FilterModal
+      visible={filterModalVisible}
+      title="Filter Shipments"
+      // Show the result count only when filters are actually active — with
+      // nothing selected, “Apply” alone is honest (no misleading count).
+      resultCount={hasActiveAdvancedFilters ? filteredOrders.length : undefined}
+      dateRange={{
+        start: filterStartDate,
+        end: filterEndDate,
+        onStart: setFilterStartDate,
+        onEnd: setFilterEndDate,
+      }}
+      sections={[
+        { title: 'SHIPMENT STATUS', options: STATUS_OPTIONS, selected: filterStatus, onSelect: setFilterStatus, half: true },
+        { title: 'PAYMENT MODE', options: PAY_OPTIONS, selected: filterPayMode, onSelect: setFilterPayMode, half: true },
+        { title: 'BRANCH', options: branchFilterOptions, selected: filterBranch, onSelect: setFilterBranch, half: true, flex: 2 },
+        { title: 'CLIENT', options: codeFilterOptions, selected: filterCode, onSelect: setFilterCode, half: true, flex: 3 },
+        { title: 'CARRIER', options: carrierFilterOptions, selected: filterCarrier, onSelect: setFilterCarrier },
+      ]}
+      onApply={() => setFilterModalVisible(false)}
+      onReset={handleResetAdvancedFilters}
+      onClose={() => setFilterModalVisible(false)}
+    />
   </View>
 );
 }
 
-// ── Web Shipment List Item ─────────────────────────────────────────────────────
-function WebShipmentListItem({ order, b2b2cMap, shipmentsMap = {}, isSelected, onPress }) {
-  const ref = order.REFERENCE || 'N/A';
-  const awb = order.AWB_NUMBER || 'No AWB';
-
-  const cnorObj = b2b2cMap[order.CONSIGNOR] || {};
-  const cneeObj = b2b2cMap[order.CONSIGNEE] || {};
-
-  const cnor = cnorObj.NAME || order.CONSIGNOR || 'Unknown';
-  const cnee = cneeObj.NAME || order.CONSIGNEE || 'Unknown';
-
-  // Web parity — state badge from the SHIPMENTS sheet first (shipmentsDataMap)
+// ── Shipment List Row — centralized ListItem (same design as Dashboard) ────────
+function WebShipmentListItem({ order, b2b2cMap, modesMap = {}, shipmentsMap = {}, isSelected, onPress }) {
+  // Web parity — state from the SHIPMENTS sheet first (shipmentsDataMap)
   const shipState = shipmentsMap[order.REFERENCE];
   const stateRaw = normalizeShipmentState(shipState?.state || shipState?.STATE || order.STATE || order.state || 'pending');
   const stateCfg = STATE_CONFIG[stateRaw] || STATE_CONFIG.pending;
-  const dateStr = fmtDate(order.ORDER_DATE || order.TIME_STAMP, 'display');
+
+  const consignee = (b2b2cMap[order.CONSIGNEE]?.NAME || order.CONSIGNEE || 'Unknown');
+  const modeRec = modesMap[order.MODE];
+  const modeName = (typeof modeRec === 'string' ? modeRec : (modeRec?.MODE || modeRec?.NAME)) || order.MODE || '';
+  const hasCod = order.COD && parseFloat(order.COD) > 0;
+  const meta = [
+    order.CODE || '',
+    order.WEIGHT ? `${order.WEIGHT}kg` : '',
+    order.PIECS ? `${order.PIECS} pcs` : '',
+    modeName,
+    order.TOPAY === 'Yes' ? 'ToPay' : '',
+    hasCod ? `COD ₹${order.COD}` : '',
+  ].filter(Boolean).join(' | ');
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.75}
-      onPress={onPress}
-      style={[
-        styles.webListItem,
-        isSelected && styles.webListItemSelected
+    <ListItem
+      title={consignee}
+      subtitle={[
+        `AWB: ${order.AWB_NUMBER || 'Pending'} | Carrier: ${order.CARRIER || '—'} | Ref: ${order.REFERENCE || '—'}`,
+        meta,
+        `📍 ${order.ORIGIN_CITY || 'DDN'} → 🏁 ${order.DEST_CITY || 'DEST'}`,
       ]}
-    >
-      <Text style={styles.webListItemAwb}>{awb}</Text>
-      <Text style={styles.webListItemSub} numberOfLines={1}>
-        {cnor} ➔ {cnee}
-      </Text>
-      <View style={styles.webListItemMeta}>
-        <Text style={styles.webListItemRefDate}>
-          Ref: {ref} | {dateStr}
-        </Text>
-        <View style={[styles.stateBadge, { backgroundColor: stateCfg.bg }]}>
-          <Text style={[styles.stateBadgeText, { color: stateCfg.color }]}>
-            {stateCfg.label}
-          </Text>
-        </View>
-      </View>
-    </TouchableOpacity>
+      status={stateCfg.label}
+      onPress={onPress}
+      style={isSelected ? styles.listItemSelected : undefined}
+    />
   );
 }
 
@@ -2017,23 +1912,25 @@ function DetailRow({ label, value }) {
 const styles = StyleSheet.create({
   container: { flex: 1, paddingHorizontal: 14, paddingTop: 12 },
 
-  pageTitle: { fontSize: 24, fontWeight: '800', color: '#1e293b' },
+  pageTitle: { fontSize: 24, fontWeight: '900', letterSpacing: 0.5 },
+  pageTitleBlock: { alignItems: 'center', marginBottom: 14 },
+  pageTitleBar: { width: 46, height: 3, borderRadius: 2, marginTop: 8 },
   pageSubtitle: { fontSize: 12, color: '#64748b', marginBottom: 12 },
-  searchInput: { backgroundColor: '#ffffff', borderRadius: 10, borderWidth: 1.5, borderColor: '#cbd5e1', color: '#0f172a', paddingHorizontal: 12, paddingVertical: 9, fontSize: 13, fontWeight: '600', marginBottom: 12 },
+  searchGap: { marginBottom: 12 },
 
   // Stage 1: Tiles Grid View
   tileGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingBottom: 20 },
-  gridTile: { width: '48%', borderRadius: 12, borderWidth: 1.5, padding: 14, alignItems: 'center', justifyContent: 'center' },
-  gridTileIcon: { fontSize: 24, marginBottom: 4 },
-  gridTileCount: { fontSize: 20, fontWeight: '900' },
-  gridTileLabel: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginTop: 4, color: '#475569', textAlign: 'center', letterSpacing: 0.5 },
+  gridTile: { width: '48%', borderRadius: 16, borderWidth: 1.5, padding: 14, alignItems: 'center', justifyContent: 'center', gap: 6 },
+  gridTileCount: { fontSize: 20, fontWeight: '900', letterSpacing: -0.5 },
+  gridTileLabel: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginTop: 2, color: '#475569', textAlign: 'center', letterSpacing: 0.5 },
 
   // Stage 2 & 3 Nav Bar
   navHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
-  navBackGroup: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  backBtn: { backgroundColor: '#f1f5f9', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1' },
-  backBtnText: { fontSize: 12, fontWeight: '700', color: COLORS.primary },
   navTitle: { fontSize: 14, fontWeight: '800', color: '#1e293b', flex: 1 },
+
+  // Tray-wrapped list — flex fill + tighter header (shell lives in components/Tray.js)
+  listTrayFill: { flex: 1 },
+  listTrayHeader: { marginBottom: 8 },
 
   // Assign Carrier tile view
   assignLayout: { flex: 1, flexDirection: 'row', gap: 10 },
@@ -2069,54 +1966,22 @@ const styles = StyleSheet.create({
   assignBackToListBtn: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#f1f5f9', borderRadius: 6, alignSelf: 'flex-start' },
   assignBackToListBtnText: { color: '#0284c7', fontSize: 12, fontWeight: '800' },
 
-  searchFilterRow: { flexDirection: 'row', gap: 8, marginBottom: 10, alignItems: 'center' },
-  filterIconBtn: { backgroundColor: '#f1f5f9', borderWidth: 1.5, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, justifyContent: 'center' },
-  filterIconBtnActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
-  filterIconBtnText: { fontSize: 12, fontWeight: '700', color: '#475569' },
-  filterIconBtnTextActive: { color: '#ffffff' },
+  // flex-start keeps the filter button pinned to the top while the search bar
+  // expands into its camera stage (center would float it mid-height).
+  searchFilterRow: { flexDirection: 'row', gap: 8, marginBottom: 10, alignItems: 'flex-start' },
+  searchFilterInput: { flex: 1 },
 
-  activePillsBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 10 },
-  activePill: { fontSize: 10, fontWeight: '700', color: COLORS.primary, backgroundColor: '#fff8f6', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: '#fca5a5' },
-  clearPillsText: { fontSize: 10.5, fontWeight: '700', color: '#64748b', marginLeft: 4 },
-
-  // Web List Item
-  webListItem: {
-    backgroundColor: '#ffffff',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 12,
-    marginBottom: 8,
-  },
-  webListItemSelected: {
-    backgroundColor: '#eef2ff',
-    borderColor: '#6366f1',
-    borderLeftWidth: 4,
-  },
-  webListItemAwb: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#1e293b',
-    marginBottom: 2,
-  },
-  webListItemSub: {
-    fontSize: 12,
-    color: '#475569',
-    fontWeight: '600',
-    marginBottom: 6,
-  },
-  webListItemMeta: {
-    flexDirection: 'row',
-    justify: 'space-between',
-    alignItems: 'center',
-    paddingTop: 4,
-    borderTopWidth: 1,
-    borderTopColor: '#f1f5f9',
-  },
-  webListItemRefDate: {
-    fontSize: 11,
-    color: '#64748b',
-    fontWeight: '500',
+  // Selected row highlight (used via ListItem's style prop)
+  listItemSelected: {
+    borderColor: '#9C2007',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0px 0px 0px 2px rgba(156, 32, 7, 0.16), 0px 4px 14px rgba(15, 23, 42, 0.08)' }
+      : {
+          shadowColor: '#9C2007',
+          shadowOpacity: 0.22,
+          shadowRadius: 10,
+          shadowOffset: { width: 0, height: 3 },
+        }),
   },
 
   stateBadge: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
@@ -2190,47 +2055,6 @@ const styles = StyleSheet.create({
   podModalClose: { position: 'absolute', top: 46, right: 16, zIndex: 2, backgroundColor: '#ffffff', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
   podModalCloseText: { fontSize: 13, fontWeight: '800', color: '#b91c1c' },
   podImage: { width: '94%', height: '72%' },
-
-  // Modal Styles
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 },
-  modalContent: { backgroundColor: '#ffffff', borderRadius: 20, padding: 20, width: '100%', maxHeight: '80%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  modalTitle: { fontSize: 18, fontWeight: '800', color: '#1e293b' },
-  modalCloseX: { fontSize: 20, fontWeight: '700', color: '#64748b', padding: 4 },
-
-  filterSectionTitle: { fontSize: 11, fontWeight: '800', color: COLORS.primary, letterSpacing: 0.5, marginTop: 12, marginBottom: 8 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc' },
-  chipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
-  chipText: { fontSize: 11, fontWeight: '700', color: '#475569' },
-  chipTextActive: { color: '#ffffff' },
-
-  dateInputsRow: { flexDirection: 'row', gap: 10, marginTop: 10, marginBottom: 6 },
-  dateInputLabel: { fontSize: 10, fontWeight: '700', color: '#64748b', marginBottom: 2 },
-  calendarTriggerBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f0f9ff', borderRadius: 8, borderWidth: 1, borderColor: '#bae6fd', paddingHorizontal: 10, paddingVertical: 8 },
-  calendarTriggerText: { fontSize: 12, fontWeight: '700', color: '#0284c7' },
-
-  // Calendar Modal Picker
-  calendarModalContent: { backgroundColor: '#ffffff', borderRadius: 16, padding: 16, width: '90%', maxWidth: 340, borderWidth: 1, borderColor: '#cbd5e1' },
-  calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  calendarMonthTitle: { fontSize: 15, fontWeight: '800', color: '#1e293b' },
-  calNavBtn: { paddingHorizontal: 12, paddingVertical: 4, backgroundColor: '#f1f5f9', borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1' },
-  calNavBtnText: { fontSize: 18, fontWeight: '800', color: '#475569' },
-  calWeekRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 6 },
-  calWeekDayText: { width: 36, textAlign: 'center', fontSize: 11, fontWeight: '800', color: '#94a3b8' },
-  calGrid: { flexDirection: 'row', flexWrap: 'wrap', width: '100%' },
-  calDayBox: { width: '14.28%', height: 36, justifyContent: 'center', alignItems: 'center', marginVertical: 2 },
-  calDayBoxActive: { backgroundColor: '#f0f9ff', borderRadius: 8, borderWidth: 1, borderColor: '#bae6fd' },
-  calDayText: { fontSize: 12, fontWeight: '700', color: '#0284c7' },
-  calDayTextEmpty: { color: 'transparent' },
-  calCancelBtn: { marginTop: 14, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', alignItems: 'center' },
-  calCancelBtnText: { fontSize: 13, fontWeight: '700', color: '#ef4444' },
-
-  modalActions: { flexDirection: 'row', gap: 10, marginTop: 20, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e2e8f0' },
-  resetModalBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1', alignItems: 'center' },
-  resetModalBtnText: { fontSize: 13, fontWeight: '700', color: '#475569' },
-  applyModalBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, backgroundColor: COLORS.primary, alignItems: 'center' },
-  applyModalBtnText: { fontSize: 13, fontWeight: '800', color: '#ffffff' },
 
   // Upload Modal (web mini-uploader)
   uploadModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },

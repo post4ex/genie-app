@@ -4,6 +4,7 @@ import {
   TouchableOpacity, ActivityIndicator, Platform
 } from 'react-native';
 import { COLORS } from '../styles/theme';
+import Tray from '../components/Tray';
 
 const CUSTOM_CARRIERS = [
   { value: 'jetline',    label: 'Jetline'         },
@@ -155,7 +156,7 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
 
       {/* ── PINCODE TAB ── */}
       {activeTab === 'pincode' ? (
-        <View style={styles.card}>
+        <Tray style={styles.trackCard}>
           <Text style={styles.cardLabel}>6-DIGIT PINCODE</Text>
           <TextInput
             style={styles.input}
@@ -170,10 +171,10 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
           <TouchableOpacity style={styles.trackBtn} onPress={doPincode} disabled={loading}>
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.trackBtnText}>SEARCH PINCODE</Text>}
           </TouchableOpacity>
-        </View>
+        </Tray>
       ) : (
         /* ── TRACKING TAB ── */
-        <View style={styles.card}>
+        <Tray style={styles.trackCard}>
           {/* Custom carrier pickers */}
           {activeTab === 'custom' && (
             <>
@@ -237,7 +238,7 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
           <TouchableOpacity style={styles.trackBtn} onPress={doTrack} disabled={loading}>
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.trackBtnText}>TRACK SHIPMENT</Text>}
           </TouchableOpacity>
-        </View>
+        </Tray>
       )}
 
       {/* ── Error ── */}
@@ -630,8 +631,8 @@ const styles = StyleSheet.create({
   modeTabText: { fontSize: 12, fontWeight: '700', color: '#475569', textAlign: 'center' },
   modeTabTextActive: { color: '#ffffff' },
 
-  // Search card
-  card: { backgroundColor: '#ffffff', borderRadius: 14, padding: 16, borderWidth: 1.5, borderColor: '#e8c98a', marginBottom: 8 },
+  // Search card — shell (violet sparkling border) lives in components/Tray.js
+  trackCard: { padding: 16, marginBottom: 8 },
   cardLabel: { color: COLORS.primary, fontSize: 11, fontWeight: '800', letterSpacing: 0.5, marginBottom: 8 },
   input: { borderBottomWidth: 2, borderBottomColor: '#cbd5e1', paddingVertical: 10, paddingHorizontal: 6, fontSize: 14, fontWeight: '600', color: '#0f172a', marginBottom: 14 },
   modeHint: { fontSize: 11, color: '#64748b', marginBottom: 12, fontWeight: '600' },

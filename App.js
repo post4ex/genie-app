@@ -37,7 +37,6 @@ import { auditAndReconcile } from './core/reconcile';
 import { configureNativeNotifications, presentNativeNotification } from './core/native-notifications';
 
 import Header from './components/Header';
-import Footer from './components/Footer';
 import BottomMenuSheet from './components/BottomMenuSheet';
 
 import LoginScreen from './screens/LoginScreen';
@@ -49,14 +48,11 @@ import PincodeScreen from './screens/PincodeScreen';
 import CalculatorScreen from './screens/CalculatorScreen';
 import ZipFinderScreen from './screens/ZipFinderScreen';
 import ComplaintScreen from './screens/ComplaintScreen';
-import CalendarScreen from './screens/CalendarScreen';
-import MemosScreen from './screens/MemosScreen';
-import InvoiceScreen from './screens/InvoiceScreen';
-import DocsScreen from './screens/DocsScreen';
 import VaultScreen from './screens/VaultScreen';
-import ServicesScreen from './screens/ServicesScreen';
 import UploaderScreen from './screens/UploaderScreen';
 import AdminScreen from './screens/AdminScreen';
+import StatusUpdateScreen from './screens/StatusUpdateScreen';
+import ScanScreen from './screens/ScanScreen';
 import NotificationsPanel from './components/NotificationsPanel';
 
 function MainApp() {
@@ -1045,10 +1041,8 @@ function MainApp() {
   if (!user) {
     return (
       <View style={styles.webBody}>
-        <StatusBar style="dark" />
-        <Header user={user} onLogin={() => {}} />
+        <StatusBar style="light" />
         <LoginScreen onLoginSuccess={handleLoginSuccess} />
-        <Footer />
       </View>
     );
   }
@@ -1080,7 +1074,7 @@ function MainApp() {
 
       <View style={styles.mainContent}>
         {activeTab === 'dashboard' && (
-          <DashboardScreen orders={orders} shipmentsMap={shipmentsMap} refreshing={refreshing} onRefresh={onRefresh} onNavigate={setActiveTab} />
+          <DashboardScreen orders={orders} shipmentsMap={shipmentsMap} b2b2cMap={b2b2cMap} modesMap={modesMap} refreshing={refreshing} onRefresh={onRefresh} onNavigate={setActiveTab} />
         )}
         {activeTab === 'orders' && (
           <OrdersScreen
@@ -1090,7 +1084,9 @@ function MainApp() {
             refreshing={refreshing}
             onRefresh={onRefresh}
             b2b2cMap={b2b2cMap}
+            b2bList={b2bList}
             carriersMap={carriersMap}
+            onScan={() => setActiveTab('scan')}
             modesMap={modesMap}
             branchesMap={branchesMap}
             productsMap={productsMap}
@@ -1138,12 +1134,17 @@ function MainApp() {
         )}
         {activeTab === 'zipfinder' && <ZipFinderScreen />}
         {activeTab === 'complaint' && <ComplaintScreen />}
-        {activeTab === 'calendar' && <CalendarScreen token={token} apiBase={API_BASE} />}
-        {activeTab === 'memos' && <MemosScreen token={token} apiBase={API_BASE} user={user} />}
-        {activeTab === 'invoice' && <InvoiceScreen orders={orders} b2bList={b2bList} user={user} />}
-        {activeTab === 'docs' && <DocsScreen orders={orders} b2bList={b2bList} user={user} />}
         {activeTab === 'vault' && <VaultScreen token={token} apiBase={API_BASE} user={user} />}
-        {activeTab === 'services' && <ServicesScreen onNavigate={setActiveTab} />}
+        {activeTab === 'status' && (
+          <StatusUpdateScreen
+            orders={orders}
+            token={token}
+            apiBase={API_BASE}
+            role={user?.ROLE || 'STAFF'}
+            onRefresh={onRefresh}
+          />
+        )}
+        {activeTab === 'scan' && <ScanScreen />}
         {activeTab === 'uploader' && (
           <UploaderScreen
             orders={orders}

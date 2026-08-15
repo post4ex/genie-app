@@ -1,20 +1,82 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, ScrollView,
-  Dimensions, Modal
+  Dimensions, Modal, Platform, Animated
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AboutAppPanel from './AboutAppPanel';
+import Icon, { GradientIcon } from './icons';
 import { COLORS } from '../styles/theme';
 import { ROLE_LEVELS } from '../core/config';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
+
+// Bottom-bar tabs in display order (index = position in the pill bar)
+const TABS = [
+  { key: 'dashboard', icon: 'home' },
+  { key: 'orders', icon: 'orders' },
+  { key: 'uploader', icon: 'upload' },
+  { key: 'book', icon: 'book' },
+  { key: 'status', icon: 'status' },
+  { key: 'scan', icon: 'scan' },
+  { key: 'menu', icon: 'menu' },
+];
+
+// Icon that springs to full size when active, shrinks slightly when idle.
+function TabIcon({ active, name, size, iconSize }) {
+  const scale = useRef(new Animated.Value(active ? 1 : 0.92)).current;
+
+  useEffect(() => {
+    scale.stopAnimation();
+    Animated.spring(scale, {
+      toValue: active ? 1 : 0.92,
+      useNativeDriver: true,
+      friction: 5,
+      tension: 160,
+    }).start();
+  }, [active, scale]);
+
+  return (
+    <Animated.View style={{ transform: [{ scale }] }}>
+      <GradientIcon name={name} size={size} iconSize={iconSize} />
+    </Animated.View>
+  );
+}
+
+// Floating pill shadow — web uses boxShadow, native uses elevation
+const floatingShadow = Platform.OS === 'web'
+  ? { boxShadow: '0px 6px 20px rgba(15, 23, 42, 0.12)' }
+  : {
+      shadowColor: '#0f172a',
+      shadowOpacity: 0.12,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 5 },
+      elevation: 8,
+    };
 
 export default function BottomMenuSheet({ activeTab, onNavigate, userRole = 'CLIENT' }) {
   const insets = useSafeAreaInsets();
   const [menuOpen, setMenuOpen] = useState(false);
   const [aboutModalOpen, setAboutModalOpen] = useState(false);
   const [openSubmenu, setOpenSubmenu] = useState(null); // 'scans' | 'reports'
+  const [barWidth, setBarWidth] = useState(0);
+  const indicatorAnim = useRef(new Animated.Value(0)).current;
+
+  // Active tab index for the sliding pill (last tab = menu)
+  const activeIndex = menuOpen
+    ? TABS.length - 1
+    : Math.max(0, TABS.findIndex((t) => t.key === activeTab));
+  const isActive = (tab) => (tab.key === 'menu' ? menuOpen : activeTab === tab.key);
+
+  useEffect(() => {
+    indicatorAnim.stopAnimation();
+    Animated.spring(indicatorAnim, {
+      toValue: activeIndex,
+      useNativeDriver: true,
+      friction: 8,
+      tension: 90,
+    }).start();
+  }, [activeIndex, indicatorAnim]);
 
   const toggleSubmenu = (sub) => {
     setOpenSubmenu(openSubmenu === sub ? null : sub);
@@ -26,35 +88,43 @@ export default function BottomMenuSheet({ activeTab, onNavigate, userRole = 'CLI
   };
 
   return (
-    <View style={styles.container}>
-      {/* ── Compact 5-Tab Bottom Navigation Bar ── */}
-      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 4) }]}>
-        <View style={styles.tabsRow}>
-          <TouchableOpacity style={[styles.tabItem, activeTab === 'dashboard' && styles.tabActive]} onPress={() => handleSelect('dashboard')}>
-            <Text style={styles.tabIcon}>📊</Text>
-            <Text style={[styles.tabLabel, activeTab === 'dashboard' && styles.tabLabelActive]}>Home</Text>
-          </TouchableOpacity>
+    <View style={[styles.container, { marginBottom: Math.max(insets.bottom + 6, 12) }]}>
+      {/* ── 7-Tab Bottom Navigation Bar ── */}
+      <View style={styles.bottomBar}>
+        <View
+          style={styles.tabsRow}
+          onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
+        >
+          {/* Sliding active-pill behind the selected icon (replaces the dot) */}
+          {barWidth > 0 && (
+            <Animated.View
+              style={[
+                styles.activePill,
+                {
+                  width: (barWidth / TABS.length) * 0.62,
+                  left: (barWidth / TABS.length) * 0.19,
+                  transform: [
+                    {
+                      translateX: indicatorAnim.interpolate({
+                        inputRange: [0, TABS.length - 1],
+                        outputRange: [0, (barWidth / TABS.length) * (TABS.length - 1)],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            />
+          )}
 
-          <TouchableOpacity style={[styles.tabItem, activeTab === 'orders' && styles.tabActive]} onPress={() => handleSelect('orders')}>
-            <Text style={styles.tabIcon}>📋</Text>
-            <Text style={[styles.tabLabel, activeTab === 'orders' && styles.tabLabelActive]}>Orders</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.tabItem, activeTab === 'book' && styles.tabActive]} onPress={() => handleSelect('book')}>
-            <Text style={styles.tabIcon}>➕</Text>
-            <Text style={[styles.tabLabel, activeTab === 'book' && styles.tabLabelActive]}>Book</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.tabItem, activeTab === 'uploader' && styles.tabActive]} onPress={() => handleSelect('uploader')}>
-            <Text style={styles.tabIcon}>📤</Text>
-            <Text style={[styles.tabLabel, activeTab === 'uploader' && styles.tabLabelActive]}>Uploader</Text>
-          </TouchableOpacity>
-
-          {/* 5th Button: Dedicated Menu Button */}
-          <TouchableOpacity style={[styles.tabItem, menuOpen && styles.tabActive]} onPress={() => setMenuOpen(true)}>
-            <Text style={[styles.tabIcon, { color: COLORS.primary, fontWeight: 'bold' }]}>☰</Text>
-            <Text style={[styles.tabLabel, menuOpen && styles.tabLabelActive]}>Menu</Text>
-          </TouchableOpacity>
+          {TABS.map((tab) => (
+            <TouchableOpacity
+              key={tab.key}
+              style={styles.tabItem}
+              onPress={() => (tab.key === 'menu' ? setMenuOpen(true) : handleSelect(tab.key))}
+            >
+              <TabIcon active={isActive(tab)} name={tab.icon} size={34} iconSize={15} />
+            </TouchableOpacity>
+          ))}
         </View>
       </View>
 
@@ -67,53 +137,19 @@ export default function BottomMenuSheet({ activeTab, onNavigate, userRole = 'CLI
             {/* Sheet Header */}
             <TouchableOpacity style={styles.sheetHeader} onPress={() => setMenuOpen(false)}>
               <View style={styles.handleBarDark} />
-              <Text style={styles.sheetTitle}>GENIE Full Menu & Tools</Text>
-              <Text style={styles.closeBtnText}>✕</Text>
+              <Text style={styles.sheetTitle}>Full Menu</Text>
+              <Icon name="close" size={17} color="#64748b" style={styles.closeBtnText} />
             </TouchableOpacity>
 
             <ScrollView style={styles.sheetScroll}>
-              {/* Category 1: Core Navigation */}
-              <Text style={styles.sectionHeader}>CORE APPS</Text>
-              <View style={styles.gridRow}>
-                <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('dashboard')}>
-                  <Text style={styles.chipIcon}>📊</Text>
-                  <Text style={styles.chipLabel}>Dashboard</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('orders')}>
-                  <Text style={styles.chipIcon}>📋</Text>
-                  <Text style={styles.chipLabel}>Shipments / Orders</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('book')}>
-                  <Text style={styles.chipIcon}>➕</Text>
-                  <Text style={styles.chipLabel}>Book Order</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('track')}>
-                  <Text style={styles.chipIcon}>🔍</Text>
-                  <Text style={styles.chipLabel}>Track AWB</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Category 2: Scans Submenu */}
-              <Text style={styles.sectionHeader}>SCANS & LOGISTICS</Text>
-              <TouchableOpacity style={styles.submenuAccordionHeader} onPress={() => toggleSubmenu('scans')}>
-                <Text style={styles.accordionTitle}>📦 Scans & Operations</Text>
-                <Text style={styles.accordionArrow}>{openSubmenu === 'scans' ? '▲' : '▼'}</Text>
-              </TouchableOpacity>
-              {openSubmenu === 'scans' && (
-                <View style={styles.submenuItemsContainer}>
-                  {['Pickup Request', 'OutManifest', 'InManifest', 'RunSheet', 'Update Scan', 'POD Upload'].map((subItem, idx) => (
-                    <TouchableOpacity key={idx} style={styles.submenuItem} onPress={() => handleSelect('orders')}>
-                      <Text style={styles.submenuItemText}>• {subItem}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-
-              {/* Category 3: Reports Submenu */}
+              {/* Reports Submenu */}
               <Text style={styles.sectionHeader}>REPORTS & ANALYTICS</Text>
               <TouchableOpacity style={styles.submenuAccordionHeader} onPress={() => toggleSubmenu('reports')}>
-                <Text style={styles.accordionTitle}>📈 Business Reports</Text>
-                <Text style={styles.accordionArrow}>{openSubmenu === 'reports' ? '▲' : '▼'}</Text>
+                <View style={styles.accordionTitleRow}>
+                  <GradientIcon name="reports" size={24} iconSize={11} />
+                  <Text style={styles.accordionTitle}>Business Reports</Text>
+                </View>
+                <Icon name={openSubmenu === 'reports' ? 'chevronUp' : 'chevronDown'} size={13} color="#64748b" />
               </TouchableOpacity>
               {openSubmenu === 'reports' && (
                 <View style={styles.submenuItemsContainer}>
@@ -125,65 +161,45 @@ export default function BottomMenuSheet({ activeTab, onNavigate, userRole = 'CLI
                 </View>
               )}
 
-              {/* Category 4: Tools & Business */}
+              {/* Tools & Business */}
               <Text style={styles.sectionHeader}>BUSINESS & TOOLS</Text>
               <View style={styles.gridRow}>
                 <TouchableOpacity style={[styles.menuChip, activeTab === 'calc' && styles.menuChipActive]} onPress={() => handleSelect('calc')}>
-                  <Text style={styles.chipIcon}>🧮</Text>
+                  <GradientIcon name="calc" size={28} iconSize={13} />
                   <Text style={styles.chipLabel}>Rate Estimate</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.menuChip, activeTab === 'pincode' && styles.menuChipActive]} onPress={() => handleSelect('pincode')}>
-                  <Text style={styles.chipIcon}>📍</Text>
+                  <GradientIcon name="pincode" size={28} iconSize={13} />
                   <Text style={styles.chipLabel}>Pincode Search</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.menuChip, activeTab === 'zipfinder' && styles.menuChipActive]} onPress={() => handleSelect('zipfinder')}>
-                  <Text style={styles.chipIcon}>🌐</Text>
+                  <GradientIcon name="zipfinder" size={28} iconSize={13} />
                   <Text style={styles.chipLabel}>Global ZIP Finder</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.menuChip, activeTab === 'complaint' && styles.menuChipActive]} onPress={() => handleSelect('complaint')}>
-                  <Text style={styles.chipIcon}>⚠️</Text>
+                  <GradientIcon name="complaint" size={28} iconSize={13} />
                   <Text style={styles.chipLabel}>Raise Complaint</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.menuChip, activeTab === 'calendar' && styles.menuChipActive]} onPress={() => handleSelect('calendar')}>
-                  <Text style={styles.chipIcon}>🗓️</Text>
-                  <Text style={styles.chipLabel}>Operations Calendar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.menuChip, activeTab === 'memos' && styles.menuChipActive]} onPress={() => handleSelect('memos')}>
-                  <Text style={styles.chipIcon}>📣</Text>
-                  <Text style={styles.chipLabel}>Company Memos</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.menuChip, activeTab === 'invoice' && styles.menuChipActive]} onPress={() => handleSelect('invoice')}>
-                  <Text style={styles.chipIcon}>🧾</Text>
-                  <Text style={styles.chipLabel}>Tax Invoice</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.menuChip, activeTab === 'docs' && styles.menuChipActive]} onPress={() => handleSelect('docs')}>
-                  <Text style={styles.chipIcon}>📄</Text>
-                  <Text style={styles.chipLabel}>Document Center</Text>
-                </TouchableOpacity>
                 <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('uploader')}>
-                  <Text style={styles.chipIcon}>📤</Text>
+                  <GradientIcon name="upload" size={28} iconSize={13} />
                   <Text style={styles.chipLabel}>Uploader</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.menuChip} onPress={() => handleSelect('orders')}>
-                  <Text style={styles.chipIcon}>👥</Text>
+                  <GradientIcon name="crm" size={28} iconSize={13} />
                   <Text style={styles.chipLabel}>CRM & Clients</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.menuChip, activeTab === 'vault' && styles.menuChipActive]} onPress={() => handleSelect('vault')}>
-                  <Text style={styles.chipIcon}>🔐</Text>
+                  <GradientIcon name="vault" size={28} iconSize={13} />
                   <Text style={styles.chipLabel}>The Vault</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.menuChip, activeTab === 'services' && styles.menuChipActive]} onPress={() => handleSelect('services')}>
-                  <Text style={styles.chipIcon}>🧩</Text>
-                  <Text style={styles.chipLabel}>Services</Text>
                 </TouchableOpacity>
                 {(ROLE_LEVELS[userRole] || 0) >= (ROLE_LEVELS.CLIENT || 1) && (
                   <TouchableOpacity style={[styles.menuChip, activeTab === 'admin' && styles.menuChipActive]} onPress={() => handleSelect('admin')}>
-                    <Text style={styles.chipIcon}>⚙️</Text>
+                    <GradientIcon name="admin" size={28} iconSize={13} />
                     <Text style={styles.chipLabel}>Masters / Admin</Text>
                   </TouchableOpacity>
                 )}
                 <TouchableOpacity style={styles.menuChip} onPress={() => { setMenuOpen(false); setAboutModalOpen(true); }}>
-                  <Text style={styles.chipIcon}>ℹ️</Text>
+                  <GradientIcon name="about" size={28} iconSize={13} />
                   <Text style={styles.chipLabel}>About & Updates</Text>
                 </TouchableOpacity>
               </View>
@@ -203,13 +219,18 @@ export default function BottomMenuSheet({ activeTab, onNavigate, userRole = 'CLI
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#ffffff',
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
+    marginHorizontal: 14,
+    borderRadius: 24,
   },
   bottomBar: {
     backgroundColor: '#ffffff',
-    paddingTop: 2,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingTop: 8,
+    paddingBottom: 6,
+    overflow: 'hidden',
+    ...floatingShadow,
   },
   tabsRow: {
     flexDirection: 'row',
@@ -218,23 +239,18 @@ const styles = StyleSheet.create({
   tabItem: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 2,
+    justifyContent: 'center',
+    paddingVertical: 6,
   },
-  tabActive: {
-    borderTopWidth: 2,
-    borderTopColor: COLORS.primary,
-  },
-  tabIcon: {
-    fontSize: 17,
-  },
-  tabLabel: {
-    color: '#64748b',
-    fontSize: 9.5,
-    marginTop: 1,
-  },
-  tabLabelActive: {
-    color: COLORS.primary,
-    fontWeight: '700',
+  // Active-tab indicator: a soft pill that springs between the icons.
+  activePill: {
+    position: 'absolute',
+    top: 14,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(100, 116, 139, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(100, 116, 139, 0.10)',
   },
 
   // Modal Sheet Styles
@@ -276,10 +292,7 @@ const styles = StyleSheet.create({
   closeBtnText: {
     position: 'absolute',
     right: 0,
-    top: 8,
-    fontSize: 18,
-    color: '#64748b',
-    fontWeight: '700',
+    top: 10,
   },
   sheetScroll: {
     paddingVertical: 12,
@@ -311,14 +324,12 @@ const styles = StyleSheet.create({
     borderColor: COLORS.primary,
     backgroundColor: '#fff7f5',
   },
-  chipIcon: {
-    fontSize: 18,
-    marginRight: 8,
-  },
   chipLabel: {
     fontSize: 12,
     fontWeight: '600',
     color: '#1e293b',
+    marginLeft: 10,
+    flex: 1,
   },
   submenuAccordionHeader: {
     backgroundColor: '#f8fafc',
@@ -330,14 +341,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
+  accordionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   accordionTitle: {
     fontSize: 13,
     fontWeight: '700',
     color: '#1e293b',
-  },
-  accordionArrow: {
-    fontSize: 12,
-    color: '#64748b',
   },
   submenuItemsContainer: {
     backgroundColor: '#ffffff',
