@@ -4,7 +4,6 @@ import {
   TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator, Share, Platform, BackHandler,
   useWindowDimensions
 } from 'react-native';
-import Svg, { Path, Polyline } from 'react-native-svg';
 import { COLORS } from '../styles/theme';
 import { getSheet, deleteFromSheet } from '../core/storage';
 import { fmtDate, parseDate } from '../utils/formatIST';
@@ -20,80 +19,14 @@ import FilterBar from '../components/FilterBar';
 import FilterModal from '../components/FilterModal';
 import ListItem from '../components/ListItem';
 import { accentSparkle } from '../components/Tile';
-import Icon, { GradientGlyph } from '../components/icons';
+import Icon, { GradientGlyph, GradientIcon } from '../components/icons';
 import GradientText from '../components/GradientText';
 import Tray from '../components/Tray';
 import DocCenterPane from '../components/DocCenterPane';
+import ShipmentDetailsPane, { DETAIL_TABLE_STYLES } from '../components/ShipmentDetailsPane';
+import PartiesPane from '../components/PartiesPane';
+import PackagingsPane from '../components/PackagingsPane';
 import { LinearGradient } from 'expo-linear-gradient';
-
-// ── Web SVG Icons (Exact GENIE_WEB shipments.js _docIco 1-to-1 match) ──────────
-const CheckmarkCircleIcon = ({ size = 14, color = '#0284c7' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
-    <Polyline points="22 4 12 14.01 9 11.01" />
-  </Svg>
-);
-
-const WhatsAppIcon = ({ size = 14, color = '#25D366' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-    <Path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-  </Svg>
-);
-
-const MailIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-  </Svg>
-);
-
-const DownloadIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-  </Svg>
-);
-
-const UploadIcon = ({ size = 14, color = '#16a34a' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12" />
-  </Svg>
-);
-
-const EditIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-  </Svg>
-);
-
-const CopyIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-  </Svg>
-);
-
-const ShareIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-  </Svg>
-);
-
-const DeleteIcon = ({ size = 14, color = '#ef4444' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-  </Svg>
-);
-
-const RefreshIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-  </Svg>
-);
-
-const EyeIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-    <Path d="M12 9a3 3 0 100 6 3 3 0 000-6z" />
-  </Svg>
-);
 
 // ── Shipment Tiles (Total → Delivered → OFD → In Transit → TATs → …) ──────────
 // Per-tile identity: bold MaterialCommunityIcons glyph painted in the tile's
@@ -1327,7 +1260,7 @@ export default function OrdersScreen({
     };
 
     const shipmentDetailsTable = [
-      { l: 'Carrier',   v: carrierName },
+      { l: 'Carrier',   v: carrierName, full: true },
       { l: 'Mode',      v: modeName },
       { l: 'TAT',       v: o.TAT || '—' },
       { l: 'Zone',      v: o.ZONE || '—' },
@@ -1338,7 +1271,6 @@ export default function OrdersScreen({
       { l: 'COD',       v: o.COD && parseFloat(o.COD) > 0 ? `₹${o.COD}` : 'No' },
       { l: 'ToPay',     v: o.TOPAY || 'No' },
       { l: 'FOV',       v: o.FOV || 'No' },
-      { l: 'Global',    v: o.GLOBAL || 'No' },
     ];
 
     const hasNoSubData = products.length === 0 && boxes.length === 0 && uploads.length === 0;
@@ -1348,11 +1280,11 @@ export default function OrdersScreen({
         {/* Navigation Header — premium breadcrumb */}
         <View style={styles.navHeader}>
           <TouchableOpacity
-            style={styles.navBackChip}
-            activeOpacity={0.7}
+            activeOpacity={0.8}
             onPress={() => { setSelectedOrder(null); setCurrentView('list'); }}
+            accessibilityLabel="Back to list"
           >
-            <Icon name="back" size={15} color="#64748b" />
+            <GradientIcon name="back" size={34} iconSize={15} />
           </TouchableOpacity>
 
           <View style={styles.navTitleBlock}>
@@ -1385,212 +1317,47 @@ export default function OrdersScreen({
           onWhatsAppDoc={waDoc}
         />
 
-        {/* ── CARD 2: Shipment Details Card ── */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>Shipment Details</Text>
-            <View style={styles.actionIconGroup}>
-              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#e0f2fe' }]} onPress={() => setUpdateStatusTargetOrder(o)} title="Update Status">
-                <CheckmarkCircleIcon size={14} color="#0284c7" />
-              </TouchableOpacity>
-              {!o.INV_NUMBER && (
-                <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => (onEditOrder ? onEditOrder({ ...o, boxes: multiboxMap[o.REFERENCE] || [], products: productsMap[o.REFERENCE] || [] }) : toast('Edit', 'Edit order ' + o.REFERENCE))} title="Edit">
-                  <EditIcon size={14} color="#64748b" />
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={handleCopy} title="Copy">
-                <CopyIcon size={14} color="#64748b" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={handleShare} title="Share">
-                <ShareIcon size={14} color="#64748b" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => mailShipment(o)} title="Email">
-                <MailIcon size={14} color="#64748b" />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waShipment(o)} title="WhatsApp">
-                <WhatsAppIcon size={14} color="#25D366" />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#fef2f2' }]} onPress={() => deleteOrder(o)} title="Delete">
-                <DeleteIcon size={14} color="#ef4444" />
-              </TouchableOpacity>
-            </View>
-          </View>
+        {/* ── CARD 2: Shipment Details (centralized ShipmentDetailsPane) ── */}
+        <ShipmentDetailsPane
+          rows={shipmentDetailsTable}
+          canEdit={!o.INV_NUMBER}
+          onUpdateStatus={() => setUpdateStatusTargetOrder(o)}
+          onEdit={() => (onEditOrder ? onEditOrder({ ...o, boxes: multiboxMap[o.REFERENCE] || [], products: productsMap[o.REFERENCE] || [] }) : toast('Edit', 'Edit order ' + o.REFERENCE))}
+          onCopy={handleCopy}
+          onShare={handleShare}
+          onMail={() => mailShipment(o)}
+          onWhatsApp={() => waShipment(o)}
+          onDelete={() => deleteOrder(o)}
+        />
 
-          <View style={styles.webTableGrid}>
-            {shipmentDetailsTable.map((item, idx) => (
-              <View key={idx} style={styles.webTableCellRow}>
-                <View style={styles.webTableCellLabelBox}>
-                  <Text style={styles.webTableCellLabelText}>{item.l}</Text>
-                </View>
-                <View style={styles.webTableCellValueBox}>
-                  <Text style={styles.webTableCellValueText}>{item.v}</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        </View>
+        {/* ── CARD 3+4: Consignor & Consignee (centralized PartiesPane) ── */}
+        <PartiesPane
+          consignor={[
+            { l: 'Name', v: cnorName },
+            { l: 'Origin', v: [cnorCity, cnorPin, cnorState].filter(Boolean).join(', ') },
+            { l: 'Address', v: cnorAddr },
+            { l: 'Mobile', v: cnorMob },
+          ]}
+          consignee={[
+            { l: 'Name', v: cneeName },
+            { l: 'Destination', v: [cneeCity, cneePin, cneeState].filter(Boolean).join(', ') },
+            { l: 'Address', v: cneeAddr },
+            { l: 'Mobile', v: cneeMob },
+          ]}
+        />
 
-        {/* ── CARD 3: Consignor Details ── */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>Consignor Details</Text>
-          </View>
-          <DetailRow label="Name" value={cnorName} />
-          <DetailRow label="City" value={cnorCity} />
-          <DetailRow label="Pincode" value={cnorPin} />
-          <DetailRow label="State" value={cnorState} />
-          <DetailRow label="Address" value={cnorAddr} />
-          <DetailRow label="Mobile" value={cnorMob} />
-        </View>
-
-        {/* ── CARD 4: Consignee Details ── */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>Consignee Details</Text>
-          </View>
-          <DetailRow label="Name" value={cneeName} />
-          <DetailRow label="City" value={cneeCity} />
-          <DetailRow label="Pincode" value={cneePin} />
-          <DetailRow label="State" value={cneeState} />
-          <DetailRow label="Address" value={cneeAddr} />
-          <DetailRow label="Mobile" value={cneeMob} />
-        </View>
-
-        {/* ── CARD 5: Product, Box & Upload Details ── */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>Product, Box & Upload Details</Text>
-            <View style={styles.actionIconGroup}>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => openUpload(o)} title="Upload File">
-                <UploadIcon size={14} color="#16a34a" />
-              </TouchableOpacity>
-              {uploads.length > 0 && (
-                <>
-                  <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => mailShipmentUploads(o)} title="Mail All">
-                    <MailIcon size={14} color="#64748b" />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waShipmentUploads(o)} title="WhatsApp All">
-                    <WhatsAppIcon size={14} color="#25D366" />
-                  </TouchableOpacity>
-                </>
-              )}
-            </View>
-          </View>
-
-          {hasNoSubData ? (
-            <Text style={styles.noSubDataText}>No product, box, or upload details.</Text>
-          ) : (
-            <View>
-              {/* Product Section */}
-              <View style={{ marginBottom: 12 }}>
-                <Text style={styles.subSectionHeader}>Product</Text>
-                {products.length === 0 ? (
-                  <Text style={styles.noneText}>None</Text>
-                ) : (
-                  products.map((p, pi) => (
-                    <View key={pi} style={styles.subItemBox}>
-                      <Text style={styles.subItemTitle}>{p.PRODUCT || 'N/A'}</Text>
-                      <View style={styles.subItemDetailRow}>
-                        <Text style={styles.subItemLabel}>Doc#:</Text>
-                        <Text style={styles.subItemValue}>{p.DOC_NUMBER || 'N/A'}</Text>
-                      </View>
-                      <View style={styles.subItemDetailRow}>
-                        <Text style={styles.subItemLabel}>EWay:</Text>
-                        <Text style={styles.subItemValue}>{p.EWAY_IF || 'N/A'}</Text>
-                      </View>
-                      <View style={styles.subItemDetailRow}>
-                        <Text style={styles.subItemLabel}>Amt:</Text>
-                        <Text style={styles.subItemValue}>{parseFloat(p.AMOUNT || 0).toFixed(2)}</Text>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </View>
-
-              {/* MultiBox Section */}
-              <View style={{ marginBottom: 12 }}>
-                <Text style={styles.subSectionHeader}>MultiBox</Text>
-                {boxes.length === 0 ? (
-                  <Text style={styles.noneText}>None</Text>
-                ) : (
-                  boxes.map((b, bi) => {
-                    const lbh = `${parseFloat(b.LENGTH) || 0}*${parseFloat(b.BREADTH) || 0}*${parseFloat(b.HIGHT) || 0}`;
-                    return (
-                      <View key={bi} style={styles.subItemBox}>
-                        <Text style={styles.subItemTitle}>Box#: {b.BOX_NUM || 'N/A'}</Text>
-                        <View style={styles.subItemDetailRow}>
-                          <Text style={styles.subItemLabel}>Weight:</Text>
-                          <Text style={styles.subItemValue}>{b.WEIGHT || 0}</Text>
-                        </View>
-                        <View style={styles.subItemDetailRow}>
-                          <Text style={styles.subItemLabel}>L*B*H:</Text>
-                          <Text style={styles.subItemValue}>{lbh}</Text>
-                        </View>
-                        <View style={styles.subItemDetailRow}>
-                          <Text style={styles.subItemLabel}>Chg Wt:</Text>
-                          <Text style={styles.subItemValue}>{parseFloat(b.CHG_WT || 0).toFixed(2)}</Text>
-                        </View>
-                      </View>
-                    );
-                  })
-                )}
-              </View>
-
-              {/* Uploads Section */}
-              <View>
-                <Text style={styles.subSectionHeader}>Uploads</Text>
-                {uploads.length === 0 ? (
-                  <Text style={styles.noneText}>None</Text>
-                ) : (
-                  uploads.map((up, ui) => {
-                    const ud = fmtDate(up.TIME_STAMP, 'full');
-                    const idt = up.AWB_NUMBER || up.KYC_NUMBER || up.REFERENCE;
-                    let det = up.STATUS_REMARK || 'N/A';
-                    if (up.UPLOAD_TYPE === 'MultiBox') det = `Child:${up.CHILD_AWB || 'N/A'}`;
-                    else if (up.UPLOAD_TYPE === 'KYC') det = `${up.CUSTOMER_UID || 'N/A'}(${up.KYC_TYPE || 'N/A'})`;
-                    else if (up.UPLOAD_TYPE === 'Product') det = `${up.DOC_NUMBER || 'N/A'}(${up.DOC_TYPE || 'N/A'})`;
-
-                    return (
-                      <View key={ui} style={styles.uploadItemBox}>
-                        <View style={styles.subItemHeaderRow}>
-                          <Text style={styles.uploadTypeTitle}>{up.UPLOAD_TYPE || 'Upload'}</Text>
-                          <Text style={styles.uploadDateText}>{ud}</Text>
-                        </View>
-                        <View style={styles.subItemDetailRow}>
-                          <Text style={styles.subItemLabel}>ID:</Text>
-                          <Text style={styles.subItemValue}>{idt || 'N/A'}</Text>
-                        </View>
-                        <View style={styles.subItemDetailRow}>
-                          <Text style={styles.subItemLabel}>Details:</Text>
-                          <Text style={styles.subItemValue}>{det}</Text>
-                        </View>
-
-                        <View style={styles.uploadActionRow}>
-                          {up.FILE_URL ? (
-                            <>
-                              <TouchableOpacity style={styles.uploadActionBtn} onPress={() => openUploadViewer(up, `${up.UPLOAD_TYPE || 'Upload'} — ${o.AWB_NUMBER || o.REFERENCE}`)}>
-                                <EyeIcon size={13} color="#0284c7" />
-                                <Text style={styles.uploadActionBtnText}>View</Text>
-                              </TouchableOpacity>
-                              <TouchableOpacity style={styles.uploadActionBtn} onPress={() => downloadUploadNative(resolveFileUrl(up.FILE_URL), `${up.UPLOAD_TYPE || 'Upload'}_${o.AWB_NUMBER || o.REFERENCE}`)}>
-                                <DownloadIcon size={13} color="#0284c7" />
-                                <Text style={styles.uploadActionBtnText}>Download</Text>
-                              </TouchableOpacity>
-                            </>
-                          ) : null}
-                          <TouchableOpacity style={[styles.uploadActionBtn, { borderColor: '#fca5a5' }]} onPress={() => deleteUpload(up)}>
-                            <DeleteIcon size={13} color="#ef4444" />
-                            <Text style={[styles.uploadActionBtnText, { color: '#ef4444' }]}>Delete</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    );
-                  })
-                )}
-              </View>
-            </View>
-          )}
-        </View>
+        {/* ── CARD 5: Packagings & Uploads (centralized PackagingsPane) ── */}
+        <PackagingsPane
+          products={products}
+          boxes={boxes}
+          uploads={uploads}
+          onUpload={() => openUpload(o)}
+          onMailAll={() => mailShipmentUploads(o)}
+          onWhatsAppAll={() => waShipmentUploads(o)}
+          onDownloadUpload={(up) => downloadUploadNative(resolveFileUrl(up.FILE_URL), `${up.UPLOAD_TYPE || 'Upload'}_${o.AWB_NUMBER || o.REFERENCE}`)}
+          onDeleteUpload={deleteUpload}
+          resolveUrl={resolveFileUrl}
+        />
 
         {/* ── CARD 6: Tracking Status (Implanted API call, AT END) ── */}
         <View style={styles.card}>
@@ -1603,13 +1370,13 @@ export default function OrdersScreen({
             </View>
             <View style={styles.actionIconGroup}>
               <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => mailShipmentTracking(o)} title="Mail">
-                <MailIcon size={14} color="#64748b" />
+                <Icon name="envelope" size={14} color="#64748b" chunky />
               </TouchableOpacity>
               <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waShipmentTracking(o)} title="WhatsApp">
-                <WhatsAppIcon size={14} color="#25D366" />
+                <Icon name="whatsapp" size={14} color="#25D366" chunky />
               </TouchableOpacity>
               <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => fetchTrackingHistory(o.REFERENCE, true)} title="Refresh Live Tracking">
-                <RefreshIcon size={14} color="#64748b" />
+                <Icon name="refresh" size={14} color="#64748b" chunky />
               </TouchableOpacity>
               {shipment.pod_image ? (
                 <TouchableOpacity
@@ -1617,7 +1384,7 @@ export default function OrdersScreen({
                   onPress={() => openUploadViewer(shipment.pod_image, `POD — ${o.AWB_NUMBER || o.REFERENCE}`)}
                   title="Show POD Image"
                 >
-                  <EyeIcon size={14} color="#4f46e5" />
+                  <Icon name="eye" size={14} color="#4f46e5" chunky />
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -1630,91 +1397,91 @@ export default function OrdersScreen({
             </View>
           )}
 
-          <View style={styles.webTableGrid}>
-            <View style={styles.webTableCellRow}>
-              <View style={styles.webTableCellLabelBox}>
-                <Text style={styles.webTableCellLabelText}>AWB Number</Text>
+          <View style={DETAIL_TABLE_STYLES.grid}>
+            <View style={DETAIL_TABLE_STYLES.row}>
+              <View style={DETAIL_TABLE_STYLES.labelBox}>
+                <Text style={DETAIL_TABLE_STYLES.labelText}>AWB Number</Text>
               </View>
-              <View style={styles.webTableCellValueBox}>
-                <Text style={styles.webTableCellValueText}>{o.AWB_NUMBER || shipment.awb_number || 'N/A'}</Text>
-              </View>
-            </View>
-            <View style={styles.webTableCellRow}>
-              <View style={styles.webTableCellLabelBox}>
-                <Text style={styles.webTableCellLabelText}>Order Date</Text>
-              </View>
-              <View style={styles.webTableCellValueBox}>
-                <Text style={styles.webTableCellValueText}>{formattedOrderDate}</Text>
+              <View style={DETAIL_TABLE_STYLES.valueBox}>
+                <Text style={DETAIL_TABLE_STYLES.valueText}>{o.AWB_NUMBER || shipment.awb_number || 'N/A'}</Text>
               </View>
             </View>
-            <View style={styles.webTableCellRow}>
-              <View style={styles.webTableCellLabelBox}>
-                <Text style={styles.webTableCellLabelText}>Transit Date</Text>
+            <View style={DETAIL_TABLE_STYLES.row}>
+              <View style={DETAIL_TABLE_STYLES.labelBox}>
+                <Text style={DETAIL_TABLE_STYLES.labelText}>Order Date</Text>
               </View>
-              <View style={styles.webTableCellValueBox}>
-                <Text style={styles.webTableCellValueText}>{formattedTransitDate}</Text>
+              <View style={DETAIL_TABLE_STYLES.valueBox}>
+                <Text style={DETAIL_TABLE_STYLES.valueText}>{formattedOrderDate}</Text>
               </View>
             </View>
-            <View style={styles.webTableCellRow}>
-              <View style={styles.webTableCellLabelBox}>
-                <Text style={styles.webTableCellLabelText}>Doc Date</Text>
+            <View style={DETAIL_TABLE_STYLES.row}>
+              <View style={DETAIL_TABLE_STYLES.labelBox}>
+                <Text style={DETAIL_TABLE_STYLES.labelText}>Transit Date</Text>
               </View>
-              <View style={styles.webTableCellValueBox}>
-                <Text style={styles.webTableCellValueText}>{formattedInvoiceDate}</Text>
+              <View style={DETAIL_TABLE_STYLES.valueBox}>
+                <Text style={DETAIL_TABLE_STYLES.valueText}>{formattedTransitDate}</Text>
+              </View>
+            </View>
+            <View style={DETAIL_TABLE_STYLES.row}>
+              <View style={DETAIL_TABLE_STYLES.labelBox}>
+                <Text style={DETAIL_TABLE_STYLES.labelText}>Doc Date</Text>
+              </View>
+              <View style={DETAIL_TABLE_STYLES.valueBox}>
+                <Text style={DETAIL_TABLE_STYLES.valueText}>{formattedInvoiceDate}</Text>
               </View>
             </View>
 
             {shipment.status_raw ? (
-              <View style={[styles.webTableCellRow, { width: '100%' }]}>
-                <View style={[styles.webTableCellLabelBox, { width: '25%' }]}>
-                  <Text style={styles.webTableCellLabelText}>Status Raw</Text>
+              <View style={[DETAIL_TABLE_STYLES.row, { width: '100%' }]}>
+                <View style={[DETAIL_TABLE_STYLES.labelBox, { width: '25%' }]}>
+                  <Text style={DETAIL_TABLE_STYLES.labelText}>Status Raw</Text>
                 </View>
-                <View style={[styles.webTableCellValueBox, { width: '75%' }]}>
-                  <Text style={styles.webTableCellValueText}>{shipment.status_raw}</Text>
+                <View style={[DETAIL_TABLE_STYLES.valueBox, { width: '75%' }]}>
+                  <Text style={DETAIL_TABLE_STYLES.valueText}>{shipment.status_raw}</Text>
                 </View>
               </View>
             ) : null}
 
             {shipment.carrier_origin ? (
-              <View style={styles.webTableCellRow}>
-                <View style={styles.webTableCellLabelBox}>
-                  <Text style={styles.webTableCellLabelText}>Origin</Text>
+              <View style={DETAIL_TABLE_STYLES.row}>
+                <View style={DETAIL_TABLE_STYLES.labelBox}>
+                  <Text style={DETAIL_TABLE_STYLES.labelText}>Origin</Text>
                 </View>
-                <View style={styles.webTableCellValueBox}>
-                  <Text style={styles.webTableCellValueText}>{shipment.carrier_origin}</Text>
+                <View style={DETAIL_TABLE_STYLES.valueBox}>
+                  <Text style={DETAIL_TABLE_STYLES.valueText}>{shipment.carrier_origin}</Text>
                 </View>
               </View>
             ) : null}
 
             {shipment.carrier_destination ? (
-              <View style={styles.webTableCellRow}>
-                <View style={styles.webTableCellLabelBox}>
-                  <Text style={styles.webTableCellLabelText}>Destination</Text>
+              <View style={DETAIL_TABLE_STYLES.row}>
+                <View style={DETAIL_TABLE_STYLES.labelBox}>
+                  <Text style={DETAIL_TABLE_STYLES.labelText}>Destination</Text>
                 </View>
-                <View style={styles.webTableCellValueBox}>
-                  <Text style={styles.webTableCellValueText}>{shipment.carrier_destination}</Text>
+                <View style={DETAIL_TABLE_STYLES.valueBox}>
+                  <Text style={DETAIL_TABLE_STYLES.valueText}>{shipment.carrier_destination}</Text>
                 </View>
               </View>
             ) : null}
 
             {shipment.booked_date ? (
-              <View style={styles.webTableCellRow}>
-                <View style={styles.webTableCellLabelBox}>
-                  <Text style={styles.webTableCellLabelText}>Booked</Text>
+              <View style={DETAIL_TABLE_STYLES.row}>
+                <View style={DETAIL_TABLE_STYLES.labelBox}>
+                  <Text style={DETAIL_TABLE_STYLES.labelText}>Booked</Text>
                 </View>
-                <View style={styles.webTableCellValueBox}>
-                  <Text style={styles.webTableCellValueText}>{shipment.booked_date}</Text>
+                <View style={DETAIL_TABLE_STYLES.valueBox}>
+                  <Text style={DETAIL_TABLE_STYLES.valueText}>{shipment.booked_date}</Text>
                 </View>
               </View>
             ) : null}
 
             {shipment.additional_info ? (
-              <View style={[styles.webTableCellRow, { width: '100%' }]}>
-                <View style={[styles.webTableCellLabelBox, { width: '25%' }]}>
-                  <Text style={styles.webTableCellLabelText}>Info</Text>
+              <View style={[DETAIL_TABLE_STYLES.row, { width: '100%' }]}>
+                <View style={[DETAIL_TABLE_STYLES.labelBox, { width: '25%' }]}>
+                  <Text style={DETAIL_TABLE_STYLES.labelText}>Info</Text>
                 </View>
-                <View style={[styles.webTableCellValueBox, { width: '75%' }]}>
-                  <Text style={styles.webTableCellValueText}>{shipment.additional_info}</Text>
+                <View style={[DETAIL_TABLE_STYLES.valueBox, { width: '75%' }]}>
+                  <Text style={DETAIL_TABLE_STYLES.valueText}>{shipment.additional_info}</Text>
                 </View>
               </View>
             ) : null}
@@ -1863,16 +1630,6 @@ function WebShipmentListItem({ order, b2b2cMap, modesMap = {}, shipmentsMap = {}
   );
 }
 
-function DetailRow({ label, value }) {
-  if (!value || String(value).trim() === '' || String(value).trim() === 'N/A') return null;
-  return (
-    <View style={styles.detailRow}>
-      <Text style={styles.detailRowLabel}>{label}:</Text>
-      <Text style={styles.detailRowValue}>{String(value)}</Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1, paddingHorizontal: 14, paddingTop: 12 },
 
@@ -1891,10 +1648,6 @@ const styles = StyleSheet.create({
   // Stage 2 & 3 Nav Bar
   navHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
   navTitle: { fontSize: 14, fontWeight: '800', color: '#1e293b', flex: 1 },
-  navBackChip: {
-    width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0',
-  },
   navTitleBlock: { flex: 1, minWidth: 0 },
   navCrumb: { fontSize: 10, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 2 },
   navTitleGradient: { fontSize: 18, fontWeight: '900', letterSpacing: -0.4 },
@@ -1969,37 +1722,8 @@ const styles = StyleSheet.create({
   docHeaderActionBtn: { backgroundColor: '#f8fafc', padding: 5, borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0' },
   actionIconGroup: { flexDirection: 'row', gap: 4 },
 
-  docRowsDivide: { borderTopWidth: 1, borderTopColor: '#f1f5f9' },
-  docRowItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  docRowLabel: { fontSize: 12, fontWeight: '700', color: '#334155', width: 90 },
-  docRowActionBtns: { flexDirection: 'row', gap: 6 },
-  docItemBtn: { backgroundColor: '#f8fafc', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1' },
-
-  // Web Table Grid
-  webTableGrid: { flexDirection: 'row', flexWrap: 'wrap', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 6, overflow: 'hidden' },
-  webTableCellRow: { width: '50%', flexDirection: 'row', borderBottomWidth: 0.5, borderRightWidth: 0.5, borderColor: '#e2e8f0' },
-  webTableCellLabelBox: { width: '50%', backgroundColor: '#f8fafc', padding: 6, borderRightWidth: 0.5, borderColor: '#e2e8f0', justifyContent: 'center' },
-  webTableCellLabelText: { fontSize: 10, color: '#64748b', fontWeight: '600' },
-  webTableCellValueBox: { width: '50%', backgroundColor: '#ffffff', padding: 6, justifyContent: 'center' },
-  webTableCellValueText: { fontSize: 10.5, fontWeight: '700', color: '#1e293b' },
-
   noSubDataText: { fontSize: 12, color: '#94a3b8', fontStyle: 'italic', paddingVertical: 4 },
   loadingText: { fontSize: 11, color: '#64748b', marginTop: 4 },
-  noneText: { fontSize: 11, color: '#94a3b8' },
-  subSectionHeader: { fontSize: 12, fontWeight: '700', color: '#475569', marginBottom: 6 },
-  subItemBox: { backgroundColor: '#f8fafc', padding: 10, borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 6 },
-  subItemHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  subItemTitle: { fontSize: 12.5, fontWeight: '800', color: '#1e293b' },
-  subItemDetailRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 },
-  subItemLabel: { fontSize: 11, color: '#64748b' },
-  subItemValue: { fontSize: 11, fontWeight: '700', color: '#1e293b' },
-
-  uploadItemBox: { backgroundColor: '#f8fafc', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 8 },
-  uploadTypeTitle: { fontSize: 13, fontWeight: '800', color: '#0369a1' },
-  uploadDateText: { fontSize: 10, color: '#64748b' },
-  uploadActionRow: { flexDirection: 'row', gap: 6, marginTop: 8, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#e2e8f0', justifyContent: 'flex-end' },
-  uploadActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: '#bae6fd', backgroundColor: '#f0f9ff' },
-  uploadActionBtnText: { fontSize: 10.5, fontWeight: '700', color: '#0284c7' },
 
   // Tracking Movements Timeline Card
   movementItemCard: { backgroundColor: '#f8fafc', padding: 10, borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 6 },
@@ -2007,9 +1731,6 @@ const styles = StyleSheet.create({
   movementDateText: { fontSize: 11, color: '#64748b', marginTop: 2 },
   movementLocationText: { fontSize: 11, fontWeight: '600', color: '#475569', marginTop: 2 },
 
-  detailRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  detailRowLabel: { fontSize: 11.5, fontWeight: '600', color: '#64748b' },
-  detailRowValue: { fontSize: 12, fontWeight: '700', color: '#1e293b', flexShrink: 1, textAlign: 'right', marginLeft: 10 },
 
   emptyBox: { alignItems: 'center', padding: 30 },
   emptyIcon: { fontSize: 36, marginBottom: 8 },

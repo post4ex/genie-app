@@ -77,6 +77,7 @@ export const ICONS = {
   print: 'print',
   share: 'share-nodes',
   trash: 'trash',
+  delete: 'trash',
   edit: 'pencil',
   check: 'check',
   checkCircle: 'circle-check',
@@ -88,6 +89,13 @@ export const ICONS = {
   spinner: 'spinner',
   shield: 'shield-halved',
   file: 'file-lines',
+
+  // Document Center doc types (shipping docs)
+  label: 'tag',
+  receipt: 'receipt',
+  pod: 'truck-fast',
+  officeCopy: 'screwdriver-wrench',
+  packaging: 'box-open',
 };
 
 // ── Futuristic gradient palette (Zepto/Flipkart-style tiles) ──────────────
@@ -127,6 +135,26 @@ export const GRADIENTS = {
   refresh: ['#0ea5e9', '#06b6d4'],       // sky → cyan
   search: ['#6366f1', '#8b5cf6'],        // indigo → violet
   filter: ['#9C2007', '#f59e0b'],        // brand maroon → amber
+  label: ['#0ea5e9', '#2563eb'],         // sky → blue (shipping label)
+  receipt: ['#f59e0b', '#ea580c'],       // amber → orange (customer copy)
+  pod: ['#10b981', '#0d9488'],           // emerald → teal (proof of delivery)
+  officeCopy: ['#8b5cf6', '#6366f1'],    // violet → indigo (maintenance copy)
+  packaging: ['#f43f5e', '#ec4899'],     // rose → pink (packaging slip)
+
+  // Actions — vivid two-hue pairs, same global language as tiles & panes
+  print: ['#0ea5e9', '#2563eb'],         // sky → blue
+  envelope: ['#f59e0b', '#f97316'],      // amber → orange
+  download: ['#64748b', '#334155'],      // slate → dark slate
+  whatsapp: ['#25D366', '#128C7E'],      // WhatsApp brand green → teal
+  layout: ['#8b5cf6', '#6366f1'],        // violet → indigo
+  copy: ['#0ea5e9', '#06b6d4'],          // sky → cyan
+  share: ['#14b8a6', '#22c55e'],         // teal → green
+  edit: ['#f59e0b', '#ea580c'],          // amber → orange
+  trash: ['#ef4444', '#dc2626'],         // red → deep red
+  refresh: ['#0ea5e9', '#06b6d4'],       // sky → cyan
+  eye: ['#6366f1', '#8b5cf6'],           // indigo → violet
+  checkCircle: ['#16a34a', '#22c55e'],   // green → light green
+  back: ['#9C2007', '#f59e0b'],          // brand maroon → amber
 };
 
 // ── Canonical action colors ──────────────────────────────────────────────────
@@ -137,25 +165,95 @@ export const GRADIENTS = {
 export const ACTION_COLORS = {
   whatsapp: '#25D366',
   upload: '#16a34a',
-  print: '#64748b',
-  download: '#64748b',
-  envelope: '#64748b',
-  mail: '#64748b',
-  layout: '#64748b',
-  share: '#64748b',
-  edit: '#64748b',
-  copy: '#64748b',
-  trash: '#ef4444',
-  refresh: '#0284c7',
-  checkCircle: '#0284c7',
-  eye: '#64748b',
+  print: '#0284c7',      // sky
+  download: '#64748b',   // slate (chosen neutral)
+  envelope: '#ea580c',   // orange
+  mail: '#ea580c',       // orange
+  layout: '#7c3aed',     // violet
+  share: '#059669',      // emerald
+  edit: '#ea580c',       // orange
+  copy: '#0284c7',       // sky
+  trash: '#ef4444',      // red
+  delete: '#ef4444',     // red
+  refresh: '#0284c7',    // sky
+  checkCircle: '#0284c7',// sky
+  eye: '#4f46e5',        // indigo
+  back: '#9C2007',       // brand maroon
+};
+
+// ── Tint chip backgrounds (Shipment-Details style) ────────────────────────────
+// Very-light pastel fill for each action chip — the same trick the WhatsApp
+// chip uses (light green #dcfce7 under the green glyph). Every action key gets
+// a fill in its own color family; unknown keys fall back to slate-100.
+export const TINT_BG = {
+  whatsapp: '#dcfce7',    // green-100
+  upload: '#dcfce7',      // green-100
+  checkCircle: '#e0f2fe', // sky-100
+  refresh: '#e0f2fe',     // sky-100
+  trash: '#fef2f2',       // red-50
+  delete: '#fef2f2',      // red-50
+  print: '#e0f2fe',       // sky-100
+  download: '#f1f5f9',    // slate-100
+  envelope: '#ffedd5',    // orange-100
+  mail: '#ffedd5',        // orange-100
+  layout: '#ede9fe',      // violet-100
+  copy: '#e0f2fe',        // sky-100
+  share: '#d1fae5',       // emerald-100
+  edit: '#ffedd5',        // orange-100
+  eye: '#e0e7ff',         // indigo-100
+  back: '#fde8e8',        // maroon-50
+};
+
+// ── MaterialCommunityIcons semantic registry ─────────────────────────────────
+// GradientGlyph (the chunky liquid-gradient tile/pane icon) resolves semantic
+// keys through this map, falling back to raw MCI glyph names. This keeps the
+// Zepto/Flipkart-style hero icons as centralized as the FA6 `Icon` registry.
+export const MCI_GLYPHS = {
+  // Document Center doc types
+  label: 'label',
+  receipt: 'receipt-text',
+  pod: 'truck-fast',
+  officeCopy: 'file-document-multiple',
+  packaging: 'package-variant',
+  // Chunky action glyphs (print / mail / download / whatsapp …)
+  print: 'printer',
+  envelope: 'email-outline',
+  download: 'download',
+  upload: 'upload',
+  whatsapp: 'whatsapp',
+  layout: 'border-all',
+  copy: 'content-copy',
+  share: 'share-variant',
+  trash: 'delete-outline',
+  delete: 'delete-outline',
+  refresh: 'refresh',
+  eye: 'eye-outline',
+  edit: 'pencil-outline',
+  checkCircle: 'check-circle',
+  close: 'close',
+  back: 'arrow-left',
+  forward: 'arrow-right',
+  search: 'magnify',
+  menu: 'menu',
 };
 
 // Default gradient used when a name has no palette entry.
 const DEFAULT_GRADIENT = ['#6366f1', '#8b5cf6'];
 
+// '#0ea5e9', 0.72 → a darker 'rgb(...)' — second stop for liquid-gradient icons.
+export const shade = (hex, factor) => {
+  const h = String(hex || '').replace('#', '');
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  if (Number.isNaN(n)) return hex;
+  const r = Math.round(((n >> 16) & 255) * factor);
+  const g = Math.round(((n >> 8) & 255) * factor);
+  const b = Math.round((n & 255) * factor);
+  return `rgb(${r}, ${g}, ${b})`;
+};
+
 // '#0ea5e9' → 'rgba(14, 165, 233, 0.12)' — for the soft tinted icon variant.
-const withAlpha = (hex, alpha) => {
+export const withAlpha = (hex, alpha) => {
   const h = String(hex || '').replace('#', '');
   const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
   const num = parseInt(full, 16);
@@ -177,9 +275,15 @@ const withAlpha = (hex, alpha) => {
 // have to remember the family flag — e.g. <Icon name="whatsapp" />.
 const BRANDS = new Set(['whatsapp']);
 
-export default function Icon({ name, size = 18, color = COLORS.primary, family, style, ...rest }) {
+export default function Icon({ name, size = 18, color = COLORS.primary, family, chunky = false, style, ...rest }) {
   const glyph = ICONS[name] || name;
   const resolvedFamily = family || (BRANDS.has(name) ? 'brands' : 'solid');
+  if (chunky) {
+    // Bold MaterialCommunityIcons glyph (Zepto/Flipkart-style) instead of the
+    // thin FA6 outline — pass the same semantic name, resolved via MCI_GLYPHS.
+    const mci = MCI_GLYPHS[name] || name;
+    return <MaterialCommunityIcons name={mci} size={size} color={color} style={style} {...rest} />;
+  }
   return (
     <FontAwesome6
       name={glyph}
@@ -209,17 +313,19 @@ export function LineIcon({ name, size = 20, color = '#475569', style }) {
  * GradientText, with MaterialCommunityIcons (chunky, modern, detailed) glyphs.
  *
  *   <GradientGlyph name="truck-delivery" size={34} colors={['#0ea5e9', '#2563eb']} />
+ *   <GradientGlyph name="pod" size={30} colors={GRADIENTS.pod} />  // semantic
  *
- * @param {string} name   MaterialCommunityIcons glyph name.
+ * @param {string} name   Semantic key from MCI_GLYPHS, or a raw MCI glyph name.
  * @param {number} [size=30]
  * @param {string[]} [colors]  Gradient pair; defaults to brand maroon→amber.
  */
 export function GradientGlyph({ name, size = 30, colors = ['#9C2007', '#f59e0b'], style }) {
+  const glyph = MCI_GLYPHS[name] || name;
   const box = { width: size, height: size };
   return (
     <MaskedView
       maskElement={
-        <MaterialCommunityIcons name={name} size={size} color="#000" style={{ textAlign: 'center' }} />
+        <MaterialCommunityIcons name={glyph} size={size} color="#000" style={{ textAlign: 'center' }} />
       }
       style={[box, style]}
     >
