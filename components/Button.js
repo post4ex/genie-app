@@ -6,14 +6,14 @@
 //     Save
 //   </Button>
 //
-// variant: 'primary' (brand maroon→red) | 'danger' | 'ghost' (navy) | 'otp' (amber) | 'secondary' (neutral outline)
-// size:    'sm' | 'md' | 'lg'
+// variant: 'primary' (brand maroon→red) | 'danger' | 'ghost' (navy) | 'otp' (amber) | 'secondary' (neutral outline) | 'soft' (dynamic soft tint via softColor)
+// size:    'xs' | 'sm' | 'md' | 'lg'
 // icon:    a glyph name from components/icons (ICONS registry) or a React node
 
 import React, { useRef } from 'react';
 import { ActivityIndicator, Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import Icon from './icons';
+import Icon, { ACTION_COLORS } from './icons';
 import { COLORS } from '../styles/theme';
 
 const VARIANTS = {
@@ -24,9 +24,11 @@ const VARIANTS = {
   secondary: { outline: true, text: '#334155', spinner: COLORS.primary, border: '#e2e8f0', bg: '#ffffff' }, // white + neutral border
   glass:   { outline: true, text: '#ffffff', spinner: '#ffffff', border: 'rgba(255,255,255,0.45)', bg: 'rgba(255,255,255,0.08)' }, // translucent, for dark/glass surfaces
   mint:    { outline: true, text: '#065f46', spinner: '#065f46', border: '#6ee7b7', bg: '#d1fae5' }, // soft emerald fill (filter/reset family)
+  soft:    { outline: true, soft: true, text: '#1d4ed8', spinner: '#1d4ed8', border: '#bfdbfe', bg: '#eff6ff' }, // dynamic soft tint — driven by the `softColor` prop
 };
 
 const SIZES = {
+  xs: { height: 22, paddingH: 6, fontSize: 10, radius: 7, iconSize: 11 },
   sm: { height: 34, paddingH: 14, fontSize: 12, radius: 12, iconSize: 13 },
   md: { height: 46, paddingH: 22, fontSize: 14, radius: 15, iconSize: 15 },
   lg: { height: 56, paddingH: 30, fontSize: 16, radius: 18, iconSize: 17 },
@@ -42,6 +44,18 @@ const glowShadow = (color) => (Platform.OS === 'web'
       shadowOffset: { width: 0, height: 5 },
       elevation: 6,
     });
+
+// Append an alpha channel to a #rrggbb hex color (used for the soft tint fill).
+const hexAlpha = (hex, a) => {
+  const h = String(hex || '').replace('#', '');
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  if (Number.isNaN(n)) return hex;
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+};
 
 /**
  * Global Button — the single way to render a tappable action.
@@ -68,6 +82,7 @@ export default function Button({
   label,
   icon,
   colors,
+  softColor,
   style,
   textStyle,
   iconOnly = false,
@@ -82,9 +97,17 @@ export default function Button({
   const content = label != null ? label : children;
   const gradientColors = colors || v.colors;
 
+  // `soft` variant tints itself with `softColor` (border/fill/text all derived).
+  const isSoft = variant === 'soft';
+  const softAccent = softColor || (typeof icon === 'string' ? (ACTION_COLORS[icon] || '#64748b') : '#6366f1');
+  const borderColor = isSoft ? hexAlpha(softAccent, 0.32) : v.border;
+  const bgColor = isSoft ? hexAlpha(softAccent, 0.10) : v.bg;
+  const textColor = isSoft ? softAccent : v.text;
+  const spinnerColor = isSoft ? softAccent : v.spinner;
+
   const iconEl = icon
     ? (typeof icon === 'string'
-        ? <Icon name={icon} size={s.iconSize} color={v.text} />
+        ? <Icon name={icon} size={s.iconSize} color={textColor} />
         : icon)
     : null;
 
@@ -98,7 +121,7 @@ export default function Button({
     <Text
       style={[
         styles.label,
-        { color: v.text, fontSize: s.fontSize },
+        { color: textColor, fontSize: s.fontSize },
         isDisabled && styles.dimmed,
         textStyle,
       ]}
@@ -110,7 +133,7 @@ export default function Button({
 
   const innerContent = (
     <View style={[styles.innerRow, { paddingHorizontal: iconOnly ? 0 : s.paddingH, gap: 7 }]}>
-      {loading ? <ActivityIndicator size="small" color={v.spinner} /> : (
+      {loading ? <ActivityIndicator size="small" color={spinnerColor} /> : (
         <>
           {iconEl}
           {labelEl}
@@ -125,7 +148,7 @@ export default function Button({
   const body = v.outline ? (
     <View style={[
       styles.fill,
-      { height: s.height, width: iconOnly ? s.height : undefined, borderRadius: radius, borderWidth: 1.5, borderColor: v.border, backgroundColor: v.bg },
+      { height: s.height, width: iconOnly ? s.height : undefined, borderRadius: radius, borderWidth: 1.5, borderColor: borderColor, backgroundColor: bgColor },
       isDisabled && styles.dimmed,
     ]}>
       {innerContent}

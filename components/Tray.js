@@ -33,8 +33,21 @@ export default function Tray({
   style,
   headerStyle,
   compact = false,
+  floating = false,
   children,
 }) {
+  if (floating && title) {
+    return (
+      <View style={[styles.card, compact && styles.cardCompact, styles.cardFloating, style]}>
+        <View style={styles.floatingChip}>
+          <GradientText colors={colors} style={styles.floatingChipText}>{title}</GradientText>
+        </View>
+        {right ? <View style={styles.floatingHeaderRight}>{right}</View> : null}
+        {children}
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.card, compact && styles.cardCompact, style]}>
       {(title || icon || right) && (
@@ -78,4 +91,20 @@ const styles = StyleSheet.create({
   icon: { marginRight: 7 },
   title: { fontSize: 14, fontWeight: '800', letterSpacing: 0.3 },
   right: { marginLeft: 'auto' },
+
+  // Floating title chip — a rounded, unfilled pill straddling the top-left border
+  // with gradient title text; action buttons stay inside the card.
+  cardFloating: { paddingTop: 16 },
+  floatingChip: {
+    position: 'absolute', top: -13, left: 14, zIndex: 2,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999,
+    backgroundColor: '#ffffff',
+    borderWidth: 1, borderColor: '#e2e8f0',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 2px 6px rgba(15,23,42,0.08)' }
+      : { shadowColor: '#0f172a', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } }),
+  },
+  floatingChipText: { fontSize: 13, fontWeight: '900', letterSpacing: 0.3 },
+  floatingHeaderRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 10 },
 });

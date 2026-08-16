@@ -71,6 +71,9 @@ export const ICONS = {
   envelope: 'envelope',
   paperclip: 'paperclip',
   download: 'download',
+  copy: 'copy',
+  layout: 'border-all',
+  whatsapp: 'whatsapp',
   print: 'print',
   share: 'share-nodes',
   trash: 'trash',
@@ -126,6 +129,28 @@ export const GRADIENTS = {
   filter: ['#9C2007', '#f59e0b'],        // brand maroon → amber
 };
 
+// ── Canonical action colors ──────────────────────────────────────────────────
+// One fixed color per action, identical everywhere in the project. Icon chips
+// and the Button `soft` variant derive their tint from this map, so
+// <Button variant="soft" icon="whatsapp" /> is always the green WhatsApp mark,
+// while print/download/mail stay neutral slate, upload is green, etc.
+export const ACTION_COLORS = {
+  whatsapp: '#25D366',
+  upload: '#16a34a',
+  print: '#64748b',
+  download: '#64748b',
+  envelope: '#64748b',
+  mail: '#64748b',
+  layout: '#64748b',
+  share: '#64748b',
+  edit: '#64748b',
+  copy: '#64748b',
+  trash: '#ef4444',
+  refresh: '#0284c7',
+  checkCircle: '#0284c7',
+  eye: '#64748b',
+};
+
 // Default gradient used when a name has no palette entry.
 const DEFAULT_GRADIENT = ['#6366f1', '#8b5cf6'];
 
@@ -148,13 +173,19 @@ const withAlpha = (hex, alpha) => {
  * @param {string} [color=COLORS.primary]
  * @param {'solid'|'regular'|'brands'} [family='solid']
  */
-export default function Icon({ name, size = 18, color = COLORS.primary, family = 'solid', style, ...rest }) {
+// Brand glyphs (FontAwesome6 brands family). Auto-selected so callers don't
+// have to remember the family flag — e.g. <Icon name="whatsapp" />.
+const BRANDS = new Set(['whatsapp']);
+
+export default function Icon({ name, size = 18, color = COLORS.primary, family, style, ...rest }) {
+  const glyph = ICONS[name] || name;
+  const resolvedFamily = family || (BRANDS.has(name) ? 'brands' : 'solid');
   return (
     <FontAwesome6
-      name={ICONS[name] || name}
+      name={glyph}
       size={size}
       color={color}
-      family={family}
+      family={resolvedFamily}
       style={style}
       {...rest}
     />

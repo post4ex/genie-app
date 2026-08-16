@@ -4,7 +4,7 @@ import {
   TouchableOpacity, RefreshControl, Modal, Alert, Clipboard, Linking, ActivityIndicator, Share, Platform, BackHandler,
   useWindowDimensions
 } from 'react-native';
-import Svg, { Path, Rect, Polyline } from 'react-native-svg';
+import Svg, { Path, Polyline } from 'react-native-svg';
 import { COLORS } from '../styles/theme';
 import { getSheet, deleteFromSheet } from '../core/storage';
 import { fmtDate, parseDate } from '../utils/formatIST';
@@ -20,9 +20,10 @@ import FilterBar from '../components/FilterBar';
 import FilterModal from '../components/FilterModal';
 import ListItem from '../components/ListItem';
 import { accentSparkle } from '../components/Tile';
-import { GradientGlyph } from '../components/icons';
+import Icon, { GradientGlyph } from '../components/icons';
 import GradientText from '../components/GradientText';
 import Tray from '../components/Tray';
+import DocCenterPane from '../components/DocCenterPane';
 import { LinearGradient } from 'expo-linear-gradient';
 
 // ── Web SVG Icons (Exact GENIE_WEB shipments.js _docIco 1-to-1 match) ──────────
@@ -36,12 +37,6 @@ const CheckmarkCircleIcon = ({ size = 14, color = '#0284c7' }) => (
 const WhatsAppIcon = ({ size = 14, color = '#25D366' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
     <Path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-  </Svg>
-);
-
-const PrintIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
   </Svg>
 );
 
@@ -60,15 +55,6 @@ const DownloadIcon = ({ size = 14, color = '#64748b' }) => (
 const UploadIcon = ({ size = 14, color = '#16a34a' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <Path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12" />
-  </Svg>
-);
-
-const LayoutIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
-    <Rect x="3" y="3" width="7" height="7" rx="1" />
-    <Rect x="14" y="3" width="7" height="7" rx="1" />
-    <Rect x="3" y="14" width="7" height="7" rx="1" />
-    <Rect x="14" y="14" width="7" height="7" rx="1" />
   </Svg>
 );
 
@@ -217,14 +203,6 @@ const PAY_OPTIONS = [
   { value: 'PREPAID', label: 'Prepaid' },
 ];
 const optionLabel = (options, v) => (options.find(o => o.value === v) || {}).label || v;
-
-const DOC_CENTER_ITEMS = [
-  { label: 'Label' },
-  { label: 'Receipt' },
-  { label: 'POD' },
-  { label: 'Office Copy' },
-  { label: 'Docs + Box' },
-];
 
 export default function OrdersScreen({
   orders = [], searchQuery, setSearchQuery, refreshing, onRefresh,
@@ -1367,59 +1345,45 @@ export default function OrdersScreen({
 
     return (
       <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 30 }}>
-        {/* Navigation Header */}
+        {/* Navigation Header — premium breadcrumb */}
         <View style={styles.navHeader}>
-          <Text style={styles.navTitle} numberOfLines={1}>Ref: {o.REFERENCE}</Text>
-        </View>
+          <TouchableOpacity
+            style={styles.navBackChip}
+            activeOpacity={0.7}
+            onPress={() => { setSelectedOrder(null); setCurrentView('list'); }}
+          >
+            <Icon name="back" size={15} color="#64748b" />
+          </TouchableOpacity>
 
-        {/* ── CARD 1: Document Center ── */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>Document Center</Text>
-            <View style={styles.actionIconGroup}>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => openUpload(o)} title="Upload">
-                <UploadIcon size={14} color="#16a34a" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={toggleLabelLayout} title="Toggle Layout">
-                <LayoutIcon size={14} color="#64748b" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => printAllDocs(o)} title="Print All">
-                <PrintIcon size={14} color="#64748b" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => downloadAllDocs(o)} title="Download All">
-                <DownloadIcon size={14} color="#64748b" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => mailShipment(o)} title="Mail All">
-                <MailIcon size={14} color="#64748b" />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waShipment(o)} title="WhatsApp All">
-                <WhatsAppIcon size={14} color="#25D366" />
-              </TouchableOpacity>
-            </View>
+          <View style={styles.navTitleBlock}>
+            <Text style={styles.navCrumb}>Orders › Detail</Text>
+            <GradientText colors={['#0ea5e9', '#2563eb']} style={styles.navTitleGradient} numberOfLines={1}>
+              Order — {o.REFERENCE}
+            </GradientText>
+            <Text style={styles.navSubtitle} numberOfLines={1}>
+              AWB {o.AWB_NUMBER || 'Pending'} · {formattedOrderDate}
+            </Text>
           </View>
 
-          <View style={styles.docRowsDivide}>
-            {DOC_CENTER_ITEMS.map((item, idx) => (
-              <View key={idx} style={styles.docRowItem}>
-                <Text style={styles.docRowLabel}>{item.label}</Text>
-                <View style={styles.docRowActionBtns}>
-                  <TouchableOpacity style={styles.docItemBtn} onPress={() => printDoc(o, item.label)}>
-                    <PrintIcon size={13} color="#64748b" />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.docItemBtn} onPress={() => mailDoc(o, item.label)}>
-                    <MailIcon size={13} color="#64748b" />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.docItemBtn} onPress={() => downloadDoc(o, item.label)}>
-                    <DownloadIcon size={13} color="#64748b" />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.docItemBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waDoc(o, item.label)}>
-                    <WhatsAppIcon size={13} color="#25D366" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
+          <View style={[styles.navStatusBadge, { backgroundColor: stateCfg.bg }]}>
+            <Text style={[styles.navStatusText, { color: stateCfg.color }]}>{stateCfg.label}</Text>
           </View>
         </View>
+
+        {/* ── CARD 1: Document Center (centralized DocCenterPane) ── */}
+        <DocCenterPane
+          order={o}
+          onUpload={openUpload}
+          onToggleLayout={toggleLabelLayout}
+          onPrintAll={printAllDocs}
+          onDownloadAll={downloadAllDocs}
+          onMailAll={mailShipment}
+          onWhatsAppAll={waShipment}
+          onPrintDoc={printDoc}
+          onMailDoc={mailDoc}
+          onDownloadDoc={downloadDoc}
+          onWhatsAppDoc={waDoc}
+        />
 
         {/* ── CARD 2: Shipment Details Card ── */}
         <View style={styles.card}>
@@ -1927,6 +1891,16 @@ const styles = StyleSheet.create({
   // Stage 2 & 3 Nav Bar
   navHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
   navTitle: { fontSize: 14, fontWeight: '800', color: '#1e293b', flex: 1 },
+  navBackChip: {
+    width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0',
+  },
+  navTitleBlock: { flex: 1, minWidth: 0 },
+  navCrumb: { fontSize: 10, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 2 },
+  navTitleGradient: { fontSize: 18, fontWeight: '900', letterSpacing: -0.4 },
+  navSubtitle: { fontSize: 11, color: '#64748b', marginTop: 3 },
+  navStatusBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, alignSelf: 'flex-start' },
+  navStatusText: { fontSize: 11, fontWeight: '800' },
 
   // Tray-wrapped list — flex fill + tighter header (shell lives in components/Tray.js)
   listTrayFill: { flex: 1 },
