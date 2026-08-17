@@ -122,6 +122,7 @@ install_npm_global() {
 
 install_npm_global "eas-cli"
 install_npm_global "@expo/ngrok"
+install_npm_global "expo-cli"
 
 echo ""
 
@@ -156,6 +157,9 @@ echo ""
 # ──────────────────────────────────────────────
 echo -e "${CYAN}═══════════════════════════════════════════${NC}"
 echo -e "${GREEN}  genie-app setup complete!${NC}"
+echo ""
+echo -e "  IMPORTANT: First navigate to the project folder:"
+echo -e "    ${YELLOW}cd $SCRIPT_DIR${NC}"
 echo ""
 echo -e "  To start the genie-app development server:"
 echo -e "    ${YELLOW}npm start${NC}  or  ${YELLOW}bash start.sh${NC}"

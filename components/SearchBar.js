@@ -18,7 +18,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { LinearGradient } from 'expo-linear-gradient';
-import Icon, { GradientGlyph } from './icons';
+import Icon, { GradientGlyph, GradientIcon } from './icons';
 import { startWebBarcodeScan } from '../utils/web-barcode';
 
 const IS_WEB = Platform.OS === 'web';
@@ -43,6 +43,12 @@ export default function SearchBar({
   hints = [],
   onSubmitEditing,
   autoFocus,
+  hideScanner = false, // render as a plain search field (no barcode scanner)
+  onFilterPress,       // embed filter button directly inside the bar
+  filterActive = false,
+  filterCount = 0,
+  keyboardType,
+  maxLength,
   style,
 }) {
   const [focused, setFocused] = useState(false);
@@ -131,18 +137,18 @@ export default function SearchBar({
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           autoFocus={autoFocus}
+          keyboardType={keyboardType}
+          maxLength={maxLength}
           returnKeyType="search"
+          // A search field should never trigger OS/browser autofill — especially
+          // pincode/AWB search fields. We set autoComplete="off", textContentType="none",
+          // and importantForAutofill="no" (never use "new-password" which explicitly
+          // triggers Google Password Manager / OS credential prompts).
+          autoComplete="off"
+          textContentType="none"
+          importantForAutofill="no"
+          autoCorrect={false}
         />
-
-        <Pressable
-          onPress={scanning ? stopScanning : startScan}
-          style={({ pressed }) => [styles.scanBtn, scanning && styles.scanBtnActive, pressed && styles.pressed]}
-          accessibilityRole="button"
-          accessibilityLabel={scanning ? 'Close scanner' : 'Scan barcode'}
-          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-        >
-          <GradientGlyph name={scanning ? 'close' : 'barcode-scan'} size={22} colors={scanning ? ['#f59e0b', '#fbbf24'] : ['#0ea5e9', '#2563eb']} />
-        </Pressable>
 
         {value ? (
           <Pressable
@@ -153,6 +159,34 @@ export default function SearchBar({
             hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
           >
             <Icon name="close" size={12} color="#94a3b8" />
+          </Pressable>
+        ) : null}
+
+        {!hideScanner ? (
+          <Pressable
+            onPress={scanning ? stopScanning : startScan}
+            style={({ pressed }) => [styles.scanBtn, scanning && styles.scanBtnActive, pressed && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityLabel={scanning ? 'Close scanner' : 'Scan barcode'}
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+          >
+            <GradientGlyph name={scanning ? 'close' : 'barcode-scan'} size={22} colors={scanning ? ['#f59e0b', '#fbbf24'] : ['#0ea5e9', '#2563eb']} />
+          </Pressable>
+        ) : null}
+
+        {onFilterPress ? (
+          <Pressable
+            onPress={onFilterPress}
+            style={({ pressed }) => [styles.filterBtn, filterActive && styles.filterBtnActive, pressed && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Open filter options"
+          >
+            <GradientIcon name="filter" size={28} iconSize={13} colors={['#F54927', '#F54927']} />
+            {filterCount > 0 && (
+              <View style={styles.filterBadge}>
+                <Text style={styles.filterBadgeText}>{filterCount}</Text>
+              </View>
+            )}
           </Pressable>
         ) : null}
       </View>
@@ -280,6 +314,41 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 6,
+  },
+  filterBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#F54927',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
+    position: 'relative',
+  },
+  filterBtnActive: {
+    backgroundColor: '#fff7f5',
+    borderColor: '#F54927',
+  },
+  filterBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#9C2007',
+    borderWidth: 1.5,
+    borderColor: '#ffffff',
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterBadgeText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '800',
   },
 
   // ── Expanded scanner stage ──

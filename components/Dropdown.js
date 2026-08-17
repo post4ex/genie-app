@@ -145,8 +145,8 @@ const styles = StyleSheet.create({
     minHeight: 46,
     backgroundColor: '#ffffff',
     borderRadius: 13,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderWidth: 1.5,
+    borderColor: '#34d399',   // emerald field border — the dropdown's identity colour
     paddingLeft: 13,
     paddingRight: 8,
     ...(Platform.OS === 'web'

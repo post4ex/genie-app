@@ -38,6 +38,20 @@ export function parseDate(val) {
         return isNaN(d) ? null : d;
     }
 
+    // Carrier APIs often return dd-mm-yyyy / dd-mm-yy strings (e.g. 14-08-2026
+    // or 14-08-26). new Date() can't parse those, so normalise to ISO first.
+    const dm = val.trim().match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2}|\d{4})$/);
+    if (dm) {
+        const day = Number(dm[1]);
+        const mon = Number(dm[2]);
+        const year = dm[3].length === 2 ? 2000 + Number(dm[3]) : Number(dm[3]);
+        if (day >= 1 && day <= 31 && mon >= 1 && mon <= 12 && year >= 2000 && year <= 2100) {
+            const iso = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const d = new Date(iso + 'T00:00:00Z');
+            if (!isNaN(d)) return d;
+        }
+    }
+
     const d = new Date(val);
     return isNaN(d) ? null : d;
 }

@@ -40,11 +40,16 @@ export { InputValidator, FieldValidation } from './input-validator';
 
 export { getCountryNames, searchGlobalZip, resolveGlobalLocation } from './zipfinder';
 
+export { saveHtmlAsPdfNative, downloadHtmlAsPdfWeb, bundleHtmlAsPdf } from './pdf';
+
+export { shareViewAsImage } from './capture';
+
 export {
   resolveUploadUri,
   isImageUpload,
   isPdfUpload,
   downloadUploadNative,
+  shareUploadNative,
   openUploadExternally,
   UploadViewer,
 } from './upload-viewer';
@@ -56,6 +61,7 @@ export {
   docToAttachment,
   openDocInNewTab,
   downloadDocBlob,
+  downloadDocAsPdf,
   formatCarrierName,
   getLabelStyles,
   getReceiptStyles,

@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import { File as FSFile, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 
 // Native WebView for rendering PDFs in-app on iOS / Android
@@ -82,14 +82,15 @@ export const downloadUploadNative = async (uri, title = 'Download') => {
     }
   }
 
-  // Native iOS / Android Platform Download
+  // Native iOS / Android Platform Download (SDK 54 File API — legacy
+  // downloadAsync/cacheDirectory throw at runtime)
   try {
     const rawUrl = uri.split('?')[0];
     const extMatch = rawUrl.match(/\.([a-zA-Z0-9]+)$/);
     const ext = extMatch ? extMatch[1].toLowerCase() : 'pdf';
-    const targetPath = `${FileSystem.documentDirectory}${cleanTitle}_${Date.now()}.${ext}`;
+    const dest = new FSFile(Paths.document, `${cleanTitle}_${Date.now()}.${ext}`);
 
-    const result = await FileSystem.downloadAsync(uri, targetPath);
+    const result = await FSFile.downloadFileAsync(uri, dest, { idempotent: true });
     if (result && result.uri) {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(result.uri, {
@@ -110,6 +111,75 @@ export const downloadUploadNative = async (uri, title = 'Download') => {
 
 export const openUploadExternally = async (uri, title = 'File') => {
   return downloadUploadNative(uri, title);
+};
+
+// Share the upload file (image or PDF) being viewed — native downloads it to
+// cache and opens the OS share sheet (WhatsApp, mail, Files…); web uses the
+// Web Share API when available, else falls back to a file download.
+export const shareUploadNative = async (uri, title = 'Share') => {
+  if (!uri) return false;
+
+  const cleanTitle = title.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  // Web Platform — Web Share API when available, else download
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof navigator !== 'undefined') {
+    try {
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      const ext = (cleanTitle.match(/\.([a-zA-Z0-9]+)$/) || [])[1] || 'bin';
+      const fileName = cleanTitle.includes('.') ? cleanTitle : `${cleanTitle}.${ext}`;
+      if (typeof navigator.share === 'function' && typeof navigator.canShare === 'function') {
+        const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: cleanTitle });
+          return true;
+        }
+      }
+      // Fallback: download the file
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+      return true;
+    } catch (e) {
+      const a = document.createElement('a');
+      a.href = uri;
+      a.download = cleanTitle;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return true;
+    }
+  }
+
+  // Native iOS / Android — download to cache, then open the share sheet
+  try {
+    const rawUrl = uri.split('?')[0];
+    const extMatch = rawUrl.match(/\.([a-zA-Z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'pdf';
+    const dest = new FSFile(Paths.cache, `${cleanTitle}_${Date.now()}.${ext}`);
+
+    const result = await FSFile.downloadFileAsync(uri, dest, { idempotent: true });
+    if (result && result.uri) {
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(result.uri, {
+          dialogTitle: `Share ${title}`,
+          mimeType: ext === 'pdf' ? 'application/pdf' : ext.match(/(jpg|jpeg|png|webp|gif)/) ? `image/${ext}` : undefined,
+        });
+      } else {
+        Alert.alert('Share Unavailable', 'Sharing is not available on this device.');
+      }
+      return true;
+    }
+  } catch (err) {
+    console.warn('[Native Share] Error sharing file:', err);
+    Alert.alert('Share Error', `Unable to share file: ${err.message || 'Network error'}`);
+  }
+  return false;
 };
 
 export function UploadViewer({ visible, uri, title = 'Upload preview', isPdf = false, onClose }) {

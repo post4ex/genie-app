@@ -61,8 +61,8 @@ export default function ListItem({
   const st = (status || '').toString().toLowerCase().replace(/\s+/g, '');
   const chipColors = statusColor || STATUS_COLORS[st] || DEFAULT_STATUS;
 
-  const content = (
-    <View style={[styles.card, style]}>
+  const renderCard = (pressed) => (
+    <View style={[styles.card, style, pressed && styles.cardPressed]}>
       <View style={styles.body}>
         <Text style={styles.title} numberOfLines={1}>{title}</Text>
         {subs.map((line, i) => (
@@ -81,7 +81,7 @@ export default function ListItem({
   );
 
   if (onPress == null) {
-    return <View style={styles.row}>{content}</View>;
+    return <View style={styles.row}>{renderCard(false)}</View>;
   }
 
   return (
@@ -90,10 +90,10 @@ export default function ListItem({
         accessibilityRole="button"
         accessibilityLabel={title || undefined}
         onPress={onPress}
-        style={({ pressed }) => (pressed ? styles.pressed : undefined)}
+        style={styles.pressable}
         {...rest}
       >
-        {content}
+        {({ pressed }) => renderCard(pressed)}
       </Pressable>
     </View>
   );
@@ -103,8 +103,11 @@ const styles = StyleSheet.create({
   row: {
     marginBottom: 10,
   },
-  pressed: {
-    opacity: 0.75,
+  pressable: {
+    borderRadius: 16,
+    ...(Platform.OS === 'web'
+      ? { outlineStyle: 'none', userSelect: 'none', WebkitTapHighlightColor: 'transparent' }
+      : {}),
   },
   card: {
     flexDirection: 'row',
@@ -116,6 +119,11 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 14,
     ...SEAGREEN_SPARKLE,
+  },
+  cardPressed: {
+    backgroundColor: '#f1f5f9',
+    borderColor: '#cbd5e1',
+    transform: [{ scale: 0.985 }],
   },
   body: {
     flex: 1,

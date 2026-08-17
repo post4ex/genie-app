@@ -1,9 +1,22 @@
+// components/UpdateStatusModal.js — Update Shipment Status popup, redesigned on
+// the app's shared design system: bottom sheet shell, sparkling gradient header,
+// the centralized Dropdown for Primary / Sub-status, switchable gradient chips
+// for relation / attempt-day / payment, and the global Button footer.
+// All validation + payload logic unchanged. Fully static — no Animated.
+
 import React, { useState, useEffect } from 'react';
 import {
-  StyleSheet, View, Text, Modal, TouchableOpacity, ScrollView,
-  TextInput, ActivityIndicator, Alert
+  StyleSheet, View, Text, Modal, ScrollView, Pressable,
+  TextInput, Platform, Keyboard
 } from 'react-native';
-import { COLORS } from '../styles/theme';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Button from './Button';
+import Dropdown from './Dropdown';
+import GradientText from './GradientText';
+import { GradientGlyph } from './icons';
+
+const BRAND = ['#9C2007', '#f59e0b'];   // brand maroon → amber
 
 const SUBSTATUS_OPTIONS = {
   'In Transit': [
@@ -134,6 +147,43 @@ const PAYMODE_OPTIONS = [
   'UTR'
 ];
 
+// Switchable gradient chip — active option gets the brand maroon→amber fill
+// with a soft glow (TrackModal segmented-control language).
+function ChoiceChip({ label, active, onPress }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={({ pressed }) => [pressed && styles.pressed]}
+    >
+      {active ? (
+        <LinearGradient colors={BRAND} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.chipBase, styles.chipActive]}>
+          <Text style={styles.chipTextActive} numberOfLines={1}>{label}</Text>
+        </LinearGradient>
+      ) : (
+        <View style={[styles.chipBase, styles.chipIdle]}>
+          <Text style={styles.chipText} numberOfLines={1}>{label}</Text>
+        </View>
+      )}
+    </Pressable>
+  );
+}
+
+// ── Section card (person / attempt day / payment) ───────────────────────────
+function SectionCard({ icon, title, required, children }) {
+  return (
+    <View style={styles.sectionBox}>
+      <View style={styles.sectionHead}>
+        <GradientGlyph name={icon} size={16} colors={BRAND} />
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {required ? <Text style={styles.requiredTag}>REQUIRED</Text> : <Text style={styles.optionalTag}>OPTIONAL</Text>}
+      </View>
+      {children}
+    </View>
+  );
+}
+
 export default function UpdateStatusModal({
   visible,
   onClose,
@@ -143,6 +193,7 @@ export default function UpdateStatusModal({
   role = 'STAFF',
   onSuccess
 }) {
+  const insets = useSafeAreaInsets();
   const [primaryStatus, setPrimaryStatus] = useState('In Transit');
   const [subStatus, setSubStatus] = useState('');
   const [personName, setPersonName] = useState('');
@@ -154,8 +205,6 @@ export default function UpdateStatusModal({
   const [customRemark, setCustomRemark] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
-  const [primaryPickerOpen, setPrimaryPickerOpen] = useState(false);
-  const [subPickerOpen, setSubPickerOpen] = useState(false);
 
   const reference = order?.REFERENCE || order?.AWB_NUMBER || '';
   const isClientRole = (role || '').toUpperCase() === 'CLIENT';
@@ -270,6 +319,7 @@ export default function UpdateStatusModal({
       }
 
       setLoading(false);
+      Keyboard.dismiss();
       onClose();
       if (onSuccess) onSuccess(reference, primaryStatus, finalRemark);
     } catch (err) {
@@ -280,121 +330,118 @@ export default function UpdateStatusModal({
 
   if (!visible) return null;
 
+  const primaryOptions = (isClientRole ? ['Delivered'] : PRIMARY_STATUS_LIST).map(s => ({ value: s, label: s }));
+  const subOptions = (SUBSTATUS_OPTIONS[primaryStatus] || []).map(s => ({ value: s, label: s }));
+
   return (
-    <>
-      <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-        <View style={styles.overlay}>
-        <View style={styles.dialogContainer}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.overlay}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
           {/* Header */}
           <View style={styles.header}>
             <View style={styles.headerTitleRow}>
-              <Text style={styles.headerTitle}>Update Shipment Status</Text>
-              <Text style={styles.refBadge}>REF: {reference}</Text>
+              <GradientGlyph name="clipboard-check" size={20} colors={BRAND} />
+              <View style={{ flex: 1 }}>
+                <GradientText colors={BRAND} style={styles.title}>Update Status</GradientText>
+                <Text style={styles.subtitle}>Shipment status · reason · handover details</Text>
+              </View>
+              <Text style={styles.refBadge} numberOfLines={1}>REF: {reference}</Text>
+              <Button
+                variant="tint"
+                size="sm"
+                iconOnly
+                icon="close"
+                onPress={onClose}
+                accessibilityLabel="Close update status"
+                style={{ marginLeft: 6 }}
+              />
             </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <Text style={styles.closeBtnText}>✕</Text>
-            </TouchableOpacity>
           </View>
 
           {/* Form Scroll Area */}
-          <ScrollView style={styles.formScroll} contentContainerStyle={styles.formContent}>
+          <ScrollView
+            style={styles.body}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.bodyContent}
+          >
             {errorMsg ? (
               <View style={styles.errorBanner}>
-                <Text style={styles.errorBannerText}>{errorMsg}</Text>
+                <Text style={styles.errorBannerText}>⚠️ {errorMsg}</Text>
               </View>
             ) : null}
 
-            {/* Primary Status Dropdown */}
-            <Text style={styles.fieldLabel}>Primary Status *</Text>
-            <TouchableOpacity
-              style={styles.dropdownTrigger}
-              onPress={() => setPrimaryPickerOpen(true)}
-            >
-              <Text style={styles.dropdownTriggerText}>{primaryStatus || 'Select Primary Status'}</Text>
-              <Text style={styles.dropdownChevron}>▼</Text>
-            </TouchableOpacity>
-
-            {/* Sub-Status Reason Dropdown */}
-            <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Sub-Status Reason *</Text>
-            <TouchableOpacity
-              style={styles.dropdownTrigger}
-              onPress={() => setSubPickerOpen(true)}
-            >
-              <Text style={styles.dropdownTriggerText} numberOfLines={1}>
-                {subStatus || '-- Select Sub-Status Reason (Required) --'}
-              </Text>
-              <Text style={styles.dropdownChevron}>▼</Text>
-            </TouchableOpacity>
-
-            {/* Concerned Person Fields */}
-            {showPersonFields && (
-              <View style={styles.sectionBox}>
-                <Text style={styles.sectionBoxTitle}>Contact Person / Recipient Info (Optional)</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Person Name (e.g. Rahul Sharma)"
-                  placeholderTextColor="#94a3b8"
-                  value={personName}
-                  onChangeText={setPersonName}
+            {/* Primary + Sub-Status — flex in one row */}
+            <View style={styles.dropdownRow}>
+              <View style={styles.dropdownHalf}>
+                <Dropdown
+                  label="PRIMARY STATUS *"
+                  value={primaryStatus}
+                  options={primaryOptions}
+                  onChange={handlePrimaryChange}
+                  placeholder="Select Primary Status"
                 />
-                <TextInput
-                  style={[styles.input, { marginTop: 8 }]}
-                  placeholder="Phone Number (e.g. 9876543210)"
-                  placeholderTextColor="#94a3b8"
-                  keyboardType="phone-pad"
-                  value={personPhone}
-                  onChangeText={setPersonPhone}
+              </View>
+              <View style={styles.dropdownHalf}>
+                <Dropdown
+                  label="SUB-STATUS REASON *"
+                  value={subStatus}
+                  options={subOptions}
+                  onChange={setSubStatus}
+                  searchable
+                  placeholder={subOptions.length ? 'Select Reason' : '-- No reasons --'}
                 />
-                <Text style={[styles.subLabel, { marginTop: 8 }]}>Relation / Role</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
-                  <View style={styles.chipRow}>
-                    {RELATION_OPTIONS.map((rel) => (
-                      <TouchableOpacity
-                        key={rel}
-                        style={[styles.chip, personRelation === rel && styles.chipActive]}
-                        onPress={() => setPersonRelation(personRelation === rel ? '' : rel)}
-                      >
-                        <Text style={[styles.chipText, personRelation === rel && styles.chipTextActive]}>{rel}</Text>
-                      </TouchableOpacity>
-                    ))}
+              </View>
+            </View>
+
+            {/* Concerned Person + Payment — merged handover card; Relation and
+                Payment Method share one dropdown row when both apply */}
+            {(showPersonFields || showPayFields) && (
+              <SectionCard icon="clipboard-account-outline" title="Handover & Collection Details">
+                {showPersonFields && (
+                  <View style={styles.fieldRow}>
+                    <TextInput
+                      style={[styles.input, styles.fieldHalf]}
+                      placeholder="Person Name (e.g. Rahul Sharma)"
+                      placeholderTextColor="#94a3b8"
+                      value={personName}
+                      onChangeText={setPersonName}
+                    />
+                    <TextInput
+                      style={[styles.input, styles.fieldHalf]}
+                      placeholder="Phone Number"
+                      placeholderTextColor="#94a3b8"
+                      keyboardType="phone-pad"
+                      value={personPhone}
+                      onChangeText={setPersonPhone}
+                    />
                   </View>
-                </ScrollView>
-              </View>
-            )}
+                )}
 
-            {/* Next Delivery Attempt Day */}
-            {showAttemptDayField && (
-              <View style={styles.sectionBox}>
-                <Text style={styles.sectionBoxTitle}>Next Delivery Attempt Day *</Text>
-                <View style={styles.chipRow}>
-                  {DAY_OPTIONS.map((d) => (
-                    <TouchableOpacity
-                      key={d}
-                      style={[styles.chip, attemptDay === d && styles.chipActive]}
-                      onPress={() => setAttemptDay(d)}
-                    >
-                      <Text style={[styles.chipText, attemptDay === d && styles.chipTextActive]}>{d}</Text>
-                    </TouchableOpacity>
-                  ))}
+                <View style={styles.dropdownRow}>
+                  {showPersonFields && (
+                    <View style={styles.dropdownHalf}>
+                      <Dropdown
+                        label="RELATION / ROLE"
+                        value={personRelation}
+                        options={RELATION_OPTIONS.map(s => ({ value: s, label: s }))}
+                        onChange={setPersonRelation}
+                        placeholder="Select relation / role"
+                      />
+                    </View>
+                  )}
+                  {showPayFields && (
+                    <View style={styles.dropdownHalf}>
+                      <Dropdown
+                        label="PAYMENT METHOD"
+                        value={payMode}
+                        options={PAYMODE_OPTIONS.map(s => ({ value: s, label: s }))}
+                        onChange={setPayMode}
+                        placeholder="Select payment method"
+                      />
+                    </View>
+                  )}
                 </View>
-              </View>
-            )}
 
-            {/* Payment Collection Fields */}
-            {showPayFields && (
-              <View style={styles.sectionBox}>
-                <Text style={styles.sectionBoxTitle}>Payment Method (COD / To-Pay)</Text>
-                <View style={styles.chipRow}>
-                  {PAYMODE_OPTIONS.map((pm) => (
-                    <TouchableOpacity
-                      key={pm}
-                      style={[styles.chip, payMode === pm && styles.chipActive]}
-                      onPress={() => setPayMode(pm)}
-                    >
-                      <Text style={[styles.chipText, payMode === pm && styles.chipTextActive]}>{pm}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
                 {showUtrField && (
                   <TextInput
                     style={[styles.input, { marginTop: 10 }]}
@@ -404,179 +451,170 @@ export default function UpdateStatusModal({
                     onChangeText={setUtrNo}
                   />
                 )}
-              </View>
+              </SectionCard>
+            )}
+
+            {/* Next Delivery Attempt Day */}
+            {showAttemptDayField && (
+              <SectionCard icon="calendar" title="Next Delivery Attempt Day" required>
+                <View style={styles.chipRow}>
+                  {DAY_OPTIONS.map((d) => (
+                    <ChoiceChip
+                      key={d}
+                      label={d}
+                      active={attemptDay === d}
+                      onPress={() => setAttemptDay(d)}
+                    />
+                  ))}
+                </View>
+              </SectionCard>
             )}
 
             {/* Custom Remark */}
-            <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Custom Remark (Optional)</Text>
-            <TextInput
-              style={[styles.input, { height: 60, textAlignVertical: 'top' }]}
-              placeholder="e.g. Received by reception / Next attempt scheduled"
-              placeholderTextColor="#94a3b8"
-              multiline
-              value={customRemark}
-              onChangeText={setCustomRemark}
-            />
+            <View style={{ marginTop: 14 }}>
+              <Text style={styles.fieldLabel}>CUSTOM REMARK (OPTIONAL)</Text>
+              <TextInput
+                style={[styles.input, { height: 60, textAlignVertical: 'top' }]}
+                placeholder="e.g. Received by reception / Next attempt scheduled"
+                placeholderTextColor="#94a3b8"
+                multiline
+                value={customRemark}
+                onChangeText={setCustomRemark}
+              />
+            </View>
           </ScrollView>
 
-          {/* Modal Footer Actions */}
+          {/* Footer Actions */}
           <View style={styles.footer}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={onClose} disabled={loading}>
-              <Text style={styles.cancelBtnText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.saveBtn} onPress={handleSubmit} disabled={loading}>
-              {loading ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <Text style={styles.saveBtnText}>Save Status</Text>
-              )}
-            </TouchableOpacity>
+            <Button
+              variant="secondary"
+              size="md"
+              label="Cancel"
+              onPress={onClose}
+              disabled={loading}
+              style={styles.footerCancel}
+            />
+            <Button
+              variant="primary"
+              size="md"
+              icon="check"
+              loading={loading}
+              label="Save Status"
+              onPress={handleSubmit}
+              style={styles.footerSave}
+            />
           </View>
         </View>
       </View>
     </Modal>
-
-      {/* Primary Status Dropdown Modal */}
-      <Modal visible={primaryPickerOpen} animationType="fade" transparent onRequestClose={() => setPrimaryPickerOpen(false)}>
-        <View style={styles.pickerOverlay}>
-          <View style={styles.pickerContent}>
-            <View style={styles.pickerHeader}>
-              <Text style={styles.pickerTitle}>Select Primary Status</Text>
-              <TouchableOpacity onPress={() => setPrimaryPickerOpen(false)}>
-                <Text style={styles.pickerCloseX}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 320 }}>
-              {(isClientRole ? ['Delivered'] : PRIMARY_STATUS_LIST).map((st) => (
-                <TouchableOpacity
-                  key={st}
-                  style={[styles.pickerOption, primaryStatus === st && styles.pickerOptionActive]}
-                  onPress={() => {
-                    handlePrimaryChange(st);
-                    setPrimaryPickerOpen(false);
-                  }}
-                >
-                  <Text style={[styles.pickerOptionText, primaryStatus === st && styles.pickerOptionTextActive]}>{st}</Text>
-                  {primaryStatus === st ? <Text style={styles.pickerCheck}>✓</Text> : null}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Sub-Status Reason Dropdown Modal */}
-      <Modal visible={subPickerOpen} animationType="fade" transparent onRequestClose={() => setSubPickerOpen(false)}>
-        <View style={styles.pickerOverlay}>
-          <View style={styles.pickerContent}>
-            <View style={styles.pickerHeader}>
-              <Text style={styles.pickerTitle}>Select Sub-Status Reason</Text>
-              <TouchableOpacity onPress={() => setSubPickerOpen(false)}>
-                <Text style={styles.pickerCloseX}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 380 }}>
-              {(SUBSTATUS_OPTIONS[primaryStatus] || []).map((sub) => (
-                <TouchableOpacity
-                  key={sub}
-                  style={[styles.pickerOption, subStatus === sub && styles.pickerOptionActive]}
-                  onPress={() => {
-                    setSubStatus(sub);
-                    setSubPickerOpen(false);
-                  }}
-                >
-                  <Text style={[styles.pickerOptionText, subStatus === sub && styles.pickerOptionTextActive]}>{sub}</Text>
-                  {subStatus === sub ? <Text style={styles.pickerCheck}>✓</Text> : null}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-    </>
   );
 }
 
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 12
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    justifyContent: 'flex-end',
   },
-  dialogContainer: {
-    width: '95%',
-    maxWidth: 500,
-    height: '80%',
-    maxHeight: 560,
+  sheet: {
     backgroundColor: '#ffffff',
-    borderRadius: 14,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    maxHeight: '92%',
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 10
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0px -4px 24px rgba(0, 0, 0, 0.18)' }
+      : { shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.18, shadowRadius: 24, elevation: 12 }),
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#f8fafc',
+    paddingHorizontal: 18,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0'
+    borderBottomColor: '#f1f5f9',
+    backgroundColor: '#f8fafc',
   },
-  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-  headerTitle: { color: '#0f172a', fontSize: 15, fontWeight: '800' },
-  refBadge: { color: '#475569', fontSize: 10, fontWeight: '800', backgroundColor: '#e2e8f0', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  closeBtn: { padding: 4 },
-  closeBtnText: { color: '#64748b', fontSize: 16, fontWeight: '800' },
-  formScroll: { flex: 1 },
-  formContent: { padding: 16, paddingBottom: 24 },
-  errorBanner: { backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca', borderRadius: 8, padding: 10, marginBottom: 12 },
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  title: { fontSize: 16, fontWeight: '900' },
+  subtitle: { fontSize: 11, color: '#64748b', marginTop: 1 },
+  refBadge: {
+    color: '#9C2007',
+    fontSize: 10,
+    fontWeight: '800',
+    backgroundColor: '#fde8e8',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    maxWidth: 110,
+  },
+  body: { flexGrow: 0, flexShrink: 1 },
+  bodyContent: { padding: 16, paddingBottom: 20 },
+  errorBanner: { backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca', borderRadius: 10, padding: 10, marginBottom: 14 },
   errorBannerText: { color: '#b91c1c', fontSize: 12, fontWeight: '700' },
-  fieldLabel: { color: '#475569', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', marginBottom: 6 },
-  subLabel: { color: '#64748b', fontSize: 10, fontWeight: '700' },
-  dropdownTrigger: {
-    flexDirection: 'row',
+  fieldLabel: { color: '#64748b', fontSize: 10, fontWeight: '800', letterSpacing: 1, marginBottom: 6 },
+
+  // ── Row helpers — dropdowns / inputs flex side-by-side ──
+  dropdownRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+  dropdownHalf: { flex: 1, minWidth: 0 },
+  fieldRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  fieldHalf: { flex: 1, minWidth: 0 },
+
+  // ── Switchable gradient chips ──
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 2 },
+  chipBase: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+  },
+  chipIdle: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  chipActive: {
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 3px 10px rgba(156, 32, 7, 0.28)' }
+      : { shadowColor: '#9C2007', shadowOpacity: 0.28, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 4 }),
+  },
+  chipText: { color: '#475569', fontSize: 11.5, fontWeight: '700' },
+  chipTextActive: { color: '#ffffff', fontSize: 11.5, fontWeight: '800' },
+  pressed: { opacity: 0.75 },
+
+  // ── Section card ──
+  sectionBox: {
+    marginTop: 14,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 14,
+    padding: 12,
+  },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 10 },
+  sectionTitle: { flex: 1, color: '#1e293b', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.4 },
+  requiredTag: { color: '#b45309', fontSize: 9, fontWeight: '800', backgroundColor: '#fef3c7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  optionalTag: { color: '#64748b', fontSize: 9, fontWeight: '800', backgroundColor: '#e2e8f0', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+
+  input: {
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#cbd5e1',
-    borderRadius: 7,
+    borderRadius: 11,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    marginBottom: 4
+    color: '#0f172a',
+    fontSize: 13,
   },
-  dropdownTriggerText: { flex: 1, color: '#0f172a', fontSize: 13, fontWeight: '700' },
-  dropdownChevron: { color: '#64748b', fontSize: 10, marginLeft: 8 },
-  pickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  pickerContent: { width: '100%', maxWidth: 420, backgroundColor: '#ffffff', borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: '#cbd5e1' },
-  pickerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#f8fafc', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  pickerTitle: { fontSize: 14, fontWeight: '800', color: '#1e293b' },
-  pickerCloseX: { fontSize: 16, fontWeight: '800', color: '#64748b', padding: 2 },
-  pickerOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  pickerOptionActive: { backgroundColor: '#eff6ff' },
-  pickerOptionText: { fontSize: 13, fontWeight: '600', color: '#334155' },
-  pickerOptionTextActive: { color: COLORS.primary, fontWeight: '800' },
-  pickerCheck: { fontSize: 14, fontWeight: '800', color: COLORS.primary },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  chip: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 6, paddingHorizontal: 9, paddingVertical: 6, backgroundColor: '#f8fafc' },
-  chipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
-  chipText: { color: '#475569', fontSize: 11, fontWeight: '700' },
-  chipTextActive: { color: '#ffffff' },
-  sectionBox: { marginTop: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, padding: 12 },
-  sectionBoxTitle: { color: '#334155', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', marginBottom: 8 },
-  input: { backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 8, color: '#0f172a', fontSize: 12 },
-  footer: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#f8fafc', borderTopWidth: 1, borderTopColor: '#e2e8f0' },
-  cancelBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 6, backgroundColor: '#e2e8f0' },
-  cancelBtnText: { color: '#475569', fontSize: 12, fontWeight: '700' },
-  saveBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 6, backgroundColor: COLORS.primary, minWidth: 100, alignItems: 'center' },
-  saveBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '800' }
+
+  footer: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+  },
+  footerCancel: { flex: 1 },
+  footerSave: { flex: 1.4 },
 });

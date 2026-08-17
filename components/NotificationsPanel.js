@@ -1,19 +1,28 @@
+// components/NotificationsPanel.js — Notifications bottom sheet, redesigned on
+// the app's shared components (GradientText title, GradientGlyph level chips,
+// tinted Button actions, card rows with sparkle unread treatment).
+// Web app-notify.js parity — levels, mark-read/dismiss/clear, critical gating.
+
 import React from 'react';
 import {
-  StyleSheet, Modal, View, Text, TouchableOpacity, FlatList,
+  StyleSheet, Modal, View, Text, FlatList,
   Platform
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import GradientText from './GradientText';
+import Button from './Button';
+import Icon, { GradientGlyph } from './icons';
+import { accentSparkle } from './Tile';
 
-// Web app-notify.js parity
+// Level identity — gradient glyph chip + accent colour per level (web parity).
 const LEVEL_META = {
-  INFO:     { icon: 'ℹ️', color: '#475569', title: 'Information' },
-  WARNING:  { icon: '⚠️', color: '#d97706', title: 'Warning' },
-  ERROR:    { icon: '❌', color: '#dc2626', title: 'Error' },
-  CRITICAL: { icon: '🚨', color: '#dc2626', title: 'Critical Alert' },
-  success:  { icon: '✅', color: '#16a34a', title: 'Success' },
-  error:    { icon: '⚠️', color: '#dc2626', title: 'Error' },
-  info:     { icon: 'ℹ️', color: '#475569', title: 'Information' },
+  INFO:     { icon: 'information',        grad: ['#64748b', '#94a3b8'], tint: '#f1f5f9', color: '#475569', title: 'Information' },
+  WARNING:  { icon: 'alert-outline',      grad: ['#d97706', '#f59e0b'], tint: '#fffbeb', color: '#b45309', title: 'Warning' },
+  ERROR:    { icon: 'alert-circle-outline', grad: ['#dc2626', '#ef4444'], tint: '#fef2f2', color: '#b91c1c', title: 'Error' },
+  CRITICAL: { icon: 'shield-alert',       grad: ['#9C2007', '#dc2626'], tint: '#fde8e8', color: '#9C2007', title: 'Critical Alert' },
+  success:  { icon: 'check-circle',       grad: ['#16a34a', '#22c55e'], tint: '#f0fdf4', color: '#15803d', title: 'Success' },
+  error:    { icon: 'alert-circle-outline', grad: ['#dc2626', '#ef4444'], tint: '#fef2f2', color: '#b91c1c', title: 'Error' },
+  info:     { icon: 'information',        grad: ['#64748b', '#94a3b8'], tint: '#f1f5f9', color: '#475569', title: 'Information' },
 };
 
 const fmtTs = (ts) => {
@@ -40,26 +49,41 @@ function NotifItem({ notif, onMarkRead, onDismiss, canDismissCritical }) {
 
   return (
     <View style={[styles.item, !isRead && styles.itemUnread]}>
-      <Text style={styles.itemIcon}>{level.icon}</Text>
+      {/* Level chip — gradient glyph disc on the level tint */}
+      <View style={[styles.itemIconWrap, { backgroundColor: level.tint }]}>
+        <GradientGlyph name={level.icon} size={17} colors={level.grad} />
+      </View>
+
       <View style={styles.itemBody}>
         <View style={styles.itemMetaRow}>
           <Text style={[styles.itemTime, { color: level.color }]}>{fmtTs(notif.TIMESTAMP || notif.timestamp)}</Text>
-          {isCritical ? <Text style={styles.critBadge}>CRITICAL</Text> : null}
+          <Text style={[styles.itemLevelTag, { color: level.color, backgroundColor: level.tint }]}>{level.title}</Text>
           {!isRead ? <View style={styles.unreadDot} /> : null}
+          {/* Read / dismiss — right side of the date-time info row */}
+          <View style={styles.metaActions}>
+            {!isRead ? (
+              <Button
+                variant="tint"
+                size="xs"
+                iconOnly
+                icon="emailOpen"
+                onPress={() => onMarkRead(id)}
+                accessibilityLabel="Mark read"
+              />
+            ) : null}
+            {canDismiss ? (
+              <Button
+                variant="tint"
+                size="xs"
+                iconOnly
+                icon="close"
+                onPress={() => onDismiss(id)}
+                accessibilityLabel="Dismiss"
+              />
+            ) : null}
+          </View>
         </View>
         <Text style={styles.itemMsg} numberOfLines={3}>{notif.MESSAGE || notif.message || ''}</Text>
-        <View style={styles.itemActions}>
-          {!isRead ? (
-            <TouchableOpacity onPress={() => onMarkRead(id)} style={styles.actionBtn}>
-              <Text style={styles.actionReadText}>✓ Mark read</Text>
-            </TouchableOpacity>
-          ) : null}
-          {canDismiss ? (
-            <TouchableOpacity onPress={() => onDismiss(id)} style={styles.actionBtn}>
-              <Text style={styles.actionDismissText}>✕ Dismiss</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
       </View>
     </View>
   );
@@ -70,39 +94,62 @@ export default function NotificationsPanel({
   canDismissCritical = false,
 }) {
   const insets = useSafeAreaInsets();
+  const unread = notifications.filter(n => !n.IS_READ).length;
 
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="fade"
+      animationType="slide"
       onRequestClose={onClose}
     >
       <View style={styles.overlay}>
         <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
           {/* Header */}
           <View style={styles.header}>
-            <View>
-              <Text style={styles.title}>Notifications</Text>
-              <Text style={styles.subtitle}>{notifications.length} total · {notifications.filter(n => !n.IS_READ).length} unread</Text>
+            <View style={styles.headerTitleRow}>
+              <View style={styles.headerIconWrap}>
+                <GradientGlyph name="bell" size={19} colors={['#9C2007', '#f59e0b']} />
+              </View>
+              <View>
+                <GradientText colors={['#9C2007', '#f59e0b']} style={styles.title}>Notifications</GradientText>
+                <Text style={styles.subtitle}>
+                  {notifications.length} total · {unread} unread
+                </Text>
+              </View>
             </View>
             <View style={styles.headerActions}>
-              <TouchableOpacity style={styles.headerBtn} onPress={onMarkAllRead}>
-                <Text style={styles.headerBtnText}>Mark all read</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.headerBtn} onPress={onClearAll}>
-                <Text style={styles.headerBtnTextDanger}>Clear</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
-                <Text style={styles.closeBtnText}>✕</Text>
-              </TouchableOpacity>
+              <Button
+                variant="tint"
+                size="sm"
+                iconOnly
+                icon="emailOpen"
+                onPress={onMarkAllRead}
+                accessibilityLabel="Mark all read"
+              />
+              <Button
+                variant="tint"
+                size="sm"
+                iconOnly
+                icon="trash"
+                onPress={onClearAll}
+                accessibilityLabel="Clear notifications"
+              />
+              <Button
+                variant="tint"
+                size="sm"
+                iconOnly
+                icon="close"
+                onPress={onClose}
+                accessibilityLabel="Close notifications"
+              />
             </View>
           </View>
 
           {/* List */}
           {notifications.length === 0 ? (
             <View style={styles.empty}>
-              <Text style={styles.emptyIcon}>🔔</Text>
+              <GradientGlyph name="bell" size={40} colors={['#cbd5e1', '#94a3b8']} />
               <Text style={styles.emptyText}>No new notifications</Text>
             </View>
           ) : (
@@ -113,7 +160,7 @@ export default function NotificationsPanel({
                 <NotifItem notif={item} onMarkRead={onMarkRead} onDismiss={onDismiss} canDismissCritical={canDismissCritical} />
               )}
               style={styles.list}
-              contentContainerStyle={{ paddingBottom: 8 }}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 10 }}
               initialNumToRender={15}
             />
           )}
@@ -131,9 +178,9 @@ const styles = StyleSheet.create({
   },
   sheet: {
     backgroundColor: '#ffffff',
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    maxHeight: '78%',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    maxHeight: '82%',
     ...(Platform.OS === 'web'
       ? { boxShadow: '0px -4px 24px rgba(0, 0, 0, 0.18)' }
       : { shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.18, shadowRadius: 24, elevation: 12 }),
@@ -142,137 +189,95 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
+    gap: 10,
+    paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-    backgroundColor: '#f8fafc',
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+    borderBottomColor: '#f1f5f9',
+    backgroundColor: '#fdfbff',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
   },
-  title: {
-    fontFamily: Platform.OS === 'web' ? 'Montserrat, sans-serif' : 'Montserrat_800ExtraBold',
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  subtitle: {
-    fontSize: 11,
-    color: '#64748b',
-    marginTop: 1,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  headerBtn: {
-    paddingVertical: 5,
-    paddingHorizontal: 4,
-  },
-  headerBtnText: {
-    color: '#2563eb',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  headerBtnTextDanger: {
-    color: '#dc2626',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  closeBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#e2e8f0',
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1 },
+  headerIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#fde8e8',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 2,
   },
-  closeBtnText: {
-    color: '#475569',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  list: {
-    flexGrow: 0,
-  },
+  title: { fontSize: 16, fontWeight: '900' },
+  subtitle: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+
+  list: { flexGrow: 0 },
+
+  // Item — card row with level chip + message + tinted actions
   item: {
     flexDirection: 'row',
-    padding: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#ffffff',
+    marginTop: 8,
+    gap: 10,
   },
   itemUnread: {
-    backgroundColor: '#fafcff',
+    backgroundColor: '#fdfbff',
+    borderColor: '#e9d5ff',
+    ...accentSparkle('#e879f9'),
   },
-  itemIcon: {
-    fontSize: 18,
-    marginRight: 10,
+  itemIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginTop: 1,
   },
-  itemBody: {
-    flex: 1,
-  },
-  itemMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 3,
-  },
-  itemTime: {
-    fontSize: 10.5,
-    fontWeight: '700',
-  },
-  critBadge: {
-    backgroundColor: '#fee2e2',
-    color: '#b91c1c',
-    fontSize: 9,
+  itemBody: { flex: 1, minWidth: 0 },
+  itemMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' },
+  metaActions: { flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 'auto' },
+  itemTime: { fontSize: 10, fontWeight: '700', letterSpacing: 0.3 },
+  itemLevelTag: {
+    fontSize: 8.5,
     fontWeight: '800',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
     overflow: 'hidden',
   },
   unreadDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#2563eb',
+    backgroundColor: '#e879f9',
+    shadowColor: '#e879f9',
+    shadowOpacity: 0.6,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 3,
   },
   itemMsg: {
-    fontSize: 13,
+    fontSize: 12.5,
     color: '#334155',
     lineHeight: 18,
-  },
-  itemActions: {
-    flexDirection: 'row',
-    gap: 14,
-    marginTop: 6,
-  },
-  actionBtn: {
-    paddingVertical: 2,
-  },
-  actionReadText: {
-    color: '#2563eb',
-    fontSize: 11.5,
     fontWeight: '600',
   },
-  actionDismissText: {
-    color: '#94a3b8',
-    fontSize: 11.5,
-    fontWeight: '600',
-  },
+
+  // Empty state
   empty: {
     alignItems: 'center',
-    paddingVertical: 40,
-  },
-  emptyIcon: {
-    fontSize: 30,
-    marginBottom: 8,
+    paddingVertical: 48,
+    gap: 10,
   },
   emptyText: {
     color: '#94a3b8',
     fontSize: 13,
+    fontWeight: '700',
   },
 });

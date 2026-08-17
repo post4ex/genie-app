@@ -9,10 +9,10 @@ import { getSheet, deleteFromSheet } from '../core/storage';
 import { fmtDate, parseDate } from '../utils/formatIST';
 import * as docgen from '../utils/docgen.js';
 import * as Print from 'expo-print';
-import * as FileSystem from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
-import { UploadViewer, resolveUploadUri, isPdfUpload, downloadUploadNative } from '../utils/upload-viewer';
+import { UploadViewer, resolveUploadUri, isPdfUpload, downloadUploadNative, shareUploadNative } from '../utils/upload-viewer';
 import UploaderScreen from './UploaderScreen';
+import { useToast } from '../components/Toast';
+import { shareViewAsImage } from '../utils/capture';
 import UpdateStatusModal from '../components/UpdateStatusModal';
 import SearchBar from '../components/SearchBar';
 import FilterBar from '../components/FilterBar';
@@ -177,6 +177,22 @@ export default function OrdersScreen({
   const [podViewerIsPdf, setPodViewerIsPdf] = useState(false);
   const [tatQuickFilter, setTatQuickFilter] = useState(null); // 'delivered' | 'outfordelivery' | 'intransit' | null
   const [updateStatusTargetOrder, setUpdateStatusTargetOrder] = useState(null);
+
+  // Scroll preservation refs & effect
+  const flatListRef = useRef(null);
+  const listScrollOffsetRef = useRef(0);
+
+  useEffect(() => {
+    if (currentView === 'list' && listScrollOffsetRef.current > 0) {
+      const timer = setTimeout(() => {
+        flatListRef.current?.scrollToOffset({
+          offset: listScrollOffsetRef.current,
+          animated: false,
+        });
+      }, 30);
+      return () => clearTimeout(timer);
+    }
+  }, [currentView]);
 
   // Web parity — state comes from the SHIPMENTS sheet first (shipmentsDataMap),
   // falling back to the order record (web: `s?.state || s?.STATE || order...`).
@@ -733,7 +749,22 @@ export default function OrdersScreen({
 
   // ── Document Center actions (web printSelectedShipment*/download*/mail* parity) ──
   const [labelLayout, setLabelLayout] = useState('2up-landscape'); // '2up-landscape' | '4up-portrait' (web window._labelLayout)
+  const showToast = useToast(); // global auto-dismissing in-app notification
   const [uploadVisible, setUploadVisible] = useState(false);
+  // Capture area for the Packagings & Uploads share-image button — wraps the
+  // Shipment Details → Packagings region of the detail view (utils/capture.js).
+  const captureAreaRef = useRef(null);
+
+  // Share the Shipment Details → Packagings & Uploads region as a PNG.
+  const shareShipmentArea = async (o) => {
+    if (!captureAreaRef.current) return;
+    try {
+      await shareViewAsImage(captureAreaRef, { title: `${o?.AWB_NUMBER || o?.REFERENCE || 'Shipment'} - Details & Uploads` });
+      if (Platform.OS === 'web') showToast({ title: 'Image ready', msg: 'PNG downloaded', tone: 'success' });
+    } catch (e) {
+      showToast({ title: 'Share failed', msg: e.message, tone: 'error' });
+    }
+  };
   const [uploadTarget, setUploadTarget] = useState(null);
 
   useEffect(() => {
@@ -774,23 +805,16 @@ export default function OrdersScreen({
     } catch (e) { toast('❌ Print failed', e.message); }
   };
 
-  const _saveOrShareDoc = async (title, html) => {
-    const path = `${FileSystem.cacheDirectory || ''}${title}.html`;
-    await FileSystem.writeAsStringAsync(path, html, { encoding: FileSystem.EncodingType.UTF8 });
-    if (await Sharing.isAvailableAsync()) {
-      await Sharing.shareAsync(path, { mimeType: 'text/html', dialogTitle: title, UTI: 'public.html' });
-    } else {
-      toast('✅ Saved', `Saved: ${title}.html`);
-    }
-  };
-
+  // Download bundles the document HTML into a PDF via the global util
+  // (utils/pdf.js): native renders + save/shares, web downloads the .pdf.
+  // docgen.downloadDocAsPdf handles the doc-specific print wrapper/barcodes.
   const downloadDoc = async (o, kind) => {
     const slug = DOC_KIND_SLUG[kind] || kind;
     const html = docgen.buildSingleDocHtml(slug, o, _docCtx(o));
     const title = `${slug} - ${o.AWB_NUMBER || o.REFERENCE}`;
     try {
-      if (Platform.OS === 'web') { docgen.downloadDocBlob(title, html); toast('✅ Downloading', `${title}.html`); }
-      else await _saveOrShareDoc(title, html);
+      await docgen.downloadDocAsPdf(title, html);
+      toast('✅ PDF ready', `${title}.pdf`);
     } catch (e) { toast('❌ Download failed', e.message); }
   };
 
@@ -798,8 +822,8 @@ export default function OrdersScreen({
     const title = `AllDocs - ${o.AWB_NUMBER || o.REFERENCE}`;
     try {
       const html = docgen.buildAllDocsHtml(o, _docCtx(o));
-      if (Platform.OS === 'web') { docgen.downloadDocBlob(title, html); toast('✅ Downloading', `${title}.html`); }
-      else await _saveOrShareDoc(title, html);
+      await docgen.downloadDocAsPdf(title, html);
+      toast('✅ PDF ready', `${title}.pdf`);
     } catch (e) { toast('❌ Download failed', e.message); }
   };
 
@@ -825,7 +849,8 @@ export default function OrdersScreen({
   const toggleLabelLayout = () => {
     const next = labelLayout === '4up-portrait' ? '2up-landscape' : '4up-portrait';
     setLabelLayout(next);
-    toast('Label Layout', next === '4up-portrait' ? 'Switched to 4-up Portrait' : 'Switched to 2-up Landscape');
+    // Self-destructive confirmation — auto-dismisses, no OK button.
+    showToast({ title: 'Label Layout', msg: next === '4up-portrait' ? 'Switched to 4-up Portrait' : 'Switched to 2-up Landscape' });
   };
 
   const openUpload = (o) => { setUploadTarget(o); setUploadVisible(true); };
@@ -977,12 +1002,10 @@ export default function OrdersScreen({
               setSearchQuery(q);
               if (q) setCurrentView('list');
             }}
+            onFilterPress={() => setFilterModalVisible(true)}
+            filterActive={hasActiveAdvancedFilters}
+            filterCount={activeFilterCount}
             style={styles.searchFilterInput}
-          />
-          <FilterBar
-            onPress={() => setFilterModalVisible(true)}
-            isActive={hasActiveAdvancedFilters}
-            activeCount={activeFilterCount}
           />
         </View>
 
@@ -1104,126 +1127,45 @@ export default function OrdersScreen({
   }
 
   // ────────────────────────────────────────────────────────────────────────────
-  // STAGE 2: LIST VIEW
+  // STAGE 2 & 3: LIST VIEW & DETAIL VIEW (Preserves Scroll Position)
   // ────────────────────────────────────────────────────────────────────────────
-  if (currentView === 'list') {
-    return (
-      <View style={styles.container}>
-        <View style={styles.searchFilterRow}>
-          <SearchBar
-            placeholder="Search AWB, Ref, Client..."
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            style={styles.searchFilterInput}
-          />
-          <FilterBar
-            onPress={() => setFilterModalVisible(true)}
-            isActive={hasActiveAdvancedFilters}
-            activeCount={activeFilterCount}
-          />
-        </View>
-
-        <FilterBar pills={activeFilterPills} onReset={handleResetAdvancedFilters} />
-
-        {/* ── TAT Quick Filters (web _renderTatQuickFilters parity) ── */}
-        {(selectedTile === 'tat' || selectedTile === 'overduetat') && (
-          <View style={styles.tatPillsRow}>
-            {[
-              { key: 'delivered', label: 'Delivered' },
-              { key: 'outfordelivery', label: 'OFD' },
-              { key: 'intransit', label: 'In Transit' },
-            ].map(p => (
-              <TouchableOpacity
-                key={p.key}
-                style={[styles.tatPill, tatQuickFilter === p.key && styles.tatPillActive]}
-                onPress={() => setTatQuickFilter(tatQuickFilter === p.key ? null : p.key)}
-              >
-                <Text style={[styles.tatPillText, tatQuickFilter === p.key && styles.tatPillTextActive]}>{p.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {!hasWebEquivalentFilters && (
-          <Text style={styles.defaultViewNote}>Default view from {implicitDefaultStart} — use filters to widen</Text>
-        )}
-
-        {/* ── Tray-wrapped list (centralized Tray — same as Dashboard) ── */}
-        <Tray
-          title={`${activeTileObj.label} (${filteredOrders.length})`}
-          icon={activeTileObj.icon}
-          iconColors={activeTileObj.grad}
-          headerStyle={styles.listTrayHeader}
-          style={styles.listTrayFill}
-        >
-          <FlatList
-            data={filteredOrders}
-            keyExtractor={(item, index) => item.REFERENCE || item.id || index.toString()}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
-            contentContainerStyle={{ paddingTop: 12, paddingBottom: 10 }} // top pad keeps the first row's floating status badge visible
-            renderItem={({ item }) => (
-              <WebShipmentListItem
-                order={item}
-                b2b2cMap={b2b2cMap}
-                modesMap={modesMap}
-                shipmentsMap={shipmentsMap}
-                isSelected={selectedOrder?.REFERENCE === item.REFERENCE}
-                onPress={() => handleSelectOrder(item)}
-              />
-            )}
-            ListEmptyComponent={
-              <View style={styles.emptyBox}>
-                <Text style={styles.emptyIcon}>📦</Text>
-                <Text style={styles.emptyTitle}>No orders match filters.</Text>
-              </View>
-            }
-          />
-        </Tray>
-
-      </View>
-    );
-  }
-
-  // ────────────────────────────────────────────────────────────────────────────
-  // STAGE 3: DETAIL VIEW (Exact Web Order of 7 Cards + Implanted Tracking API)
-  // ────────────────────────────────────────────────────────────────────────────
-  if (currentView === 'detail' && selectedOrder) {
+  if (currentView === 'list' || (currentView === 'detail' && selectedOrder)) {
     const o = selectedOrder;
-    const stateRaw = getOrderState(o);
+    const stateRaw = o ? getOrderState(o) : 'pending';
     const stateCfg = STATE_CONFIG[stateRaw] || STATE_CONFIG.pending;
 
-    const cnorObj = b2b2cMap[o.CONSIGNOR] || {};
-    const cneeObj = b2b2cMap[o.CONSIGNEE] || {};
+    const cnorObj = o ? (b2b2cMap[o.CONSIGNOR] || {}) : {};
+    const cneeObj = o ? (b2b2cMap[o.CONSIGNEE] || {}) : {};
 
-    const cnorName = cnorObj.NAME || o.CONSIGNOR || '';
-    const cnorCity = cnorObj.CITY || o.ORIGIN_CITY || '';
-    const cnorPin  = cnorObj.PINCODE || o.ORIGIN_PINCODE || o.CONSIGNOR_PINCODE || '';
-    const cnorState= cnorObj.STATE || o.CONSIGNOR_STATE || '';
-    const cnorAddr = cnorObj.ADDRESS || o.CONSIGNOR_ADDRESS || '';
-    const cnorMob  = cnorObj.MOBILE || o.CONSIGNOR_MOBILE || '';
+    const cnorName = cnorObj.NAME || o?.CONSIGNOR || '';
+    const cnorCity = cnorObj.CITY || o?.ORIGIN_CITY || '';
+    const cnorPin  = cnorObj.PINCODE || o?.ORIGIN_PINCODE || o?.CONSIGNOR_PINCODE || '';
+    const cnorState= cnorObj.STATE || o?.CONSIGNOR_STATE || '';
+    const cnorAddr = cnorObj.ADDRESS || o?.CONSIGNOR_ADDRESS || '';
+    const cnorMob  = cnorObj.MOBILE || o?.CONSIGNOR_MOBILE || '';
 
-    const cneeName = cneeObj.NAME || o.CONSIGNEE || '';
-    const cneeCity = cneeObj.CITY || o.DEST_CITY || '';
-    const cneePin  = cneeObj.PINCODE || o.DEST_PINCODE || o.CONSIGNEE_PINCODE || '';
-    const cneeState= cneeObj.STATE || o.CONSIGNEE_STATE || '';
-    const cneeAddr = cneeObj.ADDRESS || o.CONSIGNEE_ADDRESS || '';
-    const cneeMob  = cneeObj.MOBILE || o.CONSIGNEE_MOBILE || '';
+    const cneeName = cneeObj.NAME || o?.CONSIGNEE || '';
+    const cneeCity = cneeObj.CITY || o?.DEST_CITY || '';
+    const cneePin  = cneeObj.PINCODE || o?.DEST_PINCODE || o?.CONSIGNEE_PINCODE || '';
+    const cneeState= cneeObj.STATE || o?.CONSIGNEE_STATE || '';
+    const cneeAddr = cneeObj.ADDRESS || o?.CONSIGNEE_ADDRESS || '';
+    const cneeMob  = cneeObj.MOBILE || o?.CONSIGNEE_MOBILE || '';
 
-    const carrierRecord = carriersMap[o.CARRIER];
-    const carrierName = (typeof carrierRecord === 'string' ? carrierRecord : (carrierRecord?.COMPANY_NAME || carrierRecord?.NAME)) || o.CARRIER || 'N/A';
-    const modeRecord = modesMap[o.MODE];
-    const modeName = (typeof modeRecord === 'string' ? modeRecord : (modeRecord?.MODE || modeRecord?.NAME)) || o.MODE || 'N/A';
+    const carrierRecord = o ? carriersMap[o.CARRIER] : null;
+    const carrierName = (typeof carrierRecord === 'string' ? carrierRecord : (carrierRecord?.COMPANY_NAME || carrierRecord?.NAME)) || o?.CARRIER || 'N/A';
+    const modeRecord = o ? modesMap[o.MODE] : null;
+    const modeName = (typeof modeRecord === 'string' ? modeRecord : (modeRecord?.MODE || modeRecord?.NAME)) || o?.MODE || 'N/A';
 
-    const formattedOrderDate   = fmtDate(o.ORDER_DATE, 'date');
+    const formattedOrderDate   = o ? fmtDate(o.ORDER_DATE, 'date') : '';
 
-    const products  = productsMap[o.REFERENCE] || o.products || [];
-    const boxes     = multiboxMap[o.REFERENCE] || o.multibox || [];
-    const uploads   = uploadsMap[o.REFERENCE] || uploadsMap[o.AWB_NUMBER] || o.uploads || o.UPLOADS || [];
-    const shipment  = liveTracking?.shipment || shipmentsMap[o.REFERENCE] || {};
-    // Web parity (_sortMovements): newest activity_stamp first, then time_stamp
-    const movements = sortMovements(liveTracking?.movements || shipment.movements || o.movements || []);
+    const products  = o ? (productsMap[o.REFERENCE] || o.products || []) : [];
+    const boxes     = o ? (multiboxMap[o.REFERENCE] || o.multibox || []) : [];
+    const uploads   = o ? (uploadsMap[o.REFERENCE] || uploadsMap[o.AWB_NUMBER] || o.uploads || o.UPLOADS || []) : [];
+    const shipment  = o ? (liveTracking?.shipment || shipmentsMap[o.REFERENCE] || {}) : {};
+    const movements = o ? sortMovements(liveTracking?.movements || shipment.movements || o.movements || []) : [];
 
     const buildOrderText = () => {
+      if (!o) return '';
       const totalChgWt = boxes.reduce((s, b) => s + parseFloat(b.CHG_WT || 0), 0);
       const lines = [
         `Date: ${fmtDate(o.ORDER_DATE)}, AWB: ${o.AWB_NUMBER || 'N/A'},`,
@@ -1250,15 +1192,17 @@ export default function OrdersScreen({
     };
 
     const handleCopy = () => {
+      if (!o) return;
       Clipboard.setString(buildOrderText());
       Alert.alert('✅ Copied', 'Shipment details copied to clipboard!');
     };
 
     const handleShare = async () => {
+      if (!o) return;
       try { await Share.share({ message: buildOrderText() }); } catch (e) { /* dismissed */ }
     };
 
-    const shipmentDetailsTable = [
+    const shipmentDetailsTable = o ? [
       { l: 'Carrier',   v: carrierName, full: true },
       { l: 'Mode',      v: modeName },
       { l: 'TAT',       v: o.TAT || '—' },
@@ -1270,147 +1214,234 @@ export default function OrdersScreen({
       { l: 'COD',       v: o.COD && parseFloat(o.COD) > 0 ? `₹${o.COD}` : 'No' },
       { l: 'ToPay',     v: o.TOPAY || 'No' },
       { l: 'FOV',       v: o.FOV || 'No' },
-    ];
-
-    const hasNoSubData = products.length === 0 && boxes.length === 0 && uploads.length === 0;
+    ] : [];
 
     return (
-      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 30 }}>
-        {/* Navigation Header — premium breadcrumb */}
-        <View style={styles.navHeader}>
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => { setSelectedOrder(null); setCurrentView('list'); }}
-            accessibilityLabel="Back to list"
+      <View style={{ flex: 1 }}>
+        {/* STAGE 2: LIST VIEW — kept mounted with display toggle so scroll state is 100% preserved */}
+        <View style={[styles.container, { display: currentView === 'list' ? 'flex' : 'none' }]}>
+          <View style={styles.searchFilterRow}>
+            <SearchBar
+              placeholder="Search AWB, Ref, Client..."
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              onFilterPress={() => setFilterModalVisible(true)}
+              filterActive={hasActiveAdvancedFilters}
+              filterCount={activeFilterCount}
+              style={styles.searchFilterInput}
+            />
+          </View>
+
+          <FilterBar pills={activeFilterPills} onReset={handleResetAdvancedFilters} />
+
+          {/* ── TAT Quick Filters (web _renderTatQuickFilters parity) ── */}
+          {(selectedTile === 'tat' || selectedTile === 'overduetat') && (
+            <View style={styles.tatPillsRow}>
+              {[
+                { key: 'delivered', label: 'Delivered' },
+                { key: 'outfordelivery', label: 'OFD' },
+                { key: 'intransit', label: 'In Transit' },
+              ].map(p => (
+                <TouchableOpacity
+                  key={p.key}
+                  style={[styles.tatPill, tatQuickFilter === p.key && styles.tatPillActive]}
+                  onPress={() => setTatQuickFilter(tatQuickFilter === p.key ? null : p.key)}
+                >
+                  <Text style={[styles.tatPillText, tatQuickFilter === p.key && styles.tatPillTextActive]}>{p.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {!hasWebEquivalentFilters && (
+            <Text style={styles.defaultViewNote}>Default view from {implicitDefaultStart} — use filters to widen</Text>
+          )}
+
+          {/* ── Tray-wrapped list (centralized Tray — same as Dashboard) ── */}
+          <Tray
+            title={`${activeTileObj.label} (${filteredOrders.length})`}
+            icon={activeTileObj.icon}
+            iconColors={activeTileObj.grad}
+            headerStyle={styles.listTrayHeader}
+            style={styles.listTrayFill}
           >
-            <GradientIcon name="back" size={34} iconSize={15} />
-          </TouchableOpacity>
-
-          <View style={styles.navTitleBlock}>
-            <Text style={styles.navCrumb}>Orders › Detail</Text>
-            <GradientText colors={['#0ea5e9', '#2563eb']} style={styles.navTitleGradient} numberOfLines={1}>
-              Order — {o.REFERENCE}
-            </GradientText>
-            <Text style={styles.navSubtitle} numberOfLines={1}>
-              AWB {o.AWB_NUMBER || 'Pending'} · {formattedOrderDate}
-            </Text>
-          </View>
-
-          <View style={[styles.navStatusBadge, { backgroundColor: stateCfg.bg }]}>
-            <Text style={[styles.navStatusText, { color: stateCfg.color }]}>{stateCfg.label}</Text>
-          </View>
+            <FlatList
+              ref={flatListRef}
+              data={filteredOrders}
+              keyExtractor={(item, index) => item.REFERENCE || item.id || index.toString()}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
+              contentContainerStyle={{ paddingTop: 12, paddingBottom: 10 }}
+              onScroll={(e) => {
+                listScrollOffsetRef.current = e.nativeEvent.contentOffset.y;
+              }}
+              scrollEventThrottle={16}
+              renderItem={({ item }) => (
+                <WebShipmentListItem
+                  order={item}
+                  b2b2cMap={b2b2cMap}
+                  modesMap={modesMap}
+                  shipmentsMap={shipmentsMap}
+                  isSelected={selectedOrder?.REFERENCE === item.REFERENCE}
+                  onPress={() => handleSelectOrder(item)}
+                />
+              )}
+              ListEmptyComponent={
+                <View style={styles.emptyBox}>
+                  <Text style={styles.emptyIcon}>📦</Text>
+                  <Text style={styles.emptyTitle}>No orders match filters.</Text>
+                </View>
+              }
+            />
+          </Tray>
         </View>
 
-        {/* ── CARD 1: Document Center (centralized DocCenterPane) ── */}
-        <DocCenterPane
-          order={o}
-          onUpload={openUpload}
-          onToggleLayout={toggleLabelLayout}
-          onPrintAll={printAllDocs}
-          onDownloadAll={downloadAllDocs}
-          onMailAll={mailShipment}
-          onWhatsAppAll={waShipment}
-          onPrintDoc={printDoc}
-          onMailDoc={mailDoc}
-          onDownloadDoc={downloadDoc}
-          onWhatsAppDoc={waDoc}
-        />
+        {/* STAGE 3: DETAIL VIEW */}
+        {currentView === 'detail' && selectedOrder ? (
+          <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 30 }}>
+            {/* Navigation Header — premium breadcrumb */}
+            <View style={styles.navHeader}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => { setSelectedOrder(null); setCurrentView('list'); }}
+                accessibilityLabel="Back to list"
+              >
+                <GradientIcon name="back" size={34} iconSize={15} />
+              </TouchableOpacity>
 
-        {/* ── CARD 2: Shipment Details (centralized ShipmentDetailsPane) ── */}
-        <ShipmentDetailsPane
-          rows={shipmentDetailsTable}
-          canEdit={!o.INV_NUMBER}
-          onUpdateStatus={() => setUpdateStatusTargetOrder(o)}
-          onEdit={() => (onEditOrder ? onEditOrder({ ...o, boxes: multiboxMap[o.REFERENCE] || [], products: productsMap[o.REFERENCE] || [] }) : toast('Edit', 'Edit order ' + o.REFERENCE))}
-          onCopy={handleCopy}
-          onShare={handleShare}
-          onMail={() => mailShipment(o)}
-          onWhatsApp={() => waShipment(o)}
-          onDelete={() => deleteOrder(o)}
-        />
+              <View style={styles.navTitleBlock}>
+                <Text style={styles.navCrumb}>Orders › Detail</Text>
+                <GradientText colors={['#0ea5e9', '#2563eb']} style={styles.navTitleGradient} numberOfLines={1}>
+                  Order — {o.REFERENCE}
+                </GradientText>
+                <Text style={styles.navSubtitle} numberOfLines={1}>
+                  AWB {o.AWB_NUMBER || 'Pending'} · {formattedOrderDate}
+                </Text>
+              </View>
 
-        {/* ── CARD 3+4: Consignor & Consignee (centralized PartiesPane) ── */}
-        <PartiesPane
-          consignor={[
-            { l: 'Name', v: cnorName },
-            { l: 'Origin', v: [cnorCity, cnorPin, cnorState].filter(Boolean).join(', ') },
-            { l: 'Address', v: cnorAddr },
-            { l: 'Mobile', v: cnorMob },
-          ]}
-          consignee={[
-            { l: 'Name', v: cneeName },
-            { l: 'Destination', v: [cneeCity, cneePin, cneeState].filter(Boolean).join(', ') },
-            { l: 'Address', v: cneeAddr },
-            { l: 'Mobile', v: cneeMob },
-          ]}
-        />
+              <View style={[styles.navStatusBadge, { backgroundColor: stateCfg.bg }]}>
+                <Text style={[styles.navStatusText, { color: stateCfg.color }]}>{stateCfg.label}</Text>
+              </View>
+            </View>
 
-        {/* ── CARD 5: Packagings & Uploads (centralized PackagingsPane) ── */}
-        <PackagingsPane
-          products={products}
-          boxes={boxes}
-          uploads={uploads}
-          onUpload={() => openUpload(o)}
-          onMailAll={() => mailShipmentUploads(o)}
-          onWhatsAppAll={() => waShipmentUploads(o)}
-          onDownloadUpload={(up) => downloadUploadNative(resolveFileUrl(up.FILE_URL), `${up.UPLOAD_TYPE || 'Upload'}_${o.AWB_NUMBER || o.REFERENCE}`)}
-          onDeleteUpload={deleteUpload}
-          resolveUrl={resolveFileUrl}
-        />
+            {/* ── CARD 1: Document Center (centralized DocCenterPane) ── */}
+            <DocCenterPane
+              order={o}
+              onUpload={openUpload}
+              onToggleLayout={toggleLabelLayout}
+              onPrintAll={printAllDocs}
+              onDownloadAll={downloadAllDocs}
+              onMailAll={mailShipment}
+              onWhatsAppAll={waShipment}
+              onPrintDoc={printDoc}
+              onMailDoc={mailDoc}
+              onDownloadDoc={downloadDoc}
+              onWhatsAppDoc={waDoc}
+            />
 
-        {/* ── CARD 6/7: Tracking Status + History (centralized TrackingPane) ── */}
-        <TrackingPane
-          shipment={shipment}
-          movements={movements}
-          title="Tracking and History"
-          infoRows={[
-            { l: 'AWB Number', v: o.AWB_NUMBER || shipment.awb_number || 'N/A' },
-            { l: 'Order Date', v: formattedOrderDate },
-            { l: 'Origin', v: shipment.carrier_origin },
-            { l: 'Destination', v: shipment.carrier_destination },
-            { l: 'Info', v: shipment.additional_info, full: true },
-          ].filter(row => row.v !== null && row.v !== undefined && row.v !== '')}
-          onMail={() => mailShipmentTracking(o)}
-          onWhatsApp={() => waShipmentTracking(o)}
-          onRefresh={() => fetchTrackingHistory(o.REFERENCE, true)}
-          onViewPod={shipment.pod_image
-            ? () => openUploadViewer(shipment.pod_image, `POD — ${o.AWB_NUMBER || o.REFERENCE}`)
-            : null}
-        />
+            {/* ── Cards 2–5: Shipment Details → Packagings & Uploads, wrapped in a
+                capture ref so the pane's share-image button can share this whole
+                area as a picture (utils/capture.js). ── */}
+            <View ref={captureAreaRef} collapsable={false}>
+              {/* ── CARD 2: Shipment Details (centralized ShipmentDetailsPane) ── */}
+              <ShipmentDetailsPane
+                rows={shipmentDetailsTable}
+                canEdit={!o.INV_NUMBER}
+                onUpdateStatus={() => setUpdateStatusTargetOrder(o)}
+                onEdit={() => (onEditOrder ? onEditOrder({ ...o, boxes: multiboxMap[o.REFERENCE] || [], products: productsMap[o.REFERENCE] || [] }) : toast('Edit', 'Edit order ' + o.REFERENCE))}
+                onCopy={handleCopy}
+                onShare={handleShare}
+                onMail={() => mailShipment(o)}
+                onWhatsApp={() => waShipment(o)}
+                onDelete={() => deleteOrder(o)}
+              />
 
-        {/* ── Mini-uploader adapter (web mini-uploader.setReference parity) ── */}
-        <Modal
-          visible={uploadVisible}
-          animationType="slide"
-          presentationStyle="pageSheet"
-          onRequestClose={closeUpload}
-        >
-          <UploaderScreen
-            orders={uploadTarget ? [uploadTarget] : []}
-            b2b2cMap={b2b2cMap}
-            productsMap={productsMap}
-            uploadsMap={uploadsMap}
-            token={token}
-            apiBase={apiBase}
-            role={role}
-            enforceRoleRestrictions
-            hiddenTypes={['KYC']}
-            initialOrder={uploadTarget}
-            modalMode
-            onClose={closeUpload}
-            onRefresh={onRefresh}
-          />
-        </Modal>
+              {/* ── CARD 3+4: Consignor & Consignee (centralized PartiesPane) ── */}
+              <PartiesPane
+                consignor={[
+                  { l: 'Name', v: cnorName },
+                  { l: 'Origin', v: [cnorCity, cnorPin, cnorState].filter(Boolean).join(', ') },
+                  { l: 'Address', v: cnorAddr },
+                  { l: 'Mobile', v: cnorMob },
+                ]}
+                consignee={[
+                  { l: 'Name', v: cneeName },
+                  { l: 'Destination', v: [cneeCity, cneePin, cneeState].filter(Boolean).join(', ') },
+                  { l: 'Address', v: cneeAddr },
+                  { l: 'Mobile', v: cneeMob },
+                ]}
+              />
 
-        <UploadViewer
-          visible={podImageUrl !== null}
-          uri={podImageUrl}
-          title={podViewerTitle}
-          isPdf={podViewerIsPdf}
-          onClose={() => setPodImageUrl(null)}
-        />
+              {/* ── CARD 5: Packagings & Uploads (centralized PackagingsPane) ── */}
+              <PackagingsPane
+                products={products}
+                boxes={boxes}
+                uploads={uploads}
+                onUpload={() => openUpload(o)}
+                onMailAll={() => mailShipmentUploads(o)}
+                onWhatsAppAll={() => waShipmentUploads(o)}
+                onDownloadUpload={(up) => downloadUploadNative(resolveFileUrl(up.FILE_URL), `${up.UPLOAD_TYPE || 'Upload'}_${o.AWB_NUMBER || o.REFERENCE}`)}
+                onShareUpload={(up) => shareUploadNative(resolveFileUrl(up.FILE_URL), `${up.UPLOAD_TYPE || 'Upload'} - ${o.AWB_NUMBER || o.REFERENCE}`)}
+                onDeleteUpload={deleteUpload}
+                onShareArea={() => shareShipmentArea(o)}
+                resolveUrl={resolveFileUrl}
+              />
+            </View>
 
-      </ScrollView>
+            {/* ── CARD 6/7: Tracking Status + History (centralized TrackingPane) ── */}
+            <TrackingPane
+              shipment={shipment}
+              movements={movements}
+              title="Tracking and History"
+              infoRows={[
+                { l: 'AWB Number', v: o.AWB_NUMBER || shipment.awb_number || 'N/A' },
+                { l: 'Order Date', v: formattedOrderDate },
+                { l: 'Origin', v: shipment.carrier_origin },
+                { l: 'Destination', v: shipment.carrier_destination },
+                { l: 'Info', v: shipment.additional_info, full: true },
+              ].filter(row => row.v !== null && row.v !== undefined && row.v !== '')}
+              onMail={() => mailShipmentTracking(o)}
+              onWhatsApp={() => waShipmentTracking(o)}
+              onRefresh={() => fetchTrackingHistory(o.REFERENCE, true)}
+              onViewPod={shipment.pod_image
+                ? () => openUploadViewer(shipment.pod_image, `POD — ${o.AWB_NUMBER || o.REFERENCE}`)
+                : null}
+            />
+
+            {/* ── Mini-uploader adapter (web mini-uploader.setReference parity) ── */}
+            <Modal
+              visible={uploadVisible}
+              animationType="slide"
+              presentationStyle="pageSheet"
+              onRequestClose={closeUpload}
+            >
+              <UploaderScreen
+                orders={uploadTarget ? [uploadTarget] : []}
+                b2b2cMap={b2b2cMap}
+                productsMap={productsMap}
+                uploadsMap={uploadsMap}
+                token={token}
+                apiBase={apiBase}
+                role={role}
+                enforceRoleRestrictions
+                hiddenTypes={['KYC']}
+                initialOrder={uploadTarget}
+                modalMode
+                onClose={closeUpload}
+                onRefresh={onRefresh}
+              />
+            </Modal>
+
+            <UploadViewer
+              visible={podImageUrl !== null}
+              uri={podImageUrl}
+              title={podViewerTitle}
+              isPdf={podViewerIsPdf}
+              onClose={() => setPodImageUrl(null)}
+            />
+
+          </ScrollView>
+        ) : null}
+      </View>
     );
   }
 
@@ -1565,11 +1596,12 @@ const styles = StyleSheet.create({
 
   // Selected row highlight (used via ListItem's style prop)
   listItemSelected: {
-    borderColor: '#9C2007',
+    borderColor: '#0284c7',
+    backgroundColor: '#f0f9ff',
     ...(Platform.OS === 'web'
-      ? { boxShadow: '0px 0px 0px 2px rgba(156, 32, 7, 0.16), 0px 4px 14px rgba(15, 23, 42, 0.08)' }
+      ? { boxShadow: '0px 0px 0px 2px rgba(2, 132, 199, 0.2), 0px 4px 14px rgba(2, 132, 199, 0.12)' }
       : {
-          shadowColor: '#9C2007',
+          shadowColor: '#0284c7',
           shadowOpacity: 0.22,
           shadowRadius: 10,
           shadowOffset: { width: 0, height: 3 },

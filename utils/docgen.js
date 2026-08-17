@@ -2,6 +2,7 @@
 // utils/docgen.js — Document Builder Utility
 // ============================================================================
 import { fmtDate } from './formatIST.js';
+import { bundleHtmlAsPdf } from './pdf';
 
 // ---- Runtime context (the web used bare globals; the app injects these) ----
 let modesDataMap = new Map();
@@ -1312,6 +1313,37 @@ export function downloadDocBlob(title, bodyHtml) {
     const a = document.createElement('a');
     a.href = url; a.download = `${title}.html`; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// Wait for injected JsBarcode SVGs to rasterize before the PDF capture.
+function _waitForBarcodes(doc, timeout = 4000) {
+    const barcodes = doc.querySelectorAll('svg.barcode-svg[data-value]');
+    if (!barcodes.length) return Promise.resolve();
+    return new Promise((resolve) => {
+        const started = Date.now();
+        const tick = () => {
+            const ready = Array.from(barcodes).every((el) => el.querySelector('rect,path,line') || el.children.length > 1);
+            if (ready || Date.now() - started > timeout) resolve();
+            else setTimeout(tick, 150);
+        };
+        setTimeout(tick, 400); // let the injected JsBarcode script execute first
+    });
+}
+
+// Bundle a document into a single PDF via the shared global util (utils/pdf.js):
+//   native  → expo-print printToFileAsync + OS save/share sheet
+//   web     → hidden-iframe html2pdf render + .pdf browser download
+// The document keeps its print wrapper (barcode script included) and waits for
+// barcodes before capture; if the web PDF path fails it degrades to the plain
+// .html download so the user always gets the document.
+export async function downloadDocAsPdf(title, bodyHtml) {
+    return bundleHtmlAsPdf({
+        title,
+        html: bodyHtml,
+        fullHtml: _wrapFullDoc(title, bodyHtml),
+        onReady: (frameDoc) => _waitForBarcodes(frameDoc),
+        onFallback: () => downloadDocBlob(title, bodyHtml),
+    });
 }
 
 export {

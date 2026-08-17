@@ -6,7 +6,7 @@ import Icon, { GradientGlyph, GradientIcon } from './icons';
 import GradientText from './GradientText';
 import { fmtDate } from '../utils/formatIST';
 import { isPdfUpload } from '../utils/upload-viewer';
-import * as FileSystem from 'expo-file-system';
+import { File as FSFile, Paths } from 'expo-file-system';
 
 // Native WebView for rendering PDFs in-app on iOS / Android
 let WebView = null;
@@ -21,11 +21,43 @@ const PRODUCT_GRAD  = ["#0ea5e9", "#2563eb"];
 const MULTIBOX_GRAD = ["#f59e0b", "#ea580c"];
 const UPLOAD_GRAD   = ["#10b981", "#0d9488"];
 
+// Per-section tint identity for the furnished tables — header, zebra stripe,
+// accent bar and value pills all derive from the section's gradient.
+const TABLE_TINTS = {
+  product: {
+    headBg: '#f0f9ff', headBorder: '#bae6fd', rowAlt: '#f6fbff',
+    accent: '#0ea5e9', label: '#0369a1', pillBg: '#e0f2fe', pillText: '#075985', dot: '#0ea5e9',
+  },
+  multibox: {
+    headBg: '#fffbeb', headBorder: '#fde68a', rowAlt: '#fffaf0',
+    accent: '#f59e0b', label: '#b45309', pillBg: '#fef3c7', pillText: '#92400e', dot: '#f59e0b',
+  },
+  upload: {
+    headBg: '#ecfdf5', headBorder: '#a7f3d0', rowAlt: '#f5fdf9',
+    accent: '#10b981', label: '#047857', pillBg: '#d1fae5', pillText: '#065f46', dot: '#10b981',
+  },
+};
+
 function SectionHeader({ icon, title, grad }) {
   return (
     <View style={styles.sectionHeader}>
       <GradientGlyph name={icon} size={15} colors={grad} />
       <GradientText colors={grad} style={styles.sectionTitle}>{title}</GradientText>
+    </View>
+  );
+}
+
+// Tinted table header: soft section-colored band, gradient accent bar on the
+// left, uppercase labels in the section's ink colour.
+function TableHead({ tint, cols }) {
+  return (
+    <View style={[styles.tableHead, { backgroundColor: tint.headBg, borderBottomColor: tint.headBorder }]}>
+      <View style={[styles.headAccent, { backgroundColor: tint.accent }]} />
+      {cols.map(function(c, i) {
+        return (
+          <Text key={i} style={[styles.tableHeadCell, { color: tint.label }, c.right && styles.headCellRight]}>{c.label}</Text>
+        );
+      })}
     </View>
   );
 }
@@ -108,10 +140,10 @@ function UploadPreview({ uri, isPdf, title }) {
               }
             }
           } else {
-            // Download to cache for local file access
+            // Download to cache for local file access (SDK 54 File API)
             try {
-              const target = `${FileSystem.cacheDirectory}preview_${Date.now()}.pdf`;
-              const downloadRes = await FileSystem.downloadAsync(uri, target);
+              const dest = new FSFile(Paths.cache, `preview_${Date.now()}.pdf`);
+              const downloadRes = await FSFile.downloadFileAsync(uri, dest, { idempotent: true });
               if (isMounted) {
                 setPdfSrc(downloadRes.uri);
                 setLoading(false);
@@ -219,7 +251,9 @@ export default function PackagingsPane({
   onMailAll,
   onWhatsAppAll,
   onDownloadUpload,
+  onShareUpload,
   onDeleteUpload,
+  onShareArea,
   resolveUrl = (u) => u,
 }) {
   const [viewIndex, setViewIndex] = useState(null);
@@ -248,8 +282,10 @@ export default function PackagingsPane({
       right={
         <View style={styles.actionRow}>
           <Button size="xs" variant="tint" iconOnly icon="upload" onPress={onUpload} accessibilityLabel="Upload File" />
+          {onShareArea ? <Button size="xs" variant="tint" iconOnly icon="shareImage" onPress={onShareArea} accessibilityLabel="Share shipment area as image" /> : null}
           {!noUploads ? (
             <View style={styles.actionRow}>
+              <Button size="xs" variant="tint" iconOnly icon="eye" onPress={function() { setViewIndex(0); }} accessibilityLabel="View uploads" />
               <Button size="xs" variant="tint" iconOnly icon="envelope" onPress={onMailAll} accessibilityLabel="Mail All" />
               <Button size="xs" variant="tint" iconOnly icon="whatsapp" onPress={onWhatsAppAll} accessibilityLabel="WhatsApp All" />
             </View>
@@ -265,23 +301,22 @@ export default function PackagingsPane({
           {!noProducts ? (
             <View style={styles.productCard}>
               <SectionHeader icon="package-variant" title={"Product (" + productNames + ")"} grad={PRODUCT_GRAD} />
-              <View style={styles.tableBox}>
-                <View style={styles.productHead}>
-                  <Text style={styles.productHeadCell}>DOC</Text>
-                  <Text style={styles.productHeadCell}>TYPE</Text>
-                  <Text style={styles.productHeadCell}>EWAY</Text>
-                  <Text style={[styles.productHeadCell, { textAlign: "right" }]}>AMT</Text>
+              <View style={styles.tableWrap}>
+                <View style={styles.tableBox}>
+                  <TableHead tint={TABLE_TINTS.product} cols={[{ label: 'DOC' }, { label: 'TYPE' }, { label: 'EWAY' }, { label: 'AMT', right: true }]} />
+                  {products.map(function(p, i) {
+                    return (
+                      <View key={i} style={[styles.tableRow, i % 2 === 1 && { backgroundColor: TABLE_TINTS.product.rowAlt }, i === products.length - 1 && styles.lastRow]}>
+                        <Text style={styles.cellStrong} numberOfLines={1}>{p.DOC_NUMBER || "N/A"}</Text>
+                        <Text style={styles.cellMuted} numberOfLines={1}>{p.DOC_TYPE || "—"}</Text>
+                        <Text style={styles.cellMuted} numberOfLines={1}>{p.EWAY_IF || "—"}</Text>
+                        <View style={styles.pillWrap}>
+                          <Text style={[styles.amountPill, { backgroundColor: TABLE_TINTS.product.pillBg, color: TABLE_TINTS.product.pillText }]}>{parseFloat(p.AMOUNT || 0).toFixed(2)}</Text>
+                        </View>
+                      </View>
+                    );
+                  })}
                 </View>
-                {products.map(function(p, i) {
-                  return (
-                    <View key={i} style={[styles.productRow, i === products.length - 1 && styles.lastRow]}>
-                      <Text style={[styles.productCell, { fontSize: 10.5 }]} numberOfLines={1}>{p.DOC_NUMBER || "N/A"}</Text>
-                      <Text style={[styles.productCell, { fontSize: 10.5, color: '#64748b' }]} numberOfLines={1}>{p.DOC_TYPE || "—"}</Text>
-                      <Text style={[styles.productCell, { fontSize: 10.5, color: '#64748b' }]} numberOfLines={1}>{p.EWAY_IF || "—"}</Text>
-                      <Text style={[styles.productCell, { fontSize: 10.5, textAlign: "right" }]} numberOfLines={1}>{parseFloat(p.AMOUNT || 0).toFixed(2)}</Text>
-                    </View>
-                  );
-                })}
               </View>
             </View>
           ) : null}
@@ -290,24 +325,25 @@ export default function PackagingsPane({
           {!noBoxes ? (
             <View style={styles.productCard}>
               <SectionHeader icon="package-variant-closed" title={"MultiBox (" + boxes.length + ")"} grad={MULTIBOX_GRAD} />
-              <View style={styles.tableBox}>
-                <View style={styles.productHead}>
-                  <Text style={styles.productHeadCell}>BOX</Text>
-                  <Text style={styles.productHeadCell}>WT</Text>
-                  <Text style={styles.productHeadCell}>LBH</Text>
-                  <Text style={[styles.productHeadCell, { textAlign: "right" }]}>CHG</Text>
+              <View style={styles.tableWrap}>
+                <View style={styles.tableBox}>
+                  <TableHead tint={TABLE_TINTS.multibox} cols={[{ label: 'BOX' }, { label: 'WT' }, { label: 'LBH' }, { label: 'CHG', right: true }]} />
+                  {boxes.map(function(b, bi) {
+                    const lbh = (parseFloat(b.LENGTH)||0) + "x" + (parseFloat(b.BREADTH)||0) + "x" + (parseFloat(b.HIGHT)||0);
+                    return (
+                      <View key={bi} style={[styles.tableRow, bi % 2 === 1 && { backgroundColor: TABLE_TINTS.multibox.rowAlt }, bi === boxes.length - 1 && styles.lastRow]}>
+                        <View style={[styles.boxBadge, { backgroundColor: TABLE_TINTS.multibox.pillBg }]}>
+                          <Text style={[styles.boxBadgeText, { color: TABLE_TINTS.multibox.pillText }]}>{b.BOX_NUM || bi+1}</Text>
+                        </View>
+                        <Text style={styles.cellStrong}>{b.WEIGHT || 0}</Text>
+                        <Text style={styles.cellMuted}>{lbh}</Text>
+                        <View style={styles.pillWrap}>
+                          <Text style={[styles.amountPill, { backgroundColor: TABLE_TINTS.multibox.pillBg, color: TABLE_TINTS.multibox.pillText }]}>{parseFloat(b.CHG_WT||0).toFixed(2)}</Text>
+                        </View>
+                      </View>
+                    );
+                  })}
                 </View>
-                {boxes.map(function(b, bi) {
-                  const lbh = (parseFloat(b.LENGTH)||0) + "x" + (parseFloat(b.BREADTH)||0) + "x" + (parseFloat(b.HIGHT)||0);
-                  return (
-                    <View key={bi} style={[styles.productRow, bi === boxes.length - 1 && styles.lastRow]}>
-                      <Text style={styles.productCell}>{b.BOX_NUM || bi+1}</Text>
-                      <Text style={styles.productCell}>{b.WEIGHT || 0}</Text>
-                      <Text style={styles.productCell}>{lbh}</Text>
-                      <Text style={[styles.productCell, { textAlign: "right" }]}>{parseFloat(b.CHG_WT||0).toFixed(2)}</Text>
-                    </View>
-                  );
-                })}
               </View>
             </View>
           ) : null}
@@ -316,28 +352,29 @@ export default function PackagingsPane({
           {!noUploads ? (
             <View style={styles.productCard}>
               <SectionHeader icon="upload" title={"Uploads (" + uploads.length + ")"} grad={UPLOAD_GRAD} />
-              <View style={styles.tableBox}>
-                <View style={styles.productHead}>
-                  <Text style={styles.productHeadCell}>TYPE</Text>
-                  <Text style={styles.productHeadCell}>DETAILS</Text>
-                  <Text style={[styles.productHeadCell, { textAlign: 'right' }]}>DATE</Text>
+              <View style={styles.tableWrap}>
+                <View style={styles.tableBox}>
+                  <TableHead tint={TABLE_TINTS.upload} cols={[{ label: 'TYPE' }, { label: 'DETAILS' }, { label: 'DATE', right: true }]} />
+                  {uploads.map(function(up, ui) {
+                    var ts = 'N/A';
+                    try { ts = up.TIME_STAMP ? new Date(Number(up.TIME_STAMP)).toLocaleDateString('en-GB') : 'N/A'; } catch(e) {}
+                    return (
+                      <TouchableOpacity
+                        key={ui}
+                        style={[styles.tableRow, ui % 2 === 1 && { backgroundColor: TABLE_TINTS.upload.rowAlt }, ui === uploads.length - 1 && styles.lastRow]}
+                        activeOpacity={0.7}
+                        onPress={function() { setViewIndex(ui); }}
+                      >
+                        <View style={styles.typeCell}>
+                          <View style={[styles.typeDot, { backgroundColor: TABLE_TINTS.upload.dot }]} />
+                          <Text style={styles.cellStrong} numberOfLines={1}>{up.UPLOAD_TYPE || 'Upload'}</Text>
+                        </View>
+                        <Text style={styles.cellMuted} numberOfLines={1}>{uploadDetail(up)}</Text>
+                        <Text style={[styles.cellMuted, styles.dateCell]} numberOfLines={1}>{ts}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
-                {uploads.map(function(up, ui) {
-                  var ts = 'N/A';
-                  try { ts = up.TIME_STAMP ? new Date(Number(up.TIME_STAMP)).toLocaleDateString('en-GB') : 'N/A'; } catch(e) {}
-                  return (
-                    <TouchableOpacity
-                      key={ui}
-                      style={[styles.productRow, ui === uploads.length - 1 && styles.lastRow]}
-                      activeOpacity={0.7}
-                      onPress={function() { setViewIndex(ui); }}
-                    >
-                      <Text style={[styles.productCell, { fontSize: 10.5, fontWeight: '700' }]} numberOfLines={1}>{up.UPLOAD_TYPE || 'Upload'}</Text>
-                      <Text style={[styles.productCell, { fontSize: 10.5, color: '#64748b' }]} numberOfLines={1}>{uploadDetail(up)}</Text>
-                      <Text style={[styles.productCell, { fontSize: 10, color: '#94a3b8', textAlign: 'right' }]} numberOfLines={1}>{ts}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
               </View>
             </View>
           ) : null}
@@ -378,13 +415,22 @@ export default function PackagingsPane({
                   <Icon name="forward" size={14} color="#0284c7" chunky />
                 </TouchableOpacity>
                 {viewing && viewing.FILE_URL ? (
-                  <TouchableOpacity
-                    style={[styles.sheetBtn, { backgroundColor: '#f1f5f9', borderColor: '#e2e8f0' }]}
-                    onPress={function() { onDownloadUpload(viewing); setViewIndex(null); }}
-                    accessibilityLabel="Download file"
-                  >
-                    <Icon name="download" size={14} color="#64748b" chunky />
-                  </TouchableOpacity>
+                  <View style={styles.actionRow}>
+                    <TouchableOpacity
+                      style={[styles.sheetBtn, { backgroundColor: '#f1f5f9', borderColor: '#e2e8f0' }]}
+                      onPress={function() { onShareUpload(viewing); }}
+                      accessibilityLabel="Share file"
+                    >
+                      <Icon name="share" size={14} color="#0891b2" chunky />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.sheetBtn, { backgroundColor: '#f1f5f9', borderColor: '#e2e8f0' }]}
+                      onPress={function() { onDownloadUpload(viewing); setViewIndex(null); }}
+                      accessibilityLabel="Download file"
+                    >
+                      <Icon name="download" size={14} color="#64748b" chunky />
+                    </TouchableOpacity>
+                  </View>
                 ) : null}
                 <TouchableOpacity
                   style={[styles.sheetBtn, { backgroundColor: '#fef2f2', borderColor: '#fecaca' }]}
@@ -448,33 +494,57 @@ const styles = StyleSheet.create({
   sections:       { paddingTop: 2 },
   sectionHeader:  { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 },
   sectionTitle:   { fontSize: 12.5, fontWeight: "900", letterSpacing: 0.3 },
-  productCard:    { marginBottom: 10 },
+  productCard:    { marginBottom: 12 },
+  tableWrap: {
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    shadowColor: '#0f172a', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 5,
+    elevation: 2,
+  },
   tableBox: {
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    borderRadius: 8,
+    borderRadius: 10,
     overflow: 'hidden',
     backgroundColor: '#ffffff',
   },
-  productHead: {
+  tableHead: {
     flexDirection: "row",
-    backgroundColor: '#f8fafc',
+    alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-    paddingVertical: 6,
-    paddingHorizontal: 8,
+    paddingVertical: 7,
+    paddingRight: 8,
+    paddingLeft: 0,
   },
-  productHeadCell:{ flex: 1, fontSize: 8.5, fontWeight: "700", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 },
-  productRow: {
+  headAccent:     { width: 3.5, height: '100%', alignSelf: 'stretch', marginRight: 6 },
+  tableHeadCell:  { flex: 1, fontSize: 8.5, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.6 },
+  headCellRight:  { textAlign: "right" },
+  tableRow: {
     flexDirection: "row",
-    paddingVertical: 6,
+    paddingVertical: 7,
     paddingHorizontal: 8,
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
     alignItems: 'center',
   },
   lastRow:        { borderBottomWidth: 0 },
-  productCell:    { flex: 1, fontSize: 11, fontWeight: "700", color: "#0f172a" },
+  cellStrong:     { flex: 1, fontSize: 11, fontWeight: "700", color: "#0f172a" },
+  cellMuted:      { flex: 1, fontSize: 10.5, fontWeight: "600", color: "#64748b" },
+  dateCell:       { fontSize: 10, color: '#94a3b8', textAlign: 'right' },
+  pillWrap:       { flex: 1, alignItems: 'flex-end' },
+  amountPill: {
+    fontSize: 9.5, fontWeight: "800", letterSpacing: 0.3,
+    paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 99, overflow: 'hidden',
+  },
+  boxBadge: {
+    minWidth: 24, height: 22, borderRadius: 7,
+    alignItems: 'center', justifyContent: 'center',
+    marginRight: 8, paddingHorizontal: 5,
+  },
+  boxBadgeText:   { fontSize: 10.5, fontWeight: "900" },
+  typeCell:       { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  typeDot:        { width: 7, height: 7, borderRadius: 99 },
+
   // Bottom sheet (FilterModal / UpdateStatusModal popup class)
   sheetOverlay:  { flex: 1, backgroundColor: "rgba(15,23,42,0.5)", justifyContent: "flex-end" },
   sheet: {

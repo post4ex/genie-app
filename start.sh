@@ -25,5 +25,6 @@ echo ""
 
 export REACT_NATIVE_PACKAGER_HOSTNAME="$LAN_IP"
 export EXPO_NO_TELEMETRY=1
+export EXPO_TOKEN="${EXPO_TOKEN:-VPbsEYyoWNC1p3V1LCnLRdZsxsAPgq8pQmYesQKL}"
 
 exec npx expo start --host lan --clear "$@"

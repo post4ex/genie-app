@@ -69,6 +69,7 @@ export const ICONS = {
   bell: 'bell',
   comment: 'comment',
   envelope: 'envelope',
+  emailOpen: 'envelope-open',
   paperclip: 'paperclip',
   download: 'download',
   copy: 'copy',
@@ -76,6 +77,9 @@ export const ICONS = {
   whatsapp: 'whatsapp',
   print: 'print',
   share: 'share-nodes',
+  // share-from-square = the classic share glyph (arrow leaving a frame), so
+  // it reads as an action, not like "save image to gallery" (images).
+  shareImage: 'share-from-square',
   trash: 'trash',
   delete: 'trash',
   edit: 'pencil',
@@ -149,6 +153,7 @@ export const GRADIENTS = {
   layout: ['#8b5cf6', '#6366f1'],        // violet → indigo
   copy: ['#0ea5e9', '#06b6d4'],          // sky → cyan
   share: ['#14b8a6', '#22c55e'],         // teal → green
+  shareImage: ['#14b8a6', '#0ea5e9'],    // teal → sky (picture share)
   edit: ['#f59e0b', '#ea580c'],          // amber → orange
   trash: ['#ef4444', '#dc2626'],         // red → deep red
   refresh: ['#0ea5e9', '#06b6d4'],       // sky → cyan
@@ -168,9 +173,11 @@ export const ACTION_COLORS = {
   print: '#0284c7',      // sky
   download: '#64748b',   // slate (chosen neutral)
   envelope: '#ea580c',   // orange
+  emailOpen: '#0284c7',  // sky (mark-read)
   mail: '#ea580c',       // orange
   layout: '#7c3aed',     // violet
   share: '#059669',      // emerald
+  shareImage: '#0891b2', // cyan (picture share)
   edit: '#ea580c',       // orange
   copy: '#0284c7',       // sky
   trash: '#ef4444',      // red
@@ -195,10 +202,12 @@ export const TINT_BG = {
   print: '#e0f2fe',       // sky-100
   download: '#f1f5f9',    // slate-100
   envelope: '#ffedd5',    // orange-100
+  emailOpen: '#e0f2fe',   // sky-100
   mail: '#ffedd5',        // orange-100
   layout: '#ede9fe',      // violet-100
   copy: '#e0f2fe',        // sky-100
   share: '#d1fae5',       // emerald-100
+  shareImage: '#cffafe',  // cyan-100
   edit: '#ffedd5',        // orange-100
   eye: '#e0e7ff',         // indigo-100
   back: '#fde8e8',        // maroon-50
@@ -209,6 +218,17 @@ export const TINT_BG = {
 // keys through this map, falling back to raw MCI glyph names. This keeps the
 // Zepto/Flipkart-style hero icons as centralized as the FA6 `Icon` registry.
 export const MCI_GLYPHS = {
+  // Navigation & Feature tiles
+  pincode: 'map-marker-radius',
+  zipfinder: 'earth',
+  complaint: 'alert-circle-outline',
+  bell: 'bell-outline',
+  home: 'home-variant-outline',
+  orders: 'package-variant-closed',
+  book: 'plus-box-outline',
+  track: 'magnify-expand',
+  vault: 'safe',
+  admin: 'cog-outline',
   // Document Center doc types
   label: 'label',
   receipt: 'receipt-text',
@@ -218,12 +238,14 @@ export const MCI_GLYPHS = {
   // Chunky action glyphs (print / mail / download / whatsapp …)
   print: 'printer',
   envelope: 'email-outline',
+  emailOpen: 'email-open-outline',
   download: 'download',
   upload: 'upload',
   whatsapp: 'whatsapp',
   layout: 'border-all',
   copy: 'content-copy',
   share: 'share-variant',
+  shareImage: 'share-variant',
   trash: 'delete-outline',
   delete: 'delete-outline',
   refresh: 'refresh',
@@ -327,6 +349,9 @@ export function GradientGlyph({ name, size = 30, colors = ['#9C2007', '#f59e0b']
   const box = { width: size, height: size };
   return (
     <MaskedView
+      // androidRenderingMode="software" keeps the glyph in a software layer so
+      // react-native-view-shot can capture views containing it on Android.
+      androidRenderingMode="software"
       maskElement={
         <MaterialCommunityIcons name={glyph} size={size} color="#000" style={{ textAlign: 'center' }} />
       }

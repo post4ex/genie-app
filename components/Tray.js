@@ -106,5 +106,7 @@ const styles = StyleSheet.create({
       : { shadowColor: '#0f172a', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } }),
   },
   floatingChipText: { fontSize: 13, fontWeight: '900', letterSpacing: 0.3 },
-  floatingHeaderRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 10 },
+  // Clearance below the floating title chip (top: -13, ~30px tall) so the
+  // header action icons never collide with the chip.
+  floatingHeaderRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingTop: 8, marginBottom: 10 },
 });

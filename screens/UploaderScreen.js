@@ -4,7 +4,7 @@ import {
   Text, TextInput, TouchableOpacity, View, useWindowDimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import { File as FSFile, Paths } from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as DocumentPicker from 'expo-document-picker';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
@@ -34,7 +34,7 @@ const assetData = async (asset) => {
   if (asset?.base64) return `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
   if (asset?.uri && Platform.OS !== 'web') {
     try {
-      const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+      const base64 = await new FSFile(asset.uri).base64();
       return `data:${asset.mimeType || 'image/jpeg'};base64,${base64}`;
     } catch (_) {}
   }
@@ -48,9 +48,9 @@ const dataUrlToCacheUri = async (dataUrl) => {
   // raw pdf fallback, jpeg photos) so image tools never see a mismatched file.
   const mime = String(dataUrl).split(';')[0].split(':')[1] || 'image/jpeg';
   const ext = mime === 'image/png' ? 'png' : mime === 'application/pdf' ? 'pdf' : 'jpg';
-  const uri = `${FileSystem.cacheDirectory}genie-uploader-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-  await FileSystem.writeAsStringAsync(uri, encoded, { encoding: FileSystem.EncodingType.Base64 });
-  return uri;
+  const file = new FSFile(Paths.cache, `genie-uploader-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
+  file.write(encoded, { encoding: 'base64' });
+  return file.uri;
 };
 
 // Web applyEnhancements() parity — the exact CSS filter string used for both
@@ -1051,11 +1051,11 @@ export default function UploaderScreen({
           if (pages && pages.length) {
             for (const pageUri of pages) {
               if (next.length >= MAX_FILES) break;
-              const base64 = await FileSystem.readAsStringAsync(pageUri, { encoding: FileSystem.EncodingType.Base64 });
+              const base64 = await new FSFile(pageUri).base64();
               if (base64) next.push(`data:image/png;base64,${base64}`);
             }
           } else {
-            const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+            const base64 = await new FSFile(asset.uri).base64();
             if (base64) next.push(`data:application/pdf;base64,${base64}`);
           }
         } else {
@@ -1283,7 +1283,7 @@ export default function UploaderScreen({
     } while (quality >= 0.1);
     if (result.base64) return `data:image/jpeg;base64,${result.base64}`;
     if (result.uri) {
-      const base64 = await FileSystem.readAsStringAsync(result.uri, { encoding: FileSystem.EncodingType.Base64 });
+      const base64 = await new FSFile(result.uri).base64();
       if (base64) return `data:image/jpeg;base64,${base64}`;
       return result.uri;
     }
@@ -1436,7 +1436,7 @@ export default function UploaderScreen({
 
   const nativeImagesAsDataUrls = async (images) => Promise.all(images.map(async (image) => {
     if (String(image).startsWith('data:')) return image;
-    const base64 = await FileSystem.readAsStringAsync(image, { encoding: FileSystem.EncodingType.Base64 });
+    const base64 = await new FSFile(image).base64();
     return `data:image/png;base64,${base64}`;
   }));
 
@@ -1483,7 +1483,7 @@ export default function UploaderScreen({
             const printableImages = await nativeImagesAsDataUrls(images);
             const html = `<html><head><style>@page{size:A4;margin:10mm}html,body{margin:0;padding:0} .page{page-break-after:always;width:190mm;height:277mm;display:flex;align-items:flex-start;justify-content:center;overflow:hidden}.page:last-child{page-break-after:auto}img{max-width:190mm;max-height:277mm;object-fit:contain}</style></head><body>${printableImages.map((image) => `<div class="page"><img src="${image}" /></div>`).join('')}</body></html>`;
             const pdf = await Print.printToFileAsync({ html, width: 794, height: 1123, margins: { left: 38, right: 38, top: 38, bottom: 38 } });
-            fileData = await FileSystem.readAsStringAsync(pdf.uri, { encoding: FileSystem.EncodingType.Base64 });
+            fileData = await new FSFile(pdf.uri).base64();
             contentType = 'application/pdf';
           }
           if (!fileData) throw new Error('The selected file could not be converted to base64.');

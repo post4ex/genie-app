@@ -155,6 +155,10 @@ export default function PincodeScreen() {
             maxLength={maxLength}
             inputMode={searchType === 'pincode' ? 'numeric' : 'text'}
             autoCapitalize={searchType === 'city' ? 'words' : 'none'}
+            autoComplete="off"
+            textContentType="none"
+            importantForAutofill="no"
+            autoCorrect={false}
             returnKeyType="search"
             onSubmitEditing={handleSearch}
             style={styles.input}

@@ -175,7 +175,18 @@ export default function Button({
   // Tint chip mirrors the Shipment-Details buttons exactly: content-sized
   // (padding 5 around the 14px glyph → 24px), radius 6, 1px border.
   const chipBox = isTint
-    ? { padding: 5, borderRadius: 6, borderWidth: 1, borderColor, backgroundColor: bgColor }
+    ? {
+        minWidth: iconOnly ? s.height : undefined,
+        minHeight: s.height,
+        paddingHorizontal: iconOnly ? 6 : 8,
+        paddingVertical: 4,
+        borderRadius: radius || 8,
+        borderWidth: 1,
+        borderColor,
+        backgroundColor: bgColor,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }
     : { height: s.height, width: iconOnly ? s.height : undefined, borderRadius: radius, borderWidth: isTint ? 1 : 1.5, borderColor, backgroundColor: bgColor };
 
   const body = v.chip ? (
@@ -238,7 +249,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    flex: 1,
   },
   label: {
     fontWeight: '700',

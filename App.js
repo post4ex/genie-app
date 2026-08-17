@@ -38,12 +38,14 @@ import { configureNativeNotifications, presentNativeNotification } from './core/
 
 import Header from './components/Header';
 import BottomMenuSheet from './components/BottomMenuSheet';
+import { ToastProvider } from './components/Toast';
 
 import LoginScreen from './screens/LoginScreen';
 import DashboardScreen from './screens/DashboardScreen';
 import OrdersScreen from './screens/OrdersScreen';
 import BookOrderScreen from './screens/BookOrderScreen';
 import TrackingScreen from './screens/TrackingScreen';
+import TrackModal from './components/TrackModal';
 import PincodeScreen from './screens/PincodeScreen';
 import CalculatorScreen from './screens/CalculatorScreen';
 import ZipFinderScreen from './screens/ZipFinderScreen';
@@ -164,6 +166,7 @@ function MainApp() {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifModalVisible, setNotifModalVisible] = useState(false);
+  const [trackModalVisible, setTrackModalVisible] = useState(false);
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | streaming | live | reconnecting
 
   // ── 1. Startup: Restore Saved Session & Hydrate Local Data ───────────────
@@ -1052,7 +1055,7 @@ function MainApp() {
       <StatusBar style="dark" />
       <Header
         user={user}
-        onTrack={() => setActiveTab('track')}
+        onTrack={() => setTrackModalVisible(true)}
         onRefresh={onRefresh}
         onNotif={() => setNotifModalVisible(true)}
         onLogout={handleLogout}
@@ -1070,6 +1073,15 @@ function MainApp() {
         onDismiss={clearNotif}
         onClearAll={clearAllNotifs}
         canDismissCritical={(ROLE_LEVELS[user?.ROLE] || 0) >= (ROLE_LEVELS.ADMIN || 90)}
+      />
+
+      <TrackModal
+        visible={trackModalVisible}
+        onClose={() => setTrackModalVisible(false)}
+        token={token}
+        apiBase={API_BASE}
+        orders={orders}
+        shipmentsMap={shipmentsMap}
       />
 
       <View style={styles.mainContent}>
@@ -1221,7 +1233,9 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <MainApp />
+      <ToastProvider>
+        <MainApp />
+      </ToastProvider>
     </SafeAreaProvider>
   );
 }

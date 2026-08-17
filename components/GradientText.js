@@ -13,7 +13,11 @@ import MaskedView from '@react-native-masked-view/masked-view';
 
 export default function GradientText({ colors, start, end, style, children, ...rest }) {
   return (
-    <MaskedView maskElement={<Text style={style} {...rest}>{children}</Text>}>
+    // androidRenderingMode="software": RNCMaskedView defaults to a HARDWARE
+    // layer, which cannot be drawn into the software canvas react-native-view-shot
+    // uses — captures of any view containing gradient text would fail with
+    // "Failed to capture view snapshot" on Android.
+    <MaskedView androidRenderingMode="software" maskElement={<Text style={style} {...rest}>{children}</Text>}>
       <LinearGradient
         colors={colors}
         start={start || { x: 0, y: 0 }}

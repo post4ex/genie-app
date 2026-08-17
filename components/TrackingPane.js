@@ -3,8 +3,8 @@
 // shell with floating gradient title chip, sparkle border, tinted action
 // buttons, GradientText section headers and the shared hairline detail table.
 
-import React, { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useMemo, useRef, useState } from 'react';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Tray from './Tray';
 import Button from './Button';
@@ -12,6 +12,9 @@ import GradientText from './GradientText';
 import { GradientGlyph } from './icons';
 import { accentSparkle } from './Tile';
 import { DETAIL_TABLE_STYLES } from './ShipmentDetailsPane';
+import { shareViewAsImage } from '../utils/capture';
+import { useToast } from './Toast';
+import { fmtDate } from '../utils/formatIST';
 
 // Pane identity gradients (match the floating title chip) — violet → fuchsia
 // neon only; no blue/cyan anywhere in this pane.
@@ -71,9 +74,10 @@ function defaultInfoRows(shipment) {
     { l: 'AWB Number', v: shipment?.awb || shipment?.awb_number || shipment?.carrier_awb },
     { l: 'Origin', v: shipment?.carrier_origin || shipment?.origin },
     { l: 'Destination', v: shipment?.carrier_destination || shipment?.destination },
-    { l: 'Booked On', v: shipment?.booked_date || shipment?.order_date },
-    { l: 'Weight', v: shipment?.weight ? `${shipment.weight} kg · ${shipment.pieces || 1} pcs` : null },
-  ].filter(row => row.v !== null && row.v !== undefined && row.v !== '');
+    // Format the booked date for display (timestamps → readable date) so the
+    // hero chip never shows a raw epoch number or mangled string.
+    { l: 'Booked Date', v: fmtDate(shipment?.booked_date || shipment?.order_date, 'date') },
+  ].filter(row => row.v !== null && row.v !== undefined && row.v !== '' && row.v !== 'N/A');
 }
 
 // Light holographic status strip — frosted card, gradient badge with a soft
@@ -238,8 +242,24 @@ export default function TrackingPane({
   const status = STATUS_CONFIG[normalizeState(shipment.state || shipment.STATE || shipment.status)] || STATUS_CONFIG.pending;
   const sortedMovements = useMemo(() => sortMovements(movements), [movements]);
   const rows = infoRows || defaultInfoRows(shipment);
+  const paneRef = useRef(null);
+  const showToast = useToast();
+
+  // Capture this whole pane card as a PNG and share/download it. Uses the
+  // global utils/capture.js (view-shot + expo-sharing): native opens the OS
+  // share sheet, web downloads the image.
+  const shareAsImage = async () => {
+    if (!paneRef.current) return;
+    try {
+      await shareViewAsImage(paneRef, { title: `${title} - ${status.label}` });
+      if (Platform.OS === 'web') showToast({ title: 'Image ready', msg: 'PNG downloaded', tone: 'success' });
+    } catch (e) {
+      showToast({ title: 'Share failed', msg: e.message, tone: 'error' });
+    }
+  };
 
   return (
+    <View ref={paneRef} collapsable={false} style={styles.shareWrap}>
     <Tray
       title={`${title} - ${status.label}`}
       colors={PANE_GRAD}
@@ -249,6 +269,7 @@ export default function TrackingPane({
       style={[styles.tray, style]}
       right={
         <View style={styles.actionRow}>
+          <Button size="xs" variant="tint" iconOnly icon="shareImage" onPress={shareAsImage} accessibilityLabel="Share as image" />
           {onRefresh ? <Button size="xs" variant="tint" iconOnly icon="refresh" onPress={onRefresh} accessibilityLabel="Refresh live tracking" /> : null}
           {onMail ? <Button size="xs" variant="tint" iconOnly icon="envelope" onPress={onMail} accessibilityLabel="Email tracking" /> : null}
           {onWhatsApp ? <Button size="xs" variant="tint" iconOnly icon="whatsapp" onPress={onWhatsApp} accessibilityLabel="WhatsApp tracking" /> : null}
@@ -346,12 +367,15 @@ export default function TrackingPane({
         <Timeline movements={sortedMovements} splitByType={splitByType} title={historyTitle} />
       </View>
     </Tray>
+    </View>
   );
 }
 
 export { normalizeState, sortMovements };
 
 const styles = StyleSheet.create({
+  // Capture wrapper — invisible, just anchors the view-shot ref for sharing.
+  shareWrap: { alignSelf: 'stretch' },
   tray: { marginTop: 12 },
   actionRow: { flexDirection: 'row', flexWrap: 'nowrap', gap: 4, justifyContent: 'flex-end', maxWidth: 180 },
 
