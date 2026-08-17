@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { COLORS } from '../styles/theme';
 import Tray from '../components/Tray';
+import TrackingPane from '../components/TrackingPane';
 
 const CUSTOM_CARRIERS = [
   { value: 'jetline',    label: 'Jetline'         },
@@ -48,7 +49,7 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
   const subCarrierList = carrier === 'tc' ? TC_CARRIERS : carrier === '17track' ? T17_CARRIERS : [];
 
   // ── Track Shipment ──────────────────────────────────────────────────────────
-  const doTrack = async () => {
+  const doTrack = async (forceLive = false) => {
     const raw = trackRef.trim().replace(/[^a-zA-Z0-9\-\/]/g, '');
     if (!raw || raw.length < 4) { setError('Enter at least 4 characters.'); return; }
     setLoading(true); setTrackResult(null); setPincodeResult(null); setError('');
@@ -67,7 +68,7 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
         } else {
           url = `${apiBase}/api/track/custom/${carrier}?awb=${encodeURIComponent(raw)}`;
         }
-      } else if (activeTab === 'live') {
+      } else if (activeTab === 'live' || forceLive) {
         url = `${apiBase}/api/track/live?${refOrAwb(raw)}`;
       } else {
         // default
@@ -227,7 +228,7 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
             autoCapitalize="none"
             value={trackRef}
             onChangeText={setTrackRef}
-            onSubmitEditing={doTrack}
+            onSubmitEditing={() => doTrack()}
           />
           {activeTab === 'live' && (
             <Text style={styles.modeHint}>🔴 Fetches live data directly from the carrier API</Text>
@@ -235,7 +236,7 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
           {activeTab === 'custom' && (
             <Text style={styles.modeHint}>⚙️ Custom carrier — direct API call to selected carrier</Text>
           )}
-          <TouchableOpacity style={styles.trackBtn} onPress={doTrack} disabled={loading}>
+          <TouchableOpacity style={styles.trackBtn} onPress={() => doTrack()} disabled={loading}>
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.trackBtnText}>TRACK SHIPMENT</Text>}
           </TouchableOpacity>
         </Tray>
@@ -249,7 +250,13 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
       )}
 
       {/* ── Tracking Result ── */}
-      {trackResult && <TrackResult result={trackResult} />}
+      {trackResult && (
+        <TrackResult
+          result={trackResult}
+          loading={loading}
+          onRefresh={() => doTrack(true)}
+        />
+      )}
 
       {/* ── Pincode Result ── */}
       {pincodeResult && <PincodeResult data={pincodeResult} />}
@@ -258,115 +265,24 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
 }
 
 // ── Tracking Result Component ─────────────────────────────────────────────────
-function TrackResult({ result }) {
-  let shipment, rawMovements;
-  if (result.shipment !== undefined) {
-    shipment = result.shipment || {};
-    rawMovements = result.movements || [];
-  } else {
-    const inner = result.data || result;
-    shipment = inner.shipment || (inner.movements ? inner : {});
-    rawMovements = inner.movements || [];
-  }
-
-  // Separate TRACK and SYSTEM movements
-  const trackMovs = [];
-  const systemMovs = [];
-
-  rawMovements.forEach(m => {
-    const type = String(m.move_type || m.MOVE_TYPE || 'TRACK').toUpperCase();
-    if (type === 'SYSTEM') {
-      systemMovs.push(m);
-    } else {
-      trackMovs.push(m);
-    }
-  });
-
-  const getRN = m => {
-    const rn = m.row_number !== undefined ? m.row_number : m.ROW_NUMBER;
-    return (rn !== null && rn !== undefined) ? Number(rn) : 0;
-  };
-
-  // Sort BOTH TRACK and SYSTEM descending by row_number (max row on top down to 1)
-  trackMovs.sort((a, b) => getRN(b) - getRN(a));
-  systemMovs.sort((a, b) => getRN(b) - getRN(a));
-
-  const rawState = (shipment.state || shipment.STATE || 'pending').toLowerCase();
-  const sc = STATE_CONFIG[rawState] || STATE_CONFIG.pending;
-
-  const infoItems = [
-    { label: 'Reference',   value: shipment.reference || shipment.REFERENCE },
-    { label: 'AWB No.',     value: shipment.awb || shipment.carrier_awb },
-    { label: 'Origin',      value: shipment.carrier_origin || shipment.origin },
-    { label: 'Destination', value: shipment.carrier_destination || shipment.destination },
-    { label: 'Booked On',   value: shipment.booked_date || shipment.order_date },
-    { label: 'Weight',      value: shipment.weight ? `${shipment.weight} kg · ${shipment.pieces || 1} pcs` : null },
-  ].filter(i => i.value);
+function TrackResult({ result, loading = false, onRefresh }) {
+  const inner = result?.data || result || {};
+  const shipment = result?.shipment !== undefined
+    ? result.shipment || {}
+    : inner.shipment || (inner.movements ? inner : {});
+  const movements = result?.shipment !== undefined
+    ? result.movements || []
+    : inner.movements || [];
 
   return (
-    <View style={{ marginTop: 12 }}>
-      {/* Info Grid */}
-      <View style={styles.infoGrid}>
-        {infoItems.map((item, i) => (
-          <View key={i} style={styles.infoCard}>
-            <Text style={styles.infoLabel}>{item.label}</Text>
-            <Text style={styles.infoValue} numberOfLines={1}>{item.value}</Text>
-          </View>
-        ))}
-      </View>
-
-      {/* Status Banner */}
-      <View style={[styles.statusBanner, { backgroundColor: sc.bg }]}>
-        <Text style={styles.statusIcon}>{sc.icon}</Text>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.statusLabel}>{sc.label}</Text>
-          {(shipment.carrier_name || shipment.carrier) ? (
-            <Text style={styles.statusCarrier}>{shipment.carrier_name || shipment.carrier}</Text>
-          ) : null}
-          {shipment.status_raw ? <Text style={styles.statusRaw}>{shipment.status_raw}</Text> : null}
-        </View>
-      </View>
-
-      {/* ── Room 1: Courier Tracking Scans ── */}
-      <Text style={styles.sectionHeader}>📍 COURIER TRACKING SCANS ({trackMovs.length})</Text>
-      {trackMovs.length > 0 ? trackMovs.map((m, i) => (
-        <View key={i} style={[styles.movCard, i === 0 ? styles.movCardLatest : styles.movCardPast]}>
-          <View style={styles.movHeader}>
-            <Text style={[styles.movAct, i === 0 && styles.movActLatest, { flex: 1 }]} numberOfLines={2}>
-              {m.activity || m.ACTIVITY || ''}
-            </Text>
-            <Text style={styles.movTime}>{m.date || m.DATE || ''} {m.time || m.TIME || ''}</Text>
-          </View>
-          {(m.location || m.LOCATION) ? (
-            <Text style={styles.movLoc}>📍 {m.location || m.LOCATION}</Text>
-          ) : null}
-        </View>
-      )) : (
-        <View style={[styles.emptyBox, { marginBottom: 16 }]}>
-          <Text style={styles.emptyText}>No courier tracking scans recorded yet.</Text>
-        </View>
-      )}
-
-      {/* ── Room 2: System & Booking Events ── */}
-      <Text style={[styles.sectionHeader, { marginTop: 12 }]}>⚙️ SYSTEM & BOOKING EVENTS ({systemMovs.length})</Text>
-      {systemMovs.length > 0 ? systemMovs.map((m, i) => (
-        <View key={i} style={[styles.movCard, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
-          <View style={styles.movHeader}>
-            <Text style={[styles.movAct, { color: '#166534', flex: 1 }]} numberOfLines={2}>
-              {m.activity || m.ACTIVITY || ''}
-            </Text>
-            <Text style={styles.movTime}>{m.date || m.DATE || ''} {m.time || m.TIME || ''}</Text>
-          </View>
-          {(m.location || m.LOCATION) ? (
-            <Text style={styles.movLoc}>📍 {m.location || m.LOCATION}</Text>
-          ) : null}
-        </View>
-      )) : (
-        <View style={styles.emptyBox}>
-          <Text style={styles.emptyText}>No system events recorded.</Text>
-        </View>
-      )}
-    </View>
+    <TrackingPane
+      shipment={shipment}
+      movements={movements}
+      splitByType
+      title="Tracking and History"
+      loading={loading}
+      onRefresh={onRefresh}
+    />
   );
 }
 
@@ -615,6 +531,7 @@ function normaliseTracking(data) {
   if (data.shipment !== undefined) return data;
   const inner = data.data || data;
   return {
+    ...data,
     shipment: inner.shipment || (inner.movements ? inner : {}),
     movements: inner.movements || [],
   };

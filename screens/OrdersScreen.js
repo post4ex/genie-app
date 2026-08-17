@@ -23,7 +23,8 @@ import Icon, { GradientGlyph, GradientIcon } from '../components/icons';
 import GradientText from '../components/GradientText';
 import Tray from '../components/Tray';
 import DocCenterPane from '../components/DocCenterPane';
-import ShipmentDetailsPane, { DETAIL_TABLE_STYLES } from '../components/ShipmentDetailsPane';
+import ShipmentDetailsPane from '../components/ShipmentDetailsPane';
+import TrackingPane from '../components/TrackingPane';
 import PartiesPane from '../components/PartiesPane';
 import PackagingsPane from '../components/PackagingsPane';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -1214,8 +1215,6 @@ export default function OrdersScreen({
     const modeName = (typeof modeRecord === 'string' ? modeRecord : (modeRecord?.MODE || modeRecord?.NAME)) || o.MODE || 'N/A';
 
     const formattedOrderDate   = fmtDate(o.ORDER_DATE, 'date');
-    const formattedTransitDate = fmtDate(o.TRANSIT_DATE, 'date');
-    const formattedInvoiceDate = fmtDate(o.INVOICE_DATE, 'date');
 
     const products  = productsMap[o.REFERENCE] || o.products || [];
     const boxes     = multiboxMap[o.REFERENCE] || o.multibox || [];
@@ -1359,159 +1358,25 @@ export default function OrdersScreen({
           resolveUrl={resolveFileUrl}
         />
 
-        {/* ── CARD 6: Tracking Status (Implanted API call, AT END) ── */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={styles.cardTitle}>Tracking Status</Text>
-              <View style={[styles.stateBadge, { backgroundColor: stateCfg.bg }]}>
-                <Text style={[styles.stateBadgeText, { color: stateCfg.color }]}>{stateCfg.label}</Text>
-              </View>
-            </View>
-            <View style={styles.actionIconGroup}>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => mailShipmentTracking(o)} title="Mail">
-                <Icon name="envelope" size={14} color="#64748b" chunky />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.docHeaderActionBtn, { backgroundColor: '#dcfce7' }]} onPress={() => waShipmentTracking(o)} title="WhatsApp">
-                <Icon name="whatsapp" size={14} color="#25D366" chunky />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.docHeaderActionBtn} onPress={() => fetchTrackingHistory(o.REFERENCE, true)} title="Refresh Live Tracking">
-                <Icon name="refresh" size={14} color="#64748b" chunky />
-              </TouchableOpacity>
-              {shipment.pod_image ? (
-                <TouchableOpacity
-                  style={[styles.docHeaderActionBtn, { backgroundColor: '#e0e7ff' }]}
-                  onPress={() => openUploadViewer(shipment.pod_image, `POD — ${o.AWB_NUMBER || o.REFERENCE}`)}
-                  title="Show POD Image"
-                >
-                  <Icon name="eye" size={14} color="#4f46e5" chunky />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          </View>
-
-          {trackingLoading && (
-            <View style={{ paddingVertical: 10, alignItems: 'center' }}>
-              <ActivityIndicator size="small" color={COLORS.primary} />
-              <Text style={styles.loadingText}>Fetching live tracking...</Text>
-            </View>
-          )}
-
-          <View style={DETAIL_TABLE_STYLES.grid}>
-            <View style={DETAIL_TABLE_STYLES.row}>
-              <View style={DETAIL_TABLE_STYLES.labelBox}>
-                <Text style={DETAIL_TABLE_STYLES.labelText}>AWB Number</Text>
-              </View>
-              <View style={DETAIL_TABLE_STYLES.valueBox}>
-                <Text style={DETAIL_TABLE_STYLES.valueText}>{o.AWB_NUMBER || shipment.awb_number || 'N/A'}</Text>
-              </View>
-            </View>
-            <View style={DETAIL_TABLE_STYLES.row}>
-              <View style={DETAIL_TABLE_STYLES.labelBox}>
-                <Text style={DETAIL_TABLE_STYLES.labelText}>Order Date</Text>
-              </View>
-              <View style={DETAIL_TABLE_STYLES.valueBox}>
-                <Text style={DETAIL_TABLE_STYLES.valueText}>{formattedOrderDate}</Text>
-              </View>
-            </View>
-            <View style={DETAIL_TABLE_STYLES.row}>
-              <View style={DETAIL_TABLE_STYLES.labelBox}>
-                <Text style={DETAIL_TABLE_STYLES.labelText}>Transit Date</Text>
-              </View>
-              <View style={DETAIL_TABLE_STYLES.valueBox}>
-                <Text style={DETAIL_TABLE_STYLES.valueText}>{formattedTransitDate}</Text>
-              </View>
-            </View>
-            <View style={DETAIL_TABLE_STYLES.row}>
-              <View style={DETAIL_TABLE_STYLES.labelBox}>
-                <Text style={DETAIL_TABLE_STYLES.labelText}>Doc Date</Text>
-              </View>
-              <View style={DETAIL_TABLE_STYLES.valueBox}>
-                <Text style={DETAIL_TABLE_STYLES.valueText}>{formattedInvoiceDate}</Text>
-              </View>
-            </View>
-
-            {shipment.status_raw ? (
-              <View style={[DETAIL_TABLE_STYLES.row, { width: '100%' }]}>
-                <View style={[DETAIL_TABLE_STYLES.labelBox, { width: '25%' }]}>
-                  <Text style={DETAIL_TABLE_STYLES.labelText}>Status Raw</Text>
-                </View>
-                <View style={[DETAIL_TABLE_STYLES.valueBox, { width: '75%' }]}>
-                  <Text style={DETAIL_TABLE_STYLES.valueText}>{shipment.status_raw}</Text>
-                </View>
-              </View>
-            ) : null}
-
-            {shipment.carrier_origin ? (
-              <View style={DETAIL_TABLE_STYLES.row}>
-                <View style={DETAIL_TABLE_STYLES.labelBox}>
-                  <Text style={DETAIL_TABLE_STYLES.labelText}>Origin</Text>
-                </View>
-                <View style={DETAIL_TABLE_STYLES.valueBox}>
-                  <Text style={DETAIL_TABLE_STYLES.valueText}>{shipment.carrier_origin}</Text>
-                </View>
-              </View>
-            ) : null}
-
-            {shipment.carrier_destination ? (
-              <View style={DETAIL_TABLE_STYLES.row}>
-                <View style={DETAIL_TABLE_STYLES.labelBox}>
-                  <Text style={DETAIL_TABLE_STYLES.labelText}>Destination</Text>
-                </View>
-                <View style={DETAIL_TABLE_STYLES.valueBox}>
-                  <Text style={DETAIL_TABLE_STYLES.valueText}>{shipment.carrier_destination}</Text>
-                </View>
-              </View>
-            ) : null}
-
-            {shipment.booked_date ? (
-              <View style={DETAIL_TABLE_STYLES.row}>
-                <View style={DETAIL_TABLE_STYLES.labelBox}>
-                  <Text style={DETAIL_TABLE_STYLES.labelText}>Booked</Text>
-                </View>
-                <View style={DETAIL_TABLE_STYLES.valueBox}>
-                  <Text style={DETAIL_TABLE_STYLES.valueText}>{shipment.booked_date}</Text>
-                </View>
-              </View>
-            ) : null}
-
-            {shipment.additional_info ? (
-              <View style={[DETAIL_TABLE_STYLES.row, { width: '100%' }]}>
-                <View style={[DETAIL_TABLE_STYLES.labelBox, { width: '25%' }]}>
-                  <Text style={DETAIL_TABLE_STYLES.labelText}>Info</Text>
-                </View>
-                <View style={[DETAIL_TABLE_STYLES.valueBox, { width: '75%' }]}>
-                  <Text style={DETAIL_TABLE_STYLES.valueText}>{shipment.additional_info}</Text>
-                </View>
-              </View>
-            ) : null}
-          </View>
-        </View>
-
-        {/* ── CARD 7: Tracking History / Movements (Implanted API call, AT END) ── */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>Tracking History</Text>
-          </View>
-
-          {movements.length === 0 ? (
-            <Text style={styles.noSubDataText}>
-              {trackingLoading ? 'Loading movement history...' : 'No movement history available.'}
-            </Text>
-          ) : (
-            movements.map((m, mi) => (
-              <View key={mi} style={styles.movementItemCard}>
-                <Text style={styles.movementActivityText}>{m.activity || m.STATUS_REMARK || 'N/A'}</Text>
-                <Text style={styles.movementDateText}>
-                  {[m.date || m.DATE, m.time || m.TIME].filter(Boolean).join(' ')}
-                </Text>
-                {(m.location || m.LOCATION) ? (
-                  <Text style={styles.movementLocationText}>📍 {m.location || m.LOCATION}</Text>
-                ) : null}
-              </View>
-            ))
-          )}
-        </View>
+        {/* ── CARD 6/7: Tracking Status + History (centralized TrackingPane) ── */}
+        <TrackingPane
+          shipment={shipment}
+          movements={movements}
+          title="Tracking and History"
+          infoRows={[
+            { l: 'AWB Number', v: o.AWB_NUMBER || shipment.awb_number || 'N/A' },
+            { l: 'Order Date', v: formattedOrderDate },
+            { l: 'Origin', v: shipment.carrier_origin },
+            { l: 'Destination', v: shipment.carrier_destination },
+            { l: 'Info', v: shipment.additional_info, full: true },
+          ].filter(row => row.v !== null && row.v !== undefined && row.v !== '')}
+          onMail={() => mailShipmentTracking(o)}
+          onWhatsApp={() => waShipmentTracking(o)}
+          onRefresh={() => fetchTrackingHistory(o.REFERENCE, true)}
+          onViewPod={shipment.pod_image
+            ? () => openUploadViewer(shipment.pod_image, `POD — ${o.AWB_NUMBER || o.REFERENCE}`)
+            : null}
+        />
 
         {/* ── Mini-uploader adapter (web mini-uploader.setReference parity) ── */}
         <Modal

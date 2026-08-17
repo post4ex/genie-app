@@ -1,5 +1,4 @@
-// components/PackagingsPane.js
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ActivityIndicator, Image, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Tray from './Tray';
 import Button from './Button';
@@ -43,83 +42,145 @@ function uploadDetail(up) {
 function UploadPreview({ uri, isPdf, title }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [pdfSrc, setPdfSrc] = useState(uri);
+  const [pdfSrc, setPdfSrc] = useState(null);
 
-  // The API serves files with `Content-Disposition: attachment`, which makes a
-  // raw iframe/WebView download instead of render. So fetch the PDF as a blob
-  // (web) or a local file (native) and preview THAT. `uri` may be absolute
-  // (https://…) or a relative path (/api/file/…) — both need the blob load.
-  const isRemote = uri && (/^https?:/i.test(uri) || uri.startsWith('/'));
-  const needsLoad = isPdf && isRemote && pdfSrc === uri;
-  if (needsLoad) {
+  useEffect(() => {
+    let isMounted = true;
+    let createdBlobUrl = null;
+
+    setLoading(true);
+    setError(false);
+    setPdfSrc(null);
+
+    if (!uri) {
+      setLoading(false);
+      return;
+    }
+
+    if (!isPdf) {
+      setLoading(false);
+      return;
+    }
+
     (async () => {
       try {
         if (Platform.OS === 'web') {
+          if (uri.startsWith('blob:') || uri.startsWith('data:')) {
+            if (isMounted) {
+              setPdfSrc(uri);
+              setLoading(false);
+            }
+            return;
+          }
+
+          // Fetch as blob to prevent Content-Disposition: attachment from forcing download in iframe
           const res = await fetch(uri);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const blob = await res.blob();
-          setPdfSrc(URL.createObjectURL(blob));
+          createdBlobUrl = URL.createObjectURL(blob);
+          if (isMounted) {
+            setPdfSrc(createdBlobUrl);
+            setLoading(false);
+          }
         } else {
-          const target = `${FileSystem.cacheDirectory}preview_${Date.now()}.pdf`;
-          await FileSystem.downloadAsync(uri, target);
-          setPdfSrc(target);
+          // Native Platforms (iOS & Android)
+          if (uri.startsWith('data:') || uri.startsWith('file:')) {
+            if (isMounted) {
+              setPdfSrc(uri);
+              setLoading(false);
+            }
+            return;
+          }
+
+          if (/^https?:/i.test(uri)) {
+            if (Platform.OS === 'android') {
+              // Android WebView cannot render raw PDF URLs natively; Google Docs viewer renders inline
+              const gviewUrl = `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(uri)}`;
+              if (isMounted) {
+                setPdfSrc(gviewUrl);
+                setLoading(false);
+              }
+            } else {
+              // iOS WebView renders PDF URLs directly
+              if (isMounted) {
+                setPdfSrc(uri);
+                setLoading(false);
+              }
+            }
+          } else {
+            // Download to cache for local file access
+            try {
+              const target = `${FileSystem.cacheDirectory}preview_${Date.now()}.pdf`;
+              const downloadRes = await FileSystem.downloadAsync(uri, target);
+              if (isMounted) {
+                setPdfSrc(downloadRes.uri);
+                setLoading(false);
+              }
+            } catch (dlErr) {
+              if (isMounted) {
+                setPdfSrc(uri);
+                setLoading(false);
+              }
+            }
+          }
         }
-        setLoading(false);
       } catch (e) {
-        setError(true);
-        setLoading(false);
+        console.warn('[UploadPreview] PDF load error:', e);
+        if (isMounted) {
+          setPdfSrc(uri);
+          setError(false); // allow fallback render or iframe try
+          setLoading(false);
+        }
       }
     })();
-  }
+
+    return () => {
+      isMounted = false;
+      if (createdBlobUrl && typeof URL !== 'undefined' && URL.revokeObjectURL) {
+        URL.revokeObjectURL(createdBlobUrl);
+      }
+    };
+  }, [uri, isPdf]);
 
   if (!uri) return null;
 
   if (isPdf) {
-    // Only mount the frame once the blob/file is ready — mounting it with the
-    // raw attachment URL triggers a download before the fetch completes.
-    const ready = pdfSrc !== uri || !isRemote;
-    if (Platform.OS === 'web') {
-      return (
-        <View style={styles.previewBox}>
-          {error ? (
-            <View style={styles.previewLoading}>
-              <Text style={styles.previewFallback}>Failed to load preview</Text>
-            </View>
-          ) : !ready ? (
-            <View style={styles.previewLoading}>
-              <ActivityIndicator size="small" color="#10b981" />
-            </View>
-          ) : (
-            React.createElement('iframe', {
-              title,
-              src: pdfSrc,
-              style: { width: '100%', height: '100%', border: '0', backgroundColor: '#ffffff' },
-            })
-          )}
-        </View>
-      );
-    }
     return (
       <View style={styles.previewBox}>
-        {error ? (
-          <View style={styles.previewLoading}>
-            <Text style={styles.previewFallback}>Failed to load preview</Text>
-          </View>
-        ) : !ready ? (
+        {loading ? (
           <View style={styles.previewLoading}>
             <ActivityIndicator size="small" color="#10b981" />
           </View>
-        ) : WebView ? (
+        ) : error ? (
+          <View style={styles.previewLoading}>
+            <Icon name="file-document" size={32} color="#ef4444" />
+            <Text style={[styles.previewFallback, { marginTop: 8 }]}>Unable to load PDF preview</Text>
+          </View>
+        ) : Platform.OS === 'web' ? (
+          pdfSrc ? (
+            React.createElement('iframe', {
+              title: title || 'PDF Preview',
+              src: pdfSrc,
+              style: { width: '100%', height: '100%', border: '0', backgroundColor: '#ffffff' },
+            })
+          ) : null
+        ) : WebView && pdfSrc ? (
           <WebView
             source={{ uri: pdfSrc }}
             style={{ flex: 1, backgroundColor: '#ffffff' }}
             originWhitelist={['*']}
             allowFileAccess={true}
+            allowFileAccessFromFileURLs={true}
+            allowUniversalAccessFromFileURLs={true}
             scalesPageToFit={true}
             onLoadEnd={() => setLoading(false)}
-            onError={() => setLoading(false)}
+            onError={() => setError(true)}
           />
         ) : (
-          <Text style={styles.previewFallback}>PDF — tap Download to view</Text>
+          <View style={styles.previewLoading}>
+            <Icon name="file-document" size={32} color="#10b981" />
+            <Text style={[styles.previewFallback, { marginTop: 8 }]}>PDF File</Text>
+          </View>
         )}
       </View>
     );

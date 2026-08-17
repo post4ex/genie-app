@@ -1,0 +1,4 @@
+code serve-web --host 0.0.0.0 --port 8000 --without-connection-token --accept-server-license-terms
+cd /home/arun/POST4EX/GENIE_REACT && REACT_NATIVE_PACKAGER_HOSTNAME=tomarspc.local npx expo start --host lan --clear
+REACT_NATIVE_PACKAGER_HOSTNAME=tomarspc.local npx -w /home/arun/POST4EX/GENIE_REACT expo start --host lan --clear
+cd /home/arun/POST4EX/GENIE_REACT && npm start

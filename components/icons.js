@@ -235,6 +235,9 @@ export const MCI_GLYPHS = {
   forward: 'arrow-right',
   search: 'magnify',
   menu: 'menu',
+  // Tracking pane glyphs — MCI names for the FA6-semantic keys
+  scan: 'barcode-scan',
+  gear: 'cog',
 };
 
 // Default gradient used when a name has no palette entry.
