@@ -1458,6 +1458,7 @@ return (
       token={token}
       apiBase={apiBase}
       role={role}
+      b2b2cMap={b2b2cMap}
       onSuccess={(ref, statusRaw) => {
         if (onRefresh) onRefresh();
       }}

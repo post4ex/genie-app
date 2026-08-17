@@ -1150,6 +1150,9 @@ function MainApp() {
         {activeTab === 'status' && (
           <StatusUpdateScreen
             orders={orders}
+            b2b2cMap={b2b2cMap}
+            modesMap={modesMap}
+            shipmentsMap={shipmentsMap}
             token={token}
             apiBase={API_BASE}
             role={user?.ROLE || 'STAFF'}

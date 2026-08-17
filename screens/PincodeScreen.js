@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { searchPin, searchCity } from '../utils/searchpin';
 import { COLORS, FONTS } from '../styles/theme';
+import SegmentedToggle from '../components/SegmentedToggle';
 
 const TAT_FIELDS = [
   ['Express TAT', 'EXPRESS_TAT'],
@@ -128,24 +129,17 @@ export default function PincodeScreen() {
         <Text style={styles.pageTitle}>Pincode Serviceability</Text>
 
         <View style={styles.searchCard}>
-          <View style={styles.modeToggle} accessibilityRole="tablist">
-            <TouchableOpacity
-              style={[styles.modeButton, searchType === 'pincode' && styles.modeButtonActive]}
-              onPress={() => switchSearchType('pincode')}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: searchType === 'pincode' }}
-            >
-              <Text style={[styles.modeButtonText, searchType === 'pincode' && styles.modeButtonTextActive]}>Pincode</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modeButton, searchType === 'city' && styles.modeButtonActive]}
-              onPress={() => switchSearchType('city')}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: searchType === 'city' }}
-            >
-              <Text style={[styles.modeButtonText, searchType === 'city' && styles.modeButtonTextActive]}>City</Text>
-            </TouchableOpacity>
-          </View>
+          <SegmentedToggle
+            options={[
+              { key: 'pincode', label: 'Pincode' },
+              { key: 'city', label: 'City' },
+            ]}
+            value={searchType}
+            onChange={switchSearchType}
+            size="md"
+            flex
+            style={styles.modeToggle}
+          />
 
           <TextInput
             value={query}
@@ -245,11 +239,8 @@ const styles = StyleSheet.create({
       ? { boxShadow: '0px 10px 30px rgba(15, 23, 42, 0.10)' }
       : { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 3 }),
   },
-  modeToggle: { flexDirection: 'row', width: '100%', marginBottom: 12, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.primary },
-  modeButton: { flex: 1, paddingVertical: 11, alignItems: 'center', backgroundColor: COLORS.white },
-  modeButtonActive: { backgroundColor: COLORS.primary },
-  modeButtonText: { color: COLORS.primary, fontFamily: FONTS.semiBold, fontSize: 14 },
-  modeButtonTextActive: { color: COLORS.white },
+  // Joined segmented mode switch (shell lives in components/SegmentedToggle.js)
+  modeToggle: { width: '100%', marginBottom: 12 },
   input: { borderWidth: 1, borderColor: COLORS.border, borderRadius: 9, paddingHorizontal: 13, paddingVertical: 12, color: COLORS.textPrimary, fontFamily: FONTS.body, fontSize: 15, marginBottom: 12 },
   searchButton: { minHeight: 44, borderRadius: 9, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
   disabledButton: { opacity: 0.65 },

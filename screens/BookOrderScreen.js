@@ -1,11 +1,16 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, TextInput, TouchableOpacity,
-  ActivityIndicator, Alert, Switch, Modal, useWindowDimensions,
+  Alert, Modal, useWindowDimensions,
   KeyboardAvoidingView, Platform, Keyboard, BackHandler, findNodeHandle
 } from 'react-native';
-import Svg, { Path, Rect } from 'react-native-svg';
+import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../styles/theme';
+import GradientText from '../components/GradientText';
+import Tray from '../components/Tray';
+import Button from '../components/Button';
+import Dropdown from '../components/Dropdown';
+import Icon from '../components/icons';
 
 // GENIE_WEB parity — reuse the exact shared engines instead of inlined copies
 // (Point 2 & 13: single source of truth with GENIE_WEB utils/calculations.js etc.)
@@ -16,25 +21,11 @@ import { searchPin } from '../utils/searchpin';
 import { getMetadata, setMetadata } from '../core/storage';
 import { InputValidator } from '../utils/input-validator';
 
-const RefreshIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-  </Svg>
-);
+// Brand accent for section trays + page title (modal/status BRAND parity).
+const BOOK_GRAD = ['#9C2007', '#f59e0b'];
 
-const TrashIcon = ({ size = 14, color = '#ef4444' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-  </Svg>
-);
-
-const CalendarIcon = ({ size = 14, color = '#64748b' }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-    <Path d="M16 2v4M8 2v4M3 10h18" />
-  </Svg>
-);
-
+// Switchable gradient chip (design-system language) — active flag gets the
+// brand maroon→amber fill, idle stays a hairline white chip.
 const WebCheckbox = ({ value, onValueChange, label, title, disabled = false }) => (
   <TouchableOpacity
     accessible
@@ -42,14 +33,17 @@ const WebCheckbox = ({ value, onValueChange, label, title, disabled = false }) =
     accessibilityLabel={title || label}
     accessibilityState={{ checked: value, disabled }}
     disabled={disabled}
-    style={[styles.checkboxContainer, disabled && styles.checkboxDisabled]}
+    style={[styles.flagChip, disabled && styles.flagChipDisabled]}
     onPress={() => onValueChange(!value)}
     activeOpacity={0.7}
   >
-    <View style={[styles.checkboxSquare, value && styles.checkboxSquareChecked, disabled && styles.checkboxSquareDisabled]}>
-      {value && <Text style={styles.checkmarkText}>✓</Text>}
-    </View>
-    <Text style={[styles.checkboxLabel, disabled && styles.textDisabled]}>{label}</Text>
+    {value ? (
+      <LinearGradient colors={BOOK_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.flagChipFill}>
+        <Text style={styles.flagChipTextActive}>{label}</Text>
+      </LinearGradient>
+    ) : (
+      <Text style={styles.flagChipText}>{label}</Text>
+    )}
   </TouchableOpacity>
 );
 
@@ -104,11 +98,6 @@ export default function BookOrderScreen({
   const [calMonth, setCalMonth] = useState(new Date().getMonth());
 
   const [clientCode, setClientCode] = useState(bookForm.code || '');
-  const [clientModalVisible, setClientModalVisible] = useState(false);
-  const [clientSearchQuery, setClientSearchQuery] = useState('');
-
-  const [modeModalVisible, setModeModalVisible] = useState(false);
-  const [carrierModalVisible, setCarrierModalVisible] = useState(false);
   const { width: windowWidth } = useWindowDimensions();
   const isCompactMobile = windowWidth < 640;
 
@@ -137,12 +126,6 @@ export default function BookOrderScreen({
   }, [clientsArray, clientCode]);
 
   const selectedClientName = activeClient ? (activeClient.B2B_NAME || activeClient.NAME || activeClient.CODE || '') : (clientCode || '');
-
-  const filteredClients = useMemo(() => {
-    if (!clientSearchQuery) return clientsArray;
-    const q = clientSearchQuery.toLowerCase();
-    return clientsArray.filter(c => (c.B2B_NAME || c.NAME || '').toLowerCase().includes(q) || (c.CODE || '').toLowerCase().includes(q));
-  }, [clientsArray, clientSearchQuery]);
 
   // Normalize B2B2C Contacts List
   const contactsList = useMemo(() => {
@@ -227,7 +210,6 @@ export default function BookOrderScreen({
   const handleSelectClient = (client) => {
     const code = client.CODE || client.UID || '';
     setClientCode(code);
-    setClientModalVisible(false);
 
     // Web parity (handleCustomerSelectionChange): auto-select sender ONLY when
     // contact.NAME === client.B2B_NAME AND contact.CODE === selected customer code.
@@ -313,7 +295,6 @@ export default function BookOrderScreen({
     setUserMadeInitialModeChoice(true);
     setModeTemporarilyUnlocked(false);
     setNeedsModeSelection(false);
-    setModeModalVisible(false);
     recomputeBoxesForMode(modeObj.volIngr);
     // Carrier selection is user-initiated only. Do not interrupt box/product
     // entry with a second popup after a mode choice.
@@ -412,6 +393,46 @@ export default function BookOrderScreen({
     return DEFAULT_CARRIERS;
   }, [carriersMap]);
 
+  // ── Shared Dropdown option lists (client / mode / carrier) ──
+  const clientOptions = useMemo(() => clientsArray
+    .map(c => ({
+      value: c.CODE || c.UID || '',
+      label: c.B2B_NAME || c.NAME || 'Unnamed Client',
+      sublabel: c.CODE ? `Code: ${c.CODE}` : undefined,
+    }))
+    .filter(o => o.value), [clientsArray]);
+
+  const handleClientDropdownChange = (code) => {
+    const client = clientsArray.find(c => (c.CODE || c.UID || '') === code);
+    if (client) handleSelectClient(client);
+  };
+
+  const modeOptions = useMemo(() => MODE_OPTIONS_LIST.map(m => {
+    const available = isModeAvailableForZone(m);
+    return {
+      value: m.code,
+      label: m.name,
+      sublabel: `Code: ${m.code}${available ? '' : ' · not available for this zone'}`,
+    };
+  }), [MODE_OPTIONS_LIST, selectedReceiver?.ZONE]);
+
+  const handleModeDropdownChange = (code) => {
+    const mode = MODE_OPTIONS_LIST.find(m => m.code === code);
+    if (!mode || !isModeAvailableForZone(mode)) return;
+    handleSelectMode(mode);
+  };
+
+  const carrierOptions = useMemo(() => CARRIER_OPTIONS_LIST.map(c => ({
+    value: c.code,
+    label: c.name,
+    sublabel: `Code: ${c.code}`,
+  })), [CARRIER_OPTIONS_LIST]);
+
+  const handleCarrierDropdownChange = (code) => {
+    setSelectedCarrier(code);
+    focusInput(boxWeightInputRef);
+  };
+
   // Payment Flags & Options
   const [flagDox, setFlagDox] = useState(false);
   const [doxWeight, setDoxWeight] = useState('0.1');
@@ -447,7 +468,6 @@ export default function BookOrderScreen({
   const productEwayInputRef = useRef(null);
   const productAmountInputRef = useRef(null);
   const awbInputRef = useRef(null);
-  const clientSearchInputRef = useRef(null);
   const keyboardScrollRef = useRef(null);
   const focusTimerRef = useRef(null);
   const delayedActionTimersRef = useRef(new Set());
@@ -1316,18 +1336,6 @@ export default function BookOrderScreen({
         setAddContactVisible(false);
         return true;
       }
-      if (clientModalVisible) {
-        setClientModalVisible(false);
-        return true;
-      }
-      if (carrierModalVisible) {
-        setCarrierModalVisible(false);
-        return true;
-      }
-      if (modeModalVisible) {
-        setModeModalVisible(false);
-        return true;
-      }
       if (orderDateModalVisible) {
         setOrderDateModalVisible(false);
         return true;
@@ -1337,7 +1345,7 @@ export default function BookOrderScreen({
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', handleBookOrderBack);
     return () => subscription?.remove?.();
-  }, [addContactVisible, clientModalVisible, carrierModalVisible, modeModalVisible, orderDateModalVisible]);
+  }, [addContactVisible, orderDateModalVisible]);
 
   // Submit Handler (Web: book_button click — edit → PUT /api/editOrder, new → POST /api/bookOrder,
   // waits for server confirmation, then renders the last-booked card)
@@ -1465,7 +1473,10 @@ export default function BookOrderScreen({
         automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
       >
-      <Text style={styles.pageTitle}>Book Order</Text>
+      <View style={styles.pageTitleBlock}>
+        <GradientText colors={BOOK_GRAD} style={styles.pageTitle}>Book Order</GradientText>
+        <LinearGradient colors={BOOK_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.pageTitleBar} />
+      </View>
 
       {/* ── EDIT BANNER (Web: prefillEditOrder banner) ── */}
       {editRef && (
@@ -1484,9 +1495,8 @@ export default function BookOrderScreen({
         </View>
       ) : null}
 
-      {/* ── SECTION 1: Top Controls (Order Date Calendar & Client Dropdown 2:3 Ratio) ── */}
-      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, isFormLocked && styles.cardLocked]}>
-        <Text style={styles.sectionHeaderTitle}>1. Order Info & Client</Text>
+      {/* ── SECTION 1: Order Info & Client ── */}
+      <Tray title="1 · Order Info & Client" icon="calendar" iconColors={BOOK_GRAD} style={isFormLocked && styles.trayLocked}>
         <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
           <View style={{ flex: 2 }}>
             <Text style={styles.labelWeb}>ORDER DATE</Text>
@@ -1498,7 +1508,7 @@ export default function BookOrderScreen({
               style={[styles.calendarTriggerBtn, isFormLocked && styles.btnDisabled]}
               onPress={() => setOrderDateModalVisible(true)}
             >
-              <CalendarIcon size={14} color={isFormLocked ? "#94a3b8" : "#0284c7"} />
+              <Icon name="calendar" size={14} color={isFormLocked ? '#94a3b8' : '#0284c7'} />
               <Text style={[styles.calendarTriggerText, isFormLocked && styles.textDisabled]}>
                 {orderDate || 'Select Date'}
               </Text>
@@ -1506,27 +1516,21 @@ export default function BookOrderScreen({
           </View>
 
           <View style={{ flex: 3 }}>
-            <Text style={styles.labelWeb}>CLIENT NAME</Text>
-            <TouchableOpacity
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel="Select client or customer"
+            <Dropdown
+              label="CLIENT NAME"
+              value={clientCode}
+              options={clientOptions}
+              onChange={handleClientDropdownChange}
+              searchable
+              placeholder="Select Client"
               disabled={isFormLocked}
-              style={[styles.clientSelectorBtn, isFormLocked && styles.btnDisabled]}
-              onPress={() => setClientModalVisible(true)}
-            >
-              <Text style={[styles.clientSelectorText, isFormLocked && styles.textDisabled]} numberOfLines={1}>
-                {selectedClientName || 'Select Client'}
-              </Text>
-              <Text style={styles.clientSelectorArrow}>▼</Text>
-            </TouchableOpacity>
+            />
           </View>
         </View>
-      </View>
+      </Tray>
 
       {/* ── SECTION 2: Consignor (Sender) Details ── */}
-      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, isFormLocked && styles.cardLocked]}>
-        <Text style={styles.sectionHeaderTitle}>2. Consignor (Sender) Details</Text>
+      <Tray title="2 · Consignor (Sender)" icon="package-up" iconColors={BOOK_GRAD} style={isFormLocked && styles.trayLocked}>
         <Text style={styles.labelWeb}>SEARCH SENDER (NAME / MOBILE)</Text>
         <TextInput          ref={senderInputRef}
           onFocus={() => ensureInputVisible(senderInputRef, true)}
@@ -1582,11 +1586,10 @@ export default function BookOrderScreen({
         ) : (
           <Text style={styles.placeholderTextItalic}>Select a customer to autofill sender or type consignor name.</Text>
         )}
-      </View>
+      </Tray>
 
       {/* ── SECTION 3: Consignee (Receiver) Details ── */}
-      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, isFormLocked && styles.cardLocked]}>
-        <Text style={styles.sectionHeaderTitle}>3. Consignee (Receiver) Details</Text>
+      <Tray title="3 · Consignee (Receiver)" icon="package-down" iconColors={BOOK_GRAD} style={isFormLocked && styles.trayLocked}>
         <Text style={styles.labelWeb}>SEARCH RECEIVER (NAME / MOBILE)</Text>
         <TextInput
           ref={receiverInputRef}
@@ -1641,54 +1644,38 @@ export default function BookOrderScreen({
             <Text style={styles.contactDetail}>Mobile: {selectedReceiver.MOBILE || 'N/A'} | Zone: {selectedReceiver.ZONE || 'N/A'}</Text>
           </View>
         )}
+      </Tray>
 
-      </View>
-
-      {/* ── SECTION 4: Mode & Carrier Selection (Side-by-side Dropdowns) ── */}
-      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, isFormLocked && styles.cardLocked]}>
-        <Text style={styles.sectionHeaderTitle}>4. Mode & Carrier</Text>
+      {/* ── SECTION 4: Mode & Carrier ── */}
+      <Tray title="4 · Mode & Carrier" icon="truck" iconColors={BOOK_GRAD} style={isFormLocked && styles.trayLocked}>
         <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.labelWeb}>MODE</Text>
-            <TouchableOpacity
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel="Select transport mode"
-              disabled={false}
-              style={styles.clientSelectorBtn}
-              onPress={() => setModeModalVisible(true)}
-            >
-              <Text style={styles.clientSelectorText} numberOfLines={1}>
-                {(MODE_OPTIONS_LIST.find(m => m.code === selectedMode) || {}).name || selectedMode || 'Select Mode'}
-              </Text>
-              <Text style={styles.clientSelectorArrow}>▼</Text>
-            </TouchableOpacity>
+            <Dropdown
+              label="MODE"
+              value={selectedMode}
+              options={modeOptions}
+              onChange={handleModeDropdownChange}
+              placeholder="Select Mode"
+            />
           </View>
 
           <View style={{ flex: 1 }}>
-            <Text style={styles.labelWeb}>CARRIER</Text>
-            <TouchableOpacity
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel="Select carrier"
-              disabled={false}
-              style={styles.clientSelectorBtn}
-              onPress={() => setCarrierModalVisible(true)}
-            >
-              <Text style={styles.clientSelectorText} numberOfLines={1}>
-                {(CARRIER_OPTIONS_LIST.find(c => c.code === selectedCarrier) || {}).name || selectedCarrier || 'Select Carrier'}
-              </Text>
-              <Text style={styles.clientSelectorArrow}>▼</Text>
-            </TouchableOpacity>
+            <Dropdown
+              label="CARRIER"
+              value={selectedCarrier}
+              options={carrierOptions}
+              onChange={handleCarrierDropdownChange}
+              searchable
+              placeholder="Select Carrier"
+            />
           </View>
         </View>
         {/* Web parity (modeChangeMessage): auto-switch notices */}
         {modeChangeMsg ? <Text style={styles.modeChangeMsg}>{modeChangeMsg}</Text> : null}
-      </View>
+      </Tray>
 
-      {/* ── SECTION 5: Payment Types & Flags (1-to-1 Web Matching Row L276-300) ── */}
-      <View style={styles.cardWeb}>
-        <Text style={styles.sectionHeaderTitle}>5. Payment Type & Options</Text>
+      {/* ── SECTION 5: Payment Type & Options ── */}
+      <Tray title="5 · Payment Type & Options" icon="cash" iconColors={BOOK_GRAD}>
         <View style={styles.webPaymentRow}>
           {/* Web setBookingFieldsLocked/togglePaymentModeLock parity: once a
               consignment row exists, these booking choices cannot change. SAV
@@ -1740,9 +1727,7 @@ export default function BookOrderScreen({
               ))}
             </View>
 
-            <TouchableOpacity style={styles.addBtn} onPress={handleAddDoxEnvelope}>
-              <Text style={styles.addBtnText}>+ Add Dox Envelope ({doxType})</Text>
-            </TouchableOpacity>
+            <Button variant="soft" size="md" label={`+ Add Dox Envelope (${doxType})`} onPress={handleAddDoxEnvelope} style={{ marginTop: 4 }} />
           </View>
         )}
 
@@ -1762,19 +1747,20 @@ export default function BookOrderScreen({
             />
           </View>
         )}
+      </Tray>
 
-      </View>
-
-      {/* ── SECTION 6: Consignment Box Adder (Web: toggleWeightProductEntry) ── */}
-      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, !isMainDetailsComplete && styles.cardDisabled]}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <Text style={[styles.sectionHeaderTitle, { marginBottom: 0 }]}>6. Consignment Boxes ({boxes.length})</Text>
-          {boxes.length > 0 && (
-            <TouchableOpacity onPress={handleClearBoxes}>
-              <Text style={{ fontSize: 11, fontWeight: '700', color: '#ef4444' }}>Clear Boxes</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+      {/* ── SECTION 6: Consignment Boxes ── */}
+      <Tray
+        title={`6 · Consignment Boxes (${boxes.length})`}
+        icon="package-variant-closed"
+        iconColors={BOOK_GRAD}
+        style={!isMainDetailsComplete && styles.trayDisabled}
+        right={boxes.length > 0 ? (
+          <TouchableOpacity onPress={handleClearBoxes} hitSlop={8}>
+            <Text style={styles.clearSmallText}>Clear</Text>
+          </TouchableOpacity>
+        ) : null}
+      >
 
         {!isMainDetailsComplete && (
           <Text style={styles.lockNoticeText}>⚠️ Complete Customer, Sender, Receiver, Mode & Carrier to add boxes.</Text>
@@ -1852,13 +1838,14 @@ export default function BookOrderScreen({
               </View>
             </View>
 
-            <TouchableOpacity
+            <Button
+              variant="soft"
+              size="md"
+              label="+ Add Box"
               disabled={!isMainDetailsComplete}
-              style={[styles.addBtn, !isMainDetailsComplete && styles.btnDisabled]}
               onPress={handleAddBox}
-            >
-              <Text style={[styles.addBtnText, !isMainDetailsComplete && styles.textDisabled]}>+ Add Box</Text>
-            </TouchableOpacity>
+              style={{ marginTop: 4 }}
+            />
           </>
         )}
 
@@ -1872,25 +1859,27 @@ export default function BookOrderScreen({
                     Weight: {b.WEIGHT} kg | {b.LENGTH}x{b.BREADTH}x{b.HIGHT} cm | Chg Wt: {(b.CHG_WT || b.WEIGHT).toFixed(2)} kg
                   </Text>
                 </View>
-                <TouchableOpacity onPress={() => handleRemoveBox(bi)}>
-                  <TrashIcon size={16} color="#ef4444" />
+                <TouchableOpacity onPress={() => handleRemoveBox(bi)} hitSlop={8} style={styles.rowRemoveBtn}>
+                  <Icon name="trash" size={16} color="#ef4444" />
                 </TouchableOpacity>
               </View>
             ))}
           </View>
         )}
-      </View>
+      </Tray>
 
-      {/* ── SECTION 7: Product Adder (Web: toggleWeightProductEntry) ── */}
-      <View style={[styles.cardWeb, isCompactMobile && styles.cardMobile, !isMainDetailsComplete && styles.cardDisabled]}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <Text style={[styles.sectionHeaderTitle, { marginBottom: 0 }]}>7. Product & Invoice Details ({products.length})</Text>
-          {products.length > 0 && (
-            <TouchableOpacity onPress={handleClearProducts}>
-              <Text style={{ fontSize: 11, fontWeight: '700', color: '#ef4444' }}>Clear Products</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+      {/* ── SECTION 7: Product & Invoice Details ── */}
+      <Tray
+        title={`7 · Product & Invoice Details (${products.length})`}
+        icon="file-document"
+        iconColors={BOOK_GRAD}
+        style={!isMainDetailsComplete && styles.trayDisabled}
+        right={products.length > 0 ? (
+          <TouchableOpacity onPress={handleClearProducts} hitSlop={8}>
+            <Text style={styles.clearSmallText}>Clear</Text>
+          </TouchableOpacity>
+        ) : null}
+      >
 
         {!isMainDetailsComplete && (
           <Text style={styles.lockNoticeText}>⚠️ Complete Customer, Sender, Receiver, Mode & Carrier to add products.</Text>
@@ -1985,13 +1974,14 @@ export default function BookOrderScreen({
               </View>
             </View>
 
-            <TouchableOpacity
+            <Button
+              variant="soft"
+              size="md"
+              label="+ Add Product"
               disabled={!isMainDetailsComplete}
-              style={[styles.addBtn, !isMainDetailsComplete && styles.btnDisabled]}
               onPress={handleAddProduct}
-            >
-              <Text style={[styles.addBtnText, !isMainDetailsComplete && styles.textDisabled]}>+ Add Product</Text>
-            </TouchableOpacity>
+              style={{ marginTop: 4 }}
+            />
           </>
         )}
 
@@ -2005,18 +1995,17 @@ export default function BookOrderScreen({
                     Doc: {p.DOC_NUMBER || 'N/A'} ({p.DOC_TYPE}) | EWay: {p.EWAY_IF || 'N/A'} | ₹{p.AMOUNT}
                   </Text>
                 </View>
-                <TouchableOpacity onPress={() => handleRemoveProduct(pi)}>
-                  <TrashIcon size={16} color="#ef4444" />
+                <TouchableOpacity onPress={() => handleRemoveProduct(pi)} hitSlop={8} style={styles.rowRemoveBtn}>
+                  <Icon name="trash" size={16} color="#ef4444" />
                 </TouchableOpacity>
               </View>
             ))}
           </View>
         )}
-      </View>
+      </Tray>
 
-      {/* ── LIVE CALCULATIONS SUMMARY CARD (Web: updateSummaryDisplay) ── */}
-      <View style={styles.summaryCard}>
-        <Text style={styles.sectionHeaderTitle}>Consignment Live Totals</Text>
+      {/* ── LIVE CALCULATIONS SUMMARY (Web: updateSummaryDisplay) ── */}
+      <Tray title="Consignment Live Totals" icon="calculator-variant" iconColors={['#059669', '#10b981']}>
         <View style={styles.summaryGrid}>
           <View style={styles.summaryItem}>
             <Text style={styles.summaryLabel}>Total Wt</Text>
@@ -2045,11 +2034,10 @@ export default function BookOrderScreen({
             {helperTableData.rateUid}
           </Text>
         </View>
-      </View>
+      </Tray>
 
-      {/* ── CHARGES & TAXES BREAKDOWN TABLE (Web: Charges Section L600-635) ── */}
-      <View style={styles.chargesCard}>
-        <Text style={styles.sectionHeaderTitle}>Charges & Taxes Breakdown</Text>
+      {/* ── CHARGES & TAXES BREAKDOWN (Web: Charges Section L600-635) ── */}
+      <Tray title="Charges & Taxes Breakdown" icon="chart-box-outline" iconColors={['#0ea5e9', '#2563eb']}>
         <View style={styles.chargesGridTable}>
           <View style={styles.chargesRow}>
             <View style={styles.chargesCellLabel}><Text style={styles.chargesLabelText}>FRIGHT</Text></View>
@@ -2088,11 +2076,10 @@ export default function BookOrderScreen({
             <View style={styles.chargesCellValue}><Text style={styles.chargesValueText}>₹{calculatedCharges.taxable}</Text></View>
           </View>
         </View>
-      </View>
+      </Tray>
 
-      {/* ── SECTION 8: AWB Number & Action Buttons ── */}
-      <View style={styles.cardWeb}>
-        <Text style={styles.sectionHeaderTitle}>8. Finalize Order</Text>
+      {/* ── SECTION 8: Finalize Order ── */}
+      <Tray title="8 · Finalize Order" icon="check-decagram" iconColors={BOOK_GRAD}>
         <Text style={styles.labelWeb}>AWB NUMBER</Text>
         <View style={styles.awbInputRow}>
           <TextInput
@@ -2105,10 +2092,7 @@ export default function BookOrderScreen({
             returnKeyType="done"
             onSubmitEditing={handleSubmit}
           />
-          <TouchableOpacity style={styles.getAwbBtn} onPress={handleGenerateAwb}>
-            <RefreshIcon size={14} color="#0284c7" />
-            <Text style={styles.getAwbBtnText}>Get AWB</Text>
-          </TouchableOpacity>
+          <Button variant="soft" size="md" icon="refresh" label="Get AWB" onPress={handleGenerateAwb} />
         </View>
 
         {/* Web parity: validateAwbPattern hint (informational) */}
@@ -2124,30 +2108,30 @@ export default function BookOrderScreen({
         )}
 
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
-          <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel="Clear booking form" style={styles.clearBtn} onPress={handleClearAll}>
-            <Text style={styles.clearBtnText}>Clear All</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel={editRef ? 'Update order' : 'Book order'} style={styles.submitBtn} onPress={handleSubmit} disabled={bookingLoading}>
-            {bookingLoading ? (
-              <ActivityIndicator color="#ffffff" />
-            ) : (
-              <Text style={styles.submitBtnText}>{editRef ? 'UPDATE ORDER' : 'BOOK ORDER'}</Text>
-            )}
-          </TouchableOpacity>
+          <Button variant="secondary" size="md" label="Clear All" onPress={handleClearAll} style={{ flex: 1 }} />
+          <Button
+            variant="primary"
+            size="md"
+            label={editRef ? 'UPDATE ORDER' : 'BOOK ORDER'}
+            loading={bookingLoading}
+            onPress={handleSubmit}
+            style={{ flex: 2 }}
+          />
         </View>
-      </View>
+      </Tray>
 
-      {/* ── LAST BOOKED SHIPMENT CARD (Web: renderLastBooked — shown after booking) ── */}
+      {/* ── LAST BOOKED SHIPMENT (Web: renderLastBooked — shown after booking) ── */}
       {lastBookedOrder && (
-        <View style={styles.lastBookedCard}>
-          <View style={styles.lastBookedHeader}>
-            <Text style={styles.lastBookedTitle}>✓ Shipment Booked: {lastBookedOrder.AWB_NUMBER || 'No AWB'}</Text>
-            <TouchableOpacity onPress={() => setLastBookedOrder(null)}>
-              <Text style={{ color: '#64748b', fontWeight: '700' }}>✕</Text>
+        <Tray
+          title={`✓ Shipment Booked: ${lastBookedOrder.AWB_NUMBER || 'No AWB'}`}
+          icon="check-circle"
+          iconColors={['#16a34a', '#84cc16']}
+          right={
+            <TouchableOpacity onPress={() => setLastBookedOrder(null)} hitSlop={8}>
+              <Text style={styles.clearSmallText}>✕</Text>
             </TouchableOpacity>
-          </View>
-
+          }
+        >
           <Text style={styles.lastBookedRoute}>
             {(() => {
               const cnor = contactsList.find(c => c.UID === lastBookedOrder.CONSIGNOR)?.NAME || lastBookedOrder.CONSIGNOR || 'Sender';
@@ -2193,18 +2177,21 @@ export default function BookOrderScreen({
               <Text style={styles.lastBookedActionUpload}>⬆ Upload</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </Tray>
       )}
 
       {/* ── BOOKING TRANSACTIONS (booked / pending / error log) ── */}
       {bookingTxns.length > 0 && (
-        <View style={styles.txnCard}>
-          <View style={styles.txnHeader}>
-            <Text style={styles.sectionHeaderTitle}>Booking Transactions</Text>
-            <TouchableOpacity onPress={clearBookingTxns}>
-              <Text style={styles.txnClear}>✕ Clear</Text>
+        <Tray
+          title="Booking Transactions"
+          icon="history"
+          iconColors={BOOK_GRAD}
+          right={
+            <TouchableOpacity onPress={clearBookingTxns} hitSlop={8}>
+              <Text style={styles.clearSmallText}>Clear</Text>
             </TouchableOpacity>
-          </View>
+          }
+        >
           {bookingTxns.map((t) => (
             <View key={t.id} style={styles.txnRow}>
               <Text style={[styles.txnIcon, t.status === 'booked' && styles.txnIconOk, t.status === 'error' && styles.txnIconErr, t.status === 'pending' && styles.txnIconWarn]}>
@@ -2221,135 +2208,8 @@ export default function BookOrderScreen({
               </View>
             </View>
           ))}
-        </View>
+        </Tray>
       )}
-
-      {/* ── Client Selection Dropdown Modal ── */}
-      <Modal
-        visible={clientModalVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setClientModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Client / Customer</Text>
-              <TouchableOpacity onPress={() => setClientModalVisible(false)}>
-                <Text style={styles.modalCloseX}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            <TextInput
-              ref={clientSearchInputRef}
-              onFocus={() => ensureInputVisible(clientSearchInputRef, true)}
-              style={styles.searchInput}
-              placeholder="Search Client Name or Code..."
-              placeholderTextColor="#94a3b8"
-              value={clientSearchQuery}
-              onChangeText={(text) => setClientSearchQuery(uppercaseText(text))}
-            />
-
-            <ScrollView style={{ maxHeight: 350 }}>
-              {filteredClients.length === 0 ? (
-                <Text style={{ textAlign: 'center', padding: 20, color: '#94a3b8' }}>No clients found.</Text>
-              ) : (
-                filteredClients.map((client, ci) => (
-                  <TouchableOpacity
-                    key={ci}
-                    accessible
-                    accessibilityRole="button"
-                    accessibilityLabel={`Select client ${client.B2B_NAME || client.NAME || client.CODE || ''}`}
-                    style={styles.clientModalItem}
-                    onPress={() => handleSelectClient(client)}
-                  >
-                    <Text style={styles.clientModalName}>{client.B2B_NAME || client.NAME || 'Unnamed Client'}</Text>
-                    <Text style={styles.clientModalCode}>Code: {client.CODE || client.UID || 'N/A'}</Text>
-                  </TouchableOpacity>
-                ))
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ── Mode Selection Modal ── */}
-      <Modal
-        visible={modeModalVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setModeModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Transport Mode</Text>
-              <TouchableOpacity onPress={() => setModeModalVisible(false)}>
-                <Text style={styles.modalCloseX}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 300 }}>
-              {MODE_OPTIONS_LIST.map((m, mi) => {
-                const available = isModeAvailableForZone(m);
-                return (
-                  <TouchableOpacity
-                    key={mi}
-                    accessible
-                    accessibilityRole="button"
-                    accessibilityLabel={`Select mode ${m.name}${!available ? ', unavailable' : ''}`}
-                    disabled={!available}
-                    style={[styles.clientModalItem, !available && styles.clientModalItemDisabled]}
-                    onPress={() => handleSelectMode(m)}
-                  >
-                    <Text style={[styles.clientModalName, !available && styles.textDisabled]}>{m.name}</Text>
-                    <Text style={styles.clientModalCode}>
-                      Code: {m.code}{!available ? ' (not available for ' + (selectedReceiver?.ZONE || 'zone') + ')' : ''}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ── Carrier Selection Modal ── */}
-      <Modal
-        visible={carrierModalVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setCarrierModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Carrier</Text>
-              <TouchableOpacity onPress={() => setCarrierModalVisible(false)}>
-                <Text style={styles.modalCloseX}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 300 }}>
-              {CARRIER_OPTIONS_LIST.map((c, ci) => (
-                <TouchableOpacity
-                  key={ci}
-                  accessible
-                  accessibilityRole="button"
-                  accessibilityLabel={`Select carrier ${c.name || c.code}`}
-                  style={styles.clientModalItem}
-                  onPress={() => {
-                    setSelectedCarrier(c.code);
-                    setCarrierModalVisible(false);
-                    focusInput(boxWeightInputRef);
-                  }}
-                >
-                  <Text style={styles.clientModalName}>{c.name}</Text>
-                  <Text style={styles.clientModalCode}>Code: {c.code}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
 
       {/* ── Order Date Calendar Picker Modal ── */}
       <Modal
@@ -2513,12 +2373,8 @@ export default function BookOrderScreen({
             {acError ? <Text style={styles.acError}>{acError}</Text> : null}
 
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-              <TouchableOpacity style={styles.clearBtn} onPress={() => setAddContactVisible(false)}>
-                <Text style={styles.clearBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.submitBtn, acSaving && styles.btnDisabled]} onPress={handleAcSave} disabled={acSaving}>
-                {acSaving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.submitBtnText}>Save Contact</Text>}
-              </TouchableOpacity>
+              <Button variant="secondary" size="md" label="Cancel" onPress={() => setAddContactVisible(false)} style={{ flex: 1 }} />
+              <Button variant="primary" size="md" label="Save Contact" loading={acSaving} onPress={handleAcSave} style={{ flex: 1.4 }} />
             </View>
           </ScrollView>
         </View>
@@ -2532,64 +2388,50 @@ const styles = StyleSheet.create({
   keyboardPage: { flex: 1, minHeight: 0 },
   scrollPage: { flex: 1, padding: 14, backgroundColor: '#f8fafc' },
   scrollPageCompact: { padding: 8 },
-  pageTitle: { color: '#1e293b', fontSize: 24, fontWeight: '800', marginBottom: 14 },
 
-  // Last Booked Card
-  lastBookedCard: { backgroundColor: '#eef2ff', borderRadius: 14, padding: 15, borderWidth: 1, borderColor: '#818cf8', marginBottom: 14, shadowColor: '#312e81', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
-  lastBookedHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7, paddingBottom: 7, borderBottomWidth: 1, borderBottomColor: '#c7d2fe' },
-  lastBookedTitle: { fontSize: 14, fontWeight: '900', color: '#3730a3', letterSpacing: 0.1 },
-  lastBookedRoute: { fontSize: 13, color: '#1e293b', fontWeight: '800', marginBottom: 10 },
-  lastBookedGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  lastBookedChip: { fontSize: 10.5, fontWeight: '800', color: '#3730a3', backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#c7d2fe', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, overflow: 'hidden' },
+  // Page title — gradient heading + underline bar (Orders parity).
+  pageTitleBlock: { alignItems: 'center', marginBottom: 14 },
+  pageTitle: { fontSize: 24, fontWeight: '900', letterSpacing: 0.5 },
+  pageTitleBar: { width: 46, height: 3, borderRadius: 2, marginTop: 8 },
 
-  cardWeb: { backgroundColor: '#ffffff', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 14 },
-  cardMobile: { borderRadius: 8, padding: 10, marginBottom: 8 },
-  cardLocked: { backgroundColor: '#f8fafc', borderColor: '#cbd5e1' },
-  cardDisabled: { opacity: 0.6, backgroundColor: '#f1f5f9' },
-  lockNoticeText: { fontSize: 11, fontWeight: '700', color: '#b45309', marginBottom: 10, backgroundColor: '#fef3c7', padding: 6, borderRadius: 6 },
-  sectionHeaderTitle: { fontSize: 13, fontWeight: '800', color: COLORS.primary, letterSpacing: 0.5, marginBottom: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9', paddingBottom: 6 },
-  labelWeb: { color: '#64748b', fontSize: 11, fontWeight: '700', marginBottom: 4 },
-  inputWeb: { backgroundColor: '#ffffff', borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1', color: '#0f172a', paddingHorizontal: 10, paddingVertical: 8, fontSize: 13, fontWeight: '600', marginBottom: 10 },
-  inputDisabled: { backgroundColor: '#e2e8f0', color: '#64748b' },
-  btnDisabled: { backgroundColor: '#e2e8f0', borderColor: '#cbd5e1' },
+  // Tray state overrides (shell lives in components/Tray.js)
+  trayLocked: { opacity: 0.65 },
+  trayDisabled: { opacity: 0.55 },
+  clearSmallText: { fontSize: 11, fontWeight: '800', color: '#ef4444' },
+  rowRemoveBtn: { padding: 4 },
+
+  lockNoticeText: { fontSize: 11, fontWeight: '700', color: '#b45309', marginBottom: 10, backgroundColor: '#fef3c7', padding: 8, borderRadius: 8 },
+  labelWeb: { color: '#64748b', fontSize: 10, fontWeight: '800', letterSpacing: 0.8, marginBottom: 5 },
+  inputWeb: { backgroundColor: '#ffffff', borderRadius: 11, borderWidth: 1, borderColor: '#cbd5e1', color: '#0f172a', paddingHorizontal: 12, paddingVertical: 10, fontSize: 13, fontWeight: '600', marginBottom: 10 },
+  inputDisabled: { backgroundColor: '#f1f5f9', color: '#94a3b8' },
+  btnDisabled: { opacity: 0.55 },
   textDisabled: { color: '#94a3b8' },
   rowGrid: { flexDirection: 'row', gap: 10 },
   rowGridMobile: { gap: 6 },
 
   placeholderTextItalic: { fontSize: 11.5, fontStyle: 'italic', color: '#94a3b8', paddingVertical: 6 },
 
-  // Live Summary Card
-  summaryCard: { backgroundColor: '#f0fdf4', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#bbf7d0', marginBottom: 14 },
+  // Live Totals (inside the green Tray)
   summaryGrid: { flexDirection: 'row', justifyContent: 'space-around' },
   summaryItem: { alignItems: 'center' },
-  summaryLabel: { fontSize: 11, fontWeight: '700', color: '#166534' },
-  summaryValue: { fontSize: 13, fontWeight: '800', color: '#15803d', marginTop: 2 },
+  summaryLabel: { fontSize: 10, fontWeight: '800', color: '#047857', textTransform: 'uppercase', letterSpacing: 0.6 },
+  summaryValue: { fontSize: 15, fontWeight: '900', color: '#15803d', marginTop: 3 },
 
-  // Calendar Trigger Button
-  calendarTriggerBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f0f9ff', borderRadius: 6, borderWidth: 1, borderColor: '#bae6fd', paddingHorizontal: 10, paddingVertical: 8, marginBottom: 10 },
-  calendarTriggerText: { fontSize: 12.5, fontWeight: '700', color: '#0284c7' },
+  // Calendar Trigger Button — matches the Dropdown field height/look
+  calendarTriggerBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#ffffff', borderRadius: 13, borderWidth: 1.5, borderColor: '#34d399', paddingHorizontal: 13, paddingVertical: 9, marginBottom: 10, minHeight: 46 },
+  calendarTriggerText: { fontSize: 13, fontWeight: '700', color: '#0284c7' },
 
-  // Client Selector Button
-  clientSelectorBtn: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f8fafc', borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1', paddingHorizontal: 10, paddingVertical: 8, marginBottom: 10 },
-  clientSelectorText: { fontSize: 12.5, fontWeight: '700', color: '#1e293b', flex: 1 },
-  clientSelectorArrow: { fontSize: 10, color: '#64748b', marginLeft: 6 },
-
-  // Modal Overlay & Calendar Modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 },
-  modalContent: { backgroundColor: '#ffffff', borderRadius: 16, padding: 20, width: '100%', maxHeight: '80%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  modalTitle: { fontSize: 16, fontWeight: '800', color: '#1e293b' },
-  modalCloseX: { fontSize: 18, fontWeight: '700', color: '#64748b', padding: 4 },
-  searchInput: { backgroundColor: '#f8fafc', borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1', color: '#0f172a', paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, fontWeight: '600', marginBottom: 10 },
-  clientModalItem: { paddingVertical: 10, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  clientModalName: { fontSize: 13, fontWeight: '800', color: '#1e293b' },
-  clientModalCode: { fontSize: 11, color: '#64748b', marginTop: 2 },
+  // Modals (calendar + add-contact)
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.55)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
+  modalCloseX: { fontSize: 18, fontWeight: '700', color: '#94a3b8', padding: 4 },
 
   // Calendar Modal Picker
-  calendarModalContent: { backgroundColor: '#ffffff', borderRadius: 16, padding: 16, width: '90%', maxWidth: 340, borderWidth: 1, borderColor: '#cbd5e1' },
+  calendarModalContent: { backgroundColor: '#ffffff', borderRadius: 18, padding: 16, width: '90%', maxWidth: 340, borderWidth: 1, borderColor: '#e2e8f0' },
   calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  calendarMonthTitle: { fontSize: 15, fontWeight: '800', color: '#1e293b' },
-  calNavBtn: { paddingHorizontal: 12, paddingVertical: 4, backgroundColor: '#f1f5f9', borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1' },
+  calendarMonthTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  calNavBtn: { paddingHorizontal: 12, paddingVertical: 4, backgroundColor: '#f1f5f9', borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0' },
   calNavBtnText: { fontSize: 18, fontWeight: '800', color: '#475569' },
   calWeekRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 6 },
   calWeekDayText: { width: 36, textAlign: 'center', fontSize: 11, fontWeight: '800', color: '#94a3b8' },
@@ -2602,123 +2444,99 @@ const styles = StyleSheet.create({
   calCancelBtnText: { fontSize: 13, fontWeight: '700', color: '#ef4444' },
 
   // Autocomplete
-  autocompleteBox: { backgroundColor: '#ffffff', borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1', marginBottom: 10 },
+  autocompleteBox: { backgroundColor: '#ffffff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 10, overflow: 'hidden' },
   autocompleteItem: { padding: 10, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  autocompleteName: { fontSize: 13, fontWeight: '800', color: '#1e293b' },
+  autocompleteName: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
   autocompleteSub: { fontSize: 11, color: '#64748b' },
+  autocompleteAddNew: { padding: 10, backgroundColor: '#f8fafc', borderTopWidth: 1, borderTopColor: '#e2e8f0', alignItems: 'center' },
+  autocompleteAddNewText: { fontSize: 12, fontWeight: '800', color: COLORS.primary },
 
-  selectedContactCard: { backgroundColor: '#f0f9ff', borderRadius: 8, borderWidth: 1, borderColor: '#bae6fd', padding: 10, marginBottom: 10 },
-  contactName: { fontSize: 13, fontWeight: '800', color: '#0369a1' },
-  contactDetail: { fontSize: 11, color: '#475569', marginTop: 2 },
+  selectedContactCard: { backgroundColor: '#f8fafc', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', padding: 12, marginBottom: 10 },
+  contactName: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
+  contactDetail: { fontSize: 11, color: '#64748b', marginTop: 2 },
 
-  // Chip Select
-  chipRowSelect: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 10 },
-  selectChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc' },
+  // Chip Select (doc types)
+  chipRowSelect: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
+  selectChip: { borderRadius: 999, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', paddingHorizontal: 12, paddingVertical: 7 },
   selectChipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
   selectChipText: { fontSize: 11, fontWeight: '700', color: '#475569' },
   selectChipTextActive: { color: '#ffffff' },
 
-  // Flags Grid
-  flagsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingVertical: 4 },
-  flagItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  flagLabel: { fontSize: 12, fontWeight: '700', color: '#334155' },
+  // Payment flags — switchable gradient chips (design-system language)
+  webPaymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
+  flagChip: { borderRadius: 999, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', overflow: 'hidden' },
+  flagChipDisabled: { opacity: 0.5 },
+  flagChipFill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7 },
+  flagChipText: { fontSize: 11.5, fontWeight: '700', color: '#475569', paddingHorizontal: 12, paddingVertical: 7 },
+  flagChipTextActive: { fontSize: 11.5, fontWeight: '800', color: '#ffffff' },
 
-  // Add Button & Box Card
-  addBtn: { backgroundColor: '#f1f5f9', borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1', paddingVertical: 8, alignItems: 'center', marginTop: 4 },
-  addBtnText: { fontSize: 12, fontWeight: '800', color: '#334155' },
-  boxRowCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f8fafc', padding: 10, borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 6 },
-  boxRowTitle: { fontSize: 12, fontWeight: '800', color: '#1e293b' },
+  // Box / Product rows
+  boxRowCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffffff', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 8 },
+  boxRowTitle: { fontSize: 12.5, fontWeight: '800', color: '#0f172a' },
   boxRowSub: { fontSize: 11, color: '#64748b', marginTop: 2 },
 
-  // AWB & Submits
+  // AWB row
   awbInputRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  getAwbBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#f0f9ff', borderRadius: 6, borderWidth: 1, borderColor: '#bae6fd', paddingHorizontal: 10, paddingVertical: 8 },
-  getAwbBtnText: { fontSize: 11.5, fontWeight: '700', color: '#0284c7' },
-
-  clearBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1', alignItems: 'center' },
-  clearBtnText: { fontSize: 13, fontWeight: '700', color: '#64748b' },
-  submitBtn: { flex: 2, paddingVertical: 12, borderRadius: 8, backgroundColor: COLORS.primary, alignItems: 'center' },
-  submitBtnText: { fontSize: 13, fontWeight: '800', color: '#ffffff' },
 
   // Charges & Taxes Breakdown Table
-  chargesCard: { backgroundColor: '#ffffff', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#cbd5e1', marginBottom: 14 },
-  chargesGridTable: { borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1', overflow: 'hidden' },
-  chargesRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  chargesCellLabel: { flex: 1, backgroundColor: '#f8fafc', padding: 8, borderRightWidth: 1, borderRightColor: '#e2e8f0', justifyContent: 'center' },
-  chargesCellValue: { flex: 1, backgroundColor: '#ffffff', padding: 8, alignItems: 'flex-end', borderRightWidth: 1, borderRightColor: '#e2e8f0', justifyContent: 'center' },
-  chargesLabelText: { fontSize: 11, fontWeight: '700', color: '#475569' },
-  chargesValueText: { fontSize: 12, fontWeight: '700', color: '#0f172a' },
-
-  // Web Payment Checkboxes (L276-300)
-  webPaymentRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#ffffff', borderRadius: 6, borderWidth: 1, borderColor: '#cbd5e1', paddingVertical: 8, paddingHorizontal: 6, marginBottom: 10 },
-  checkboxContainer: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  checkboxDisabled: { opacity: 0.55 },
-  checkboxSquare: { width: 16, height: 16, borderRadius: 3, borderWidth: 1.5, borderColor: '#94a3b8', backgroundColor: '#ffffff', justifyContent: 'center', alignItems: 'center' },
-  checkboxSquareChecked: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
-  checkboxSquareDisabled: { backgroundColor: '#e2e8f0', borderColor: '#cbd5e1' },
-  checkmarkText: { color: '#ffffff', fontSize: 10, fontWeight: '900' },
-  checkboxLabel: { fontSize: 12, fontWeight: '600', color: '#334155' },
+  chargesGridTable: { borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', overflow: 'hidden' },
+  chargesRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  chargesCellLabel: { flex: 1, backgroundColor: '#f8fafc', padding: 9, borderRightWidth: 1, borderRightColor: '#f1f5f9', justifyContent: 'center' },
+  chargesCellValue: { flex: 1, backgroundColor: '#ffffff', padding: 9, alignItems: 'flex-end', borderRightWidth: 1, borderRightColor: '#f1f5f9', justifyContent: 'center' },
+  chargesLabelText: { fontSize: 10.5, fontWeight: '700', color: '#64748b' },
+  chargesValueText: { fontSize: 12, fontWeight: '800', color: '#0f172a' },
 
   // Edit Banner (Web: prefillEditOrder)
-  editBanner: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fef3c7', borderRadius: 8, borderWidth: 1, borderColor: '#fcd34d', padding: 10, marginBottom: 12 },
+  editBanner: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fffbeb', borderRadius: 12, borderWidth: 1, borderColor: '#fde68a', padding: 12, marginBottom: 12 },
   editBannerText: { fontSize: 13, fontWeight: '800', color: '#b45309' },
 
   // Booking Message (Web: bookingMessage)
-  bookingMsgBox: { backgroundColor: '#eff6ff', borderRadius: 8, borderWidth: 1, borderColor: '#bfdbfe', padding: 10, marginBottom: 12 },
+  bookingMsgBox: { backgroundColor: '#eff6ff', borderRadius: 12, borderWidth: 1, borderColor: '#bfdbfe', padding: 12, marginBottom: 12 },
   bookingMsgSuccess: { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' },
   bookingMsgError: { backgroundColor: '#fef2f2', borderColor: '#fecaca' },
   bookingMsgWarn: { backgroundColor: '#fffbeb', borderColor: '#fde68a' },
-  bookingMsgText: { fontSize: 12, fontWeight: '700', color: '#1e293b', textAlign: 'center' },
+  bookingMsgText: { fontSize: 12, fontWeight: '700', color: '#0f172a', textAlign: 'center' },
 
-  // Last Booked Actions
-  lastBookedActions: { flexDirection: 'row', gap: 8, marginTop: 8, borderTopWidth: 1, borderTopColor: '#c7d2fe', paddingTop: 8 },
-  lastBookedActionBtn: { flex: 1, alignItems: 'center', backgroundColor: '#ffffff', borderRadius: 6, borderWidth: 1, borderColor: '#c7d2fe', paddingVertical: 7 },
+  // Last Booked (inside the success Tray)
+  lastBookedRoute: { fontSize: 13, color: '#0f172a', fontWeight: '800', marginBottom: 10 },
+  lastBookedGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  lastBookedChip: { fontSize: 10.5, fontWeight: '800', color: '#065f46', backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, overflow: 'hidden' },
+  lastBookedActions: { flexDirection: 'row', gap: 8, marginTop: 12, borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingTop: 12 },
+  lastBookedActionBtn: { flex: 1, alignItems: 'center', backgroundColor: '#f8fafc', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', paddingVertical: 9 },
   lastBookedActionEdit: { fontSize: 11.5, fontWeight: '800', color: '#4338ca' },
   lastBookedActionDelete: { fontSize: 11.5, fontWeight: '800', color: '#dc2626' },
   lastBookedActionUpload: { fontSize: 11.5, fontWeight: '800', color: '#15803d' },
 
-  // Booking transactions log
-  txnCard: { backgroundColor: '#ffffff', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 14 },
-  txnHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  txnClear: { fontSize: 11, fontWeight: '700', color: '#64748b' },
-  txnRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  // Booking transactions log (inside the Tray)
+  txnRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
   txnIcon: { fontSize: 14, fontWeight: '900', marginRight: 9, marginTop: 1, color: '#64748b' },
   txnIconOk: { color: '#16a34a' },
   txnIconErr: { color: '#dc2626' },
   txnIconWarn: { color: '#d97706' },
-  txnMain: { fontSize: 12.5, fontWeight: '700', color: '#1e293b', lineHeight: 17 },
+  txnMain: { fontSize: 12.5, fontWeight: '700', color: '#0f172a', lineHeight: 17 },
   txnSub: { fontSize: 10.5, color: '#94a3b8', marginTop: 1, fontWeight: '600' },
 
   // Mode change message
   modeChangeMsg: { fontSize: 11, fontWeight: '700', color: '#1d4ed8', marginTop: 2 },
 
   // Rate strip (Web: Helper Table)
-  rateStrip: { marginTop: 10, backgroundColor: '#ffffff', borderRadius: 6, borderWidth: 1, borderColor: '#bbf7d0', padding: 8 },
+  rateStrip: { marginTop: 10, backgroundColor: '#f0fdf4', borderRadius: 10, borderWidth: 1, borderColor: '#bbf7d0', padding: 10 },
   rateStripText: { fontSize: 10.5, fontWeight: '700', color: '#166534', lineHeight: 16 },
 
   // AWB pattern hint
-  awbHint: { fontSize: 11, fontWeight: '700', color: '#1e293b', marginTop: 6, borderRadius: 6, padding: 7, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
+  awbHint: { fontSize: 11, fontWeight: '700', color: '#1e293b', marginTop: 6, borderRadius: 8, padding: 8, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
   awbHintSuccess: { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0', color: '#15803d' },
   awbHintError: { backgroundColor: '#fef2f2', borderColor: '#fecaca', color: '#b91c1c' },
   awbHintWarn: { backgroundColor: '#fffbeb', borderColor: '#fde68a', color: '#b45309' },
 
-  // Order Details grid
-
-  // Autocomplete add-new
-  autocompleteAddNew: { padding: 10, backgroundColor: '#f1f5f9', borderTopWidth: 1, borderTopColor: '#e2e8f0' },
-  autocompleteAddNewText: { fontSize: 12, fontWeight: '800', color: COLORS.primary },
-
-  // Mode modal disabled item
-  clientModalItemDisabled: { opacity: 0.45 },
-
   // Add Contact modal
   acModalScroll: { flex: 1, width: '100%' },
-  acModalContent: { backgroundColor: '#ffffff', borderRadius: 16, padding: 20, marginHorizontal: 16, marginVertical: 40 },
+  acModalContent: { backgroundColor: '#ffffff', borderRadius: 20, padding: 20, marginHorizontal: 16, marginVertical: 40 },
   acPinStatus: { fontSize: 18, fontWeight: '900', color: '#94a3b8', textAlign: 'center' },
-  acDerivedBox: { backgroundColor: '#f0f9ff', borderRadius: 6, borderWidth: 1, borderColor: '#bae6fd', padding: 8, marginBottom: 10 },
+  acDerivedBox: { backgroundColor: '#f0f9ff', borderRadius: 8, borderWidth: 1, borderColor: '#bae6fd', padding: 10, marginBottom: 10 },
   acDerivedRow: { fontSize: 10.5, fontWeight: '600', color: '#475569', lineHeight: 16 },
   acDerivedStrong: { fontWeight: '800', color: '#0369a1' },
   acDerivedWarn: { fontSize: 10.5, fontWeight: '700', color: '#d97706', marginTop: 2 },
-  acError: { fontSize: 12, fontWeight: '700', color: '#b91c1c', backgroundColor: '#fef2f2', borderRadius: 6, padding: 8, marginTop: 6 },
+  acError: { fontSize: 12, fontWeight: '700', color: '#b91c1c', backgroundColor: '#fef2f2', borderRadius: 8, padding: 8, marginTop: 6 },
 });
 

@@ -7,9 +7,8 @@
 import React, { useState } from 'react';
 import {
   StyleSheet, Modal, View, Text, TouchableOpacity,
-  ScrollView, Platform, Pressable, Keyboard
+  ScrollView, Platform, Keyboard
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../styles/theme';
 import { fmtDate } from '../utils/formatIST';
@@ -20,6 +19,7 @@ import SearchBar from './SearchBar';
 import Dropdown from './Dropdown';
 import Button from './Button';
 import GradientText from './GradientText';
+import SegmentedToggle from './SegmentedToggle';
 import { GradientGlyph } from './icons';
 
 const MODE_GRAD = ['#9C2007', '#f59e0b'];   // brand maroon → amber
@@ -240,33 +240,18 @@ export default function TrackModal({ visible, onClose, token, apiBase, orders = 
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ paddingBottom: 18 }}
           >
-            {/* ── Joined segmented mode switch (TrackingPane Scans/System style) ── */}
-            <View style={styles.segGroup} accessibilityRole="tablist">
-              {MODES.map((item) => {
-                const active = activeTab === item.key;
-                return (
-                  <Pressable
-                    key={item.key}
-                    onPress={() => switchTab(item.key)}
-                    accessibilityRole="tab"
-                    accessibilityState={{ selected: active }}
-                    style={({ pressed }) => [styles.segBtn, active && styles.segBtnActive, pressed && styles.pressed]}
-                  >
-                    {active ? (
-                      <LinearGradient colors={MODE_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.segActiveBg}>
-                        <GradientGlyph name={item.icon} size={12} colors={['#ffffff', '#ffffff']} />
-                        <Text style={styles.segTextActive}>{item.label}</Text>
-                      </LinearGradient>
-                    ) : (
-                      <View style={styles.segIdle}>
-                        <GradientGlyph name={item.icon} size={12} colors={['#94a3b8', '#94a3b8']} />
-                        <Text style={styles.segText}>{item.label}</Text>
-                      </View>
-                    )}
-                  </Pressable>
-                );
-              })}
-            </View>
+            {/* ── Joined segmented mode switch (shared SegmentedToggle) ── */}
+            <SegmentedToggle
+              options={MODES}
+              value={activeTab}
+              onChange={switchTab}
+              colors={MODE_GRAD}
+              size="sm"
+              flex
+              iconSize={12}
+              idleIconColor={['#94a3b8', '#94a3b8']}
+              style={styles.segGap}
+            />
 
             {isPincode ? (
               /* ── PINCODE MODE ── */
@@ -429,44 +414,8 @@ const styles = StyleSheet.create({
   dropdownRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
   dropdownHalf: { flex: 1, minWidth: 0 },
 
-  // Joined segmented control — one pill shell, gradient active segment
-  segGroup: {
-    flexDirection: 'row',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#f1f5f9',
-    padding: 3,
-    gap: 2,
-    marginBottom: 12,
-  },
-  segBtn: { borderRadius: 999, overflow: 'hidden', flex: 1 },
-  segBtnActive: {
-    ...(typeof window !== 'undefined'
-      ? { boxShadow: '0 2px 8px rgba(156, 32, 7, 0.35)' }
-      : { shadowColor: '#9C2007', shadowOpacity: 0.3, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 }),
-  },
-  segActiveBg: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  segIdle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  segText: { color: '#64748b', fontSize: 11, fontWeight: '800', letterSpacing: 0.2 },
-  segTextActive: { color: '#ffffff', fontSize: 11, fontWeight: '900', letterSpacing: 0.2 },
-  pressed: { opacity: 0.7 },
+  // Joined segmented mode switch (shell lives in components/SegmentedToggle.js)
+  segGap: { marginBottom: 12 },
 
   // Search card
   trackCard: { padding: 16, marginBottom: 8 },

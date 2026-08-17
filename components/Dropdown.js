@@ -30,6 +30,7 @@ export default function Dropdown({
   onChange,
   placeholder = 'Select',
   searchable = false,
+  disabled = false,
   style,
 }) {
   const [open, setOpen] = useState(false);
@@ -53,10 +54,12 @@ export default function Dropdown({
       <View style={[styles.fieldWrap, style]}>
         {label ? <Text style={styles.label}>{label}</Text> : null}
         <Pressable
-          onPress={openMenu}
+          onPress={disabled ? undefined : openMenu}
+          disabled={disabled}
           accessibilityRole="button"
           accessibilityLabel={label ? `${label}: ${current?.label || placeholder}` : (current?.label || placeholder)}
-          style={({ pressed }) => [styles.field, pressed && styles.pressed]}
+          accessibilityState={{ disabled }}
+          style={({ pressed }) => [styles.field, disabled && styles.fieldDisabled, pressed && styles.pressed]}
         >
           <Text style={[styles.valueText, !current && styles.placeholderText]} numberOfLines={1}>
             {current ? current.label : placeholder}
@@ -136,6 +139,10 @@ const styles = StyleSheet.create({
     color: '#64748b',
     letterSpacing: 1,
     marginBottom: 5,
+  },
+  fieldDisabled: {
+    opacity: 0.55,
+    backgroundColor: '#f8fafc',
   },
   field: {
     flexDirection: 'row',

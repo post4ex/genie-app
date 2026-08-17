@@ -191,6 +191,8 @@ export default function UpdateStatusModal({
   token,
   apiBase,
   role = 'STAFF',
+  defaultStatus, // optional — force the primary status pre-selected on open
+  b2b2cMap = {}, // optional — resolves CONSIGNEE code → display name
   onSuccess
 }) {
   const insets = useSafeAreaInsets();
@@ -209,6 +211,14 @@ export default function UpdateStatusModal({
   const reference = order?.REFERENCE || order?.AWB_NUMBER || '';
   const isClientRole = (role || '').toUpperCase() === 'CLIENT';
 
+  // Header identity — AWB first (the operator's scan target), falling back to
+  // the reference when no AWB is assigned yet, then a compact
+  // Consignee / Nos / Weight strip in place of the old subtitle + REF badge.
+  const awb = order?.AWB_NUMBER || reference || 'No AWB';
+  const consigneeName = b2b2cMap[order?.CONSIGNEE]?.NAME || order?.CONSIGNEE || '—';
+  const nos = order?.PIECS || '—';
+  const weight = order?.WEIGHT ? `${order.WEIGHT}kg` : '—';
+
   const isCodTopay = React.useMemo(() => {
     if (!order) return false;
     const str = JSON.stringify(order).toUpperCase();
@@ -219,7 +229,10 @@ export default function UpdateStatusModal({
 
   useEffect(() => {
     if (visible && order) {
-      const initPrimary = isClientRole ? 'Delivered' : (order.STATUS || order.STATE || 'In Transit');
+      // Client role is always locked to Delivered; otherwise the initial primary
+      // is the caller-provided default (e.g. the Status screen preselects
+      // Delivered), falling back to the order's current status.
+      const initPrimary = isClientRole ? 'Delivered' : (defaultStatus || order.STATUS || order.STATE || 'In Transit');
       const validPrimary = PRIMARY_STATUS_LIST.includes(initPrimary) ? initPrimary : 'In Transit';
       setPrimaryStatus(validPrimary);
 
@@ -234,7 +247,7 @@ export default function UpdateStatusModal({
       setCustomRemark('');
       setErrorMsg('');
     }
-  }, [visible, order, isClientRole]);
+  }, [visible, order, isClientRole, defaultStatus]);
 
   const handlePrimaryChange = (val) => {
     setPrimaryStatus(val);
@@ -342,10 +355,16 @@ export default function UpdateStatusModal({
             <View style={styles.headerTitleRow}>
               <GradientGlyph name="clipboard-check" size={20} colors={BRAND} />
               <View style={{ flex: 1 }}>
-                <GradientText colors={BRAND} style={styles.title}>Update Status</GradientText>
-                <Text style={styles.subtitle}>Shipment status · reason · handover details</Text>
+                <GradientText colors={BRAND} style={styles.title} numberOfLines={1}>Update Status : {awb}</GradientText>
+                {/* Consignee / Nos / Weight strip */}
+                <View style={styles.metaRow}>
+                  <Text style={[styles.metaValue, styles.metaConsignee]} numberOfLines={1}>{consigneeName}</Text>
+                  <View style={styles.metaDivider} />
+                  <Text style={styles.metaValue}>Nos: {nos}</Text>
+                  <View style={styles.metaDivider} />
+                  <Text style={styles.metaValue}>Wt: {weight}</Text>
+                </View>
               </View>
-              <Text style={styles.refBadge} numberOfLines={1}>REF: {reference}</Text>
               <Button
                 variant="tint"
                 size="sm"
@@ -535,17 +554,10 @@ const styles = StyleSheet.create({
   },
   headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   title: { fontSize: 16, fontWeight: '900' },
-  subtitle: { fontSize: 11, color: '#64748b', marginTop: 1 },
-  refBadge: {
-    color: '#9C2007',
-    fontSize: 10,
-    fontWeight: '800',
-    backgroundColor: '#fde8e8',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    maxWidth: 110,
-  },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3 },
+  metaConsignee: { flexShrink: 1 },
+  metaValue: { fontSize: 11, color: '#475569', fontWeight: '700' },
+  metaDivider: { width: 1, height: 12, backgroundColor: '#e2e8f0' },
   body: { flexGrow: 0, flexShrink: 1 },
   bodyContent: { padding: 16, paddingBottom: 20 },
   errorBanner: { backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca', borderRadius: 10, padding: 10, marginBottom: 14 },

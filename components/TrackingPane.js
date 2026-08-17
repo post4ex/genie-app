@@ -4,11 +4,12 @@
 // buttons, GradientText section headers and the shared hairline detail table.
 
 import React, { useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Tray from './Tray';
 import Button from './Button';
 import GradientText from './GradientText';
+import SegmentedToggle from './SegmentedToggle';
 import { GradientGlyph } from './icons';
 import { accentSparkle } from './Tile';
 import { DETAIL_TABLE_STYLES } from './ShipmentDetailsPane';
@@ -132,32 +133,7 @@ function Timeline({ movements, splitByType, title }) {
     <View>
       <View style={styles.timelineHeader}>
         <SectionHeader icon="scan" title={title} />
-        <View style={styles.segGroup} accessibilityRole="tablist">
-          {segments.map((item) => {
-            const active = selected === item.key;
-            return (
-              <Pressable
-                key={item.key}
-                onPress={() => setSelected(item.key)}
-                accessibilityRole="tab"
-                accessibilityState={{ selected: active }}
-                style={({ pressed }) => [styles.segBtn, active && styles.segBtnActive, pressed && styles.pressed]}
-              >
-                {active ? (
-                  <LinearGradient colors={PANE_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.segActiveBg}>
-                    <GradientGlyph name={item.icon} size={11} colors={['#ffffff', '#ffffff']} />
-                    <Text style={styles.segTextActive}>{item.label}</Text>
-                  </LinearGradient>
-                ) : (
-                  <View style={styles.segIdle}>
-                    <GradientGlyph name={item.icon} size={11} colors={[PANE_GRAD[0], PANE_GRAD[1]]} />
-                    <Text style={styles.segText}>{item.label}</Text>
-                  </View>
-                )}
-              </Pressable>
-            );
-          })}
-        </View>
+        <SegmentedToggle options={segments} value={selected} onChange={setSelected} colors={PANE_GRAD} size="sm" iconSize={11} />
       </View>
 
       {visible.length ? visible.map((movement, index) => {
@@ -505,42 +481,6 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   sectionTitle: { fontSize: 13, fontWeight: '900', letterSpacing: 0.3 },
   timelineHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
-  pressed: { opacity: 0.7 },
-
-  // Joined segmented control — one pill shell, gradient active segment
-  segGroup: {
-    flexDirection: 'row',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#f1f5f9',
-    padding: 3,
-    gap: 2,
-  },
-  segBtn: { borderRadius: 999, overflow: 'hidden' },
-  segBtnActive: {
-    ...(typeof window !== 'undefined'
-      ? { boxShadow: '0 2px 8px rgba(139, 92, 246, 0.45)' }
-      : { shadowColor: '#8b5cf6', shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 }),
-  },
-  segActiveBg: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-  },
-  segIdle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-  },
-  segText: { color: '#64748b', fontSize: 10.5, fontWeight: '800', letterSpacing: 0.2 },
-  segTextActive: { color: '#ffffff', fontSize: 10.5, fontWeight: '900', letterSpacing: 0.2 },
 
   // Movement rows — numbered nodes on a gradient rail + gradient-edge cards
   movRow: { flexDirection: 'row', alignItems: 'stretch' },

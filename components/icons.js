@@ -229,6 +229,7 @@ export const MCI_GLYPHS = {
   track: 'magnify-expand',
   vault: 'safe',
   admin: 'cog-outline',
+  status: 'clipboard-check',
   // Document Center doc types
   label: 'label',
   receipt: 'receipt-text',
