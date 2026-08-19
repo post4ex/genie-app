@@ -4,11 +4,14 @@
   "main": "index.js",
   "scripts": {
     "start": "bash start.sh",
+    "start:8080": "bash start.sh --port 8080",
+    "start:8081": "bash start.sh --port 8081",
     "start:chromebook": "bash run_chromebook.sh",
     "start:tunnel": "expo start --tunnel",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web --port 8080",
+    "web:8081": "expo start --web --port 8081"
   },
   "dependencies": {
     "@expo-google-fonts/comfortaa": "^0.4.2",
