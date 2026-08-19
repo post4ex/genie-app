@@ -1579,14 +1579,14 @@ export default function BookOrderScreen({
       </View>
 
       {/* ── EDIT BANNER (Web: prefillEditOrder banner) ── */}
-      {editRef && (
+      {editRef ? (
         <View style={styles.editBanner}>
           <Text style={styles.editBannerText}>✏️ Editing Order: {editRef}</Text>
           <TouchableOpacity onPress={() => { setEditRef(null); setBookingMessage(''); onEditDone && onEditDone(); }}>
             <Text style={{ color: '#b45309', fontWeight: '800' }}>✕</Text>
           </TouchableOpacity>
         </View>
-      )}
+      ) : null}
 
       {/* ── BOOKING MESSAGE (Web: bookingMessage) ── */}
       {bookingMessage ? (
@@ -1871,9 +1871,9 @@ export default function BookOrderScreen({
           ) : null
         }
       >
-        {!isMainDetailsComplete && (
+        {!isMainDetailsComplete ? (
           <Text style={styles.lockNoticeText}>⚠️ Complete Customer, Sender, Receiver, Mode & Carrier to add boxes & products.</Text>
-        )}
+        ) : null}
 
         {/* Consignment Boxes / Document Section */}
         <View style={styles.partyBlock}>
@@ -1930,7 +1930,7 @@ export default function BookOrderScreen({
             <View style={styles.boxTableWrap}>
               <View style={styles.boxTable}>
                 {/* PCS Cell when in Multi box mode */}
-                {boxMode === 'Multi' && (
+                {boxMode === 'Multi' ? (
                   <View style={[styles.boxTableCell, { flex: 0.85 }]}>
                     <Text style={styles.boxCellLabel}>PCS</Text>
                     <TextInput
@@ -1948,7 +1948,7 @@ export default function BookOrderScreen({
                       onSubmitEditing={() => focusNextIfFilled(pcsCount, boxWeightInputRef)}
                     />
                   </View>
-                )}
+                ) : null}
 
                 {/* Weight Cell */}
                 <View style={styles.boxTableCell}>
@@ -2099,7 +2099,7 @@ export default function BookOrderScreen({
 
         {/* Product & Invoice Details Section */}
         <View style={styles.partyBlockConsignee}>
-          {boxMode !== 'DOX' && (
+          {boxMode !== 'DOX' ? (
             <View style={styles.prodTableWrap}>
               <View style={styles.prodTable}>
                 {/* Row 1: Product Name & Doc # */}
@@ -2217,7 +2217,7 @@ export default function BookOrderScreen({
                 </LinearGradient>
               </TouchableOpacity>
             </View>
-          )}
+          ) : null}
 
           {/* Inline Attached Barcode Scanner Stage (expands below product entry table) */}
           <View style={[styles.ewayScanPanel, ewayScanning && styles.ewayScanPanelOpen]}>
