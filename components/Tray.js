@@ -30,20 +30,41 @@ export default function Tray({
   iconColors,
   iconSize = 15,
   right = null,
+  bottomLeft = null,
   style,
   headerStyle,
+  titleStyle,
+  chipStyle,
   compact = false,
   floating = false,
+  bottomTitle = null,
+  bottomIcon = null,
+  bottomColors = null,
+  bottomIconColors = null,
   children,
 }) {
   if (floating && title) {
     return (
-      <View style={[styles.card, compact && styles.cardCompact, styles.cardFloating, style]}>
-        <View style={styles.floatingChip}>
-          <GradientText colors={colors} style={styles.floatingChipText}>{title}</GradientText>
+      <View style={[styles.card, compact && styles.cardCompact, styles.cardFloating, bottomTitle && styles.cardFloatingBottom, style]}>
+        <View style={[styles.floatingChip, chipStyle]}>
+          {icon ? (
+            <GradientGlyph name={icon} size={iconSize} colors={iconColors || colors} style={styles.floatingIcon} />
+          ) : null}
+          <GradientText colors={colors} style={[styles.floatingChipText, titleStyle]}>{title}</GradientText>
         </View>
-        {right ? <View style={styles.floatingHeaderRight}>{right}</View> : null}
+        {right ? <View style={styles.floatingTopRight}>{right}</View> : null}
         {children}
+        {bottomLeft ? (
+          <View style={styles.floatingBottomLeft}>{bottomLeft}</View>
+        ) : null}
+        {bottomTitle ? (
+          <View style={[styles.floatingBottomChip, chipStyle]}>
+            {bottomIcon ? (
+              <GradientGlyph name={bottomIcon} size={iconSize} colors={bottomIconColors || bottomColors || colors} style={styles.floatingIcon} />
+            ) : null}
+            <GradientText colors={bottomColors || colors} style={[styles.floatingChipText, titleStyle]}>{bottomTitle}</GradientText>
+          </View>
+        ) : null}
       </View>
     );
   }
@@ -57,7 +78,7 @@ export default function Tray({
             <GradientGlyph name={icon} size={iconSize} colors={iconColors || colors} style={styles.icon} />
           ) : null}
           {title ? (
-            <GradientText colors={colors} style={styles.title}>{title}</GradientText>
+            <GradientText colors={colors} style={[styles.title, titleStyle]}>{title}</GradientText>
           ) : null}
           {right ? <View style={styles.right}>{right}</View> : null}
         </View>
@@ -94,19 +115,33 @@ const styles = StyleSheet.create({
 
   // Floating title chip — a rounded, unfilled pill straddling the top-left border
   // with gradient title text; action buttons stay inside the card.
-  cardFloating: { paddingTop: 16 },
+  cardFloating: { paddingTop: 36, marginBottom: 28 },
+  cardFloatingBottom: { paddingBottom: 40, marginBottom: 38 },
   floatingChip: {
     position: 'absolute', top: -13, left: 14, zIndex: 2,
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999,
     backgroundColor: '#ffffff',
-    borderWidth: 1, borderColor: '#e2e8f0',
+    borderWidth: 1, borderColor: '#c4b5fd',
     ...(Platform.OS === 'web'
       ? { boxShadow: '0 2px 6px rgba(15,23,42,0.08)' }
       : { shadowColor: '#0f172a', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } }),
   },
+  floatingBottomChip: {
+    position: 'absolute', bottom: -13, right: 14, zIndex: 2,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999,
+    backgroundColor: '#ffffff',
+    borderWidth: 1, borderColor: '#c4b5fd',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 2px 6px rgba(15,23,42,0.08)' }
+      : { shadowColor: '#0f172a', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } }),
+  },
+  floatingIcon: { marginRight: 6 },
   floatingChipText: { fontSize: 13, fontWeight: '900', letterSpacing: 0.3 },
   // Clearance below the floating title chip (top: -13, ~30px tall) so the
   // header action icons never collide with the chip.
   floatingHeaderRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingTop: 8, marginBottom: 10 },
+  floatingTopRight: { position: 'absolute', top: -13, right: 14, zIndex: 2 },
+  floatingBottomLeft: { position: 'absolute', bottom: -13, left: 14, zIndex: 2 },
 });

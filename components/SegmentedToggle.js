@@ -31,8 +31,10 @@ import { GradientGlyph } from './icons';
 const withAlpha = (hex, alpha) => (/^#[0-9a-fA-F]{6}$/.test(hex) ? `${hex}${alpha}` : hex);
 
 const SIZES = {
-  sm: { padH: 12, padV: 5, fontSize: 10.5 },
-  md: { padH: 18, padV: 7, fontSize: 12 },
+  xs: { padH: 3, padV: 3, fontSize: 9.5 },
+  sm: { padH: 5, padV: 5, fontSize: 10.5 },
+  md: { padH: 10, padV: 6, fontSize: 11.5 },
+  lg: { padH: 16, padV: 7, fontSize: 12 },
 };
 
 // Soft glow behind the active segment, tinted with the gradient's first color.
@@ -52,6 +54,7 @@ export default function SegmentedToggle({
   style,
 }) {
   const s = SIZES[size] || SIZES.md;
+  const padH = flex ? Math.min(s.padH, 4) : s.padH;
   return (
     <View style={[styles.group, style]} accessibilityRole="tablist">
       {options.map((item) => {
@@ -70,12 +73,12 @@ export default function SegmentedToggle({
             ]}
           >
             {active ? (
-              <LinearGradient colors={colors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.seg, { paddingHorizontal: s.padH, paddingVertical: s.padV }]}>
+              <LinearGradient colors={colors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.seg, { paddingHorizontal: padH, paddingVertical: s.padV }]}>
                 {item.icon ? <GradientGlyph name={item.icon} size={iconSize} colors={['#ffffff', '#ffffff']} /> : null}
                 <Text style={[styles.textActive, { fontSize: s.fontSize }]} numberOfLines={1}>{item.label}</Text>
               </LinearGradient>
             ) : (
-              <View style={[styles.seg, { paddingHorizontal: s.padH, paddingVertical: s.padV }]}>
+              <View style={[styles.seg, { paddingHorizontal: padH, paddingVertical: s.padV }]}>
                 {item.icon ? <GradientGlyph name={item.icon} size={iconSize} colors={idleIconColor || colors} /> : null}
                 <Text style={[styles.text, { fontSize: s.fontSize }]} numberOfLines={1}>{item.label}</Text>
               </View>

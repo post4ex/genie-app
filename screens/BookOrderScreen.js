@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  StyleSheet, Text, View, ScrollView, TextInput, TouchableOpacity,
+  StyleSheet, Text, View, ScrollView, TextInput, TouchableOpacity, Pressable,
   Alert, Modal, useWindowDimensions,
   KeyboardAvoidingView, Platform, Keyboard, BackHandler, findNodeHandle
 } from 'react-native';
@@ -10,7 +10,13 @@ import GradientText from '../components/GradientText';
 import Tray from '../components/Tray';
 import Button from '../components/Button';
 import Dropdown from '../components/Dropdown';
-import Icon from '../components/icons';
+import DatePickerModal from '../components/DatePickerModal';
+import SegmentedToggle from '../components/SegmentedToggle';
+import StyledTable from '../components/StyledTable';
+import SearchBar from '../components/SearchBar';
+import Icon, { GradientGlyph } from '../components/icons';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { startWebBarcodeScan } from '../utils/web-barcode';
 
 // GENIE_WEB parity — reuse the exact shared engines instead of inlined copies
 // (Point 2 & 13: single source of truth with GENIE_WEB utils/calculations.js etc.)
@@ -24,27 +30,50 @@ import { InputValidator } from '../utils/input-validator';
 // Brand accent for section trays + page title (modal/status BRAND parity).
 const BOOK_GRAD = ['#9C2007', '#f59e0b'];
 
-// Switchable gradient chip (design-system language) — active flag gets the
-// brand maroon→amber fill, idle stays a hairline white chip.
-const WebCheckbox = ({ value, onValueChange, label, title, disabled = false }) => (
-  <TouchableOpacity
-    accessible
-    accessibilityRole="checkbox"
-    accessibilityLabel={title || label}
-    accessibilityState={{ checked: value, disabled }}
-    disabled={disabled}
-    style={[styles.flagChip, disabled && styles.flagChipDisabled]}
-    onPress={() => onValueChange(!value)}
-    activeOpacity={0.7}
-  >
-    {value ? (
-      <LinearGradient colors={BOOK_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.flagChipFill}>
-        <Text style={styles.flagChipTextActive}>{label}</Text>
-      </LinearGradient>
-    ) : (
-      <Text style={styles.flagChipText}>{label}</Text>
-    )}
-  </TouchableOpacity>
+// Multi-flag Segmented Toggle row matching the app's SegmentedToggle language
+const PaymentSegmentedToggle = ({ options = [], colors = BOOK_GRAD }) => (
+  <View style={styles.segGroup}>
+    {options.map((item) => {
+      const active = Boolean(item.value);
+      return (
+        <Pressable
+          key={item.key}
+          onPress={() => !item.disabled && item.onChange(!active)}
+          disabled={item.disabled}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: active, disabled: item.disabled }}
+          style={({ pressed }) => [
+            styles.segBtn,
+            styles.segBtnFlex,
+            active && (Platform.OS === 'web'
+              ? { boxShadow: '0 2px 8px rgba(156,32,7,0.35)' }
+              : { shadowColor: colors[0], shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 }),
+            item.disabled && styles.segDisabled,
+            pressed && styles.segPressed,
+          ]}
+        >
+          {active ? (
+            <LinearGradient
+              colors={colors}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.segItem}
+            >
+              <Text style={styles.segTextActive} numberOfLines={1}>
+                {item.label}
+              </Text>
+            </LinearGradient>
+          ) : (
+            <View style={styles.segItem}>
+              <Text style={styles.segText} numberOfLines={1}>
+                {item.label}
+              </Text>
+            </View>
+          )}
+        </Pressable>
+      );
+    })}
+  </View>
 );
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -85,6 +114,17 @@ const normalizeZone = (value) => {
 
 const uppercaseText = (value) => String(value ?? '').toUpperCase();
 
+// Format date into DD-MM-YYYY (e.g. 18-08-2026)
+const formatDateDisplay = (dateStr) => {
+  if (!dateStr) return 'Select Date';
+  if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) return dateStr;
+  const parts = String(dateStr).split('-');
+  if (parts.length === 3 && parts[0].length === 4) {
+    return `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+  return dateStr;
+};
+
 export default function BookOrderScreen({
   bookForm = {}, setBookForm, onBookOrder, bookingLoading,
   b2b2cMap = {}, b2bList = [], carriersMap = {}, modesMap = {}, ratesMap = {}, branchesMap = {},
@@ -94,8 +134,6 @@ export default function BookOrderScreen({
   // --- 1. Top Section Local States ---
   const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
   const [orderDateModalVisible, setOrderDateModalVisible] = useState(false);
-  const [calYear, setCalYear] = useState(new Date().getFullYear());
-  const [calMonth, setCalMonth] = useState(new Date().getMonth());
 
   const [clientCode, setClientCode] = useState(bookForm.code || '');
   const { width: windowWidth } = useWindowDimensions();
@@ -301,16 +339,6 @@ export default function BookOrderScreen({
     if (selectedCarrier) focusInput(boxWeightInputRef);
   };
 
-  // Calendar Days Grid Calculator
-  const calendarDays = useMemo(() => {
-    const firstDayIndex = new Date(calYear, calMonth, 1).getDay();
-    const totalDays = new Date(calYear, calMonth + 1, 0).getDate();
-    const days = [];
-    for (let i = 0; i < firstDayIndex; i++) days.push(null);
-    for (let d = 1; d <= totalDays; d++) days.push(d);
-    return days;
-  }, [calYear, calMonth]);
-
   // Filtered Senders matching customer code
   const filteredSenders = useMemo(() => {
     if (!senderQuery || selectedSender) return [];
@@ -440,11 +468,75 @@ export default function BookOrderScreen({
 
   const [flagPcs, setFlagPcs] = useState(false);
   const [pcsCount, setPcsCount] = useState('1');
+  const [boxMode, setBoxMode] = useState('Single');
 
   const [flagTopay, setFlagTopay] = useState(bookForm.topay === 'Yes');
   const [flagCod, setFlagCod] = useState(false);
   const [flagFov, setFlagFov] = useState(false);
   const [flagSav, setFlagSav] = useState(false);
+
+  // Inline E-Way Barcode Scanner State (attached below Product Table)
+  const [ewayPermission, requestEwayPermission] = useCameraPermissions();
+  const [ewayScanning, setEwayScanning] = useState(false);
+  const [ewayScanLine, setEwayScanLine] = useState(10);
+  const [ewayScanError, setEwayScanError] = useState('');
+  const ewayWebVideoRef = useRef(null);
+  const ewayWebStopRef = useRef(null);
+
+  useEffect(() => {
+    if (!ewayScanning) return;
+    let dir = 1;
+    const t = setInterval(() => {
+      setEwayScanLine((y) => {
+        let next = y + dir * 2;
+        if (next >= 85) { dir = -1; next = 85; }
+        if (next <= 10) { dir = 1; next = 10; }
+        return next;
+      });
+    }, 34);
+    return () => clearInterval(t);
+  }, [ewayScanning]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !ewayScanning) return;
+    const el = ewayWebVideoRef.current;
+    if (!el) return;
+    const stop = startWebBarcodeScan(el, (code) => {
+      finishEwayScan(String(code).trim());
+    }, (msg) => setEwayScanError(msg));
+    ewayWebStopRef.current = stop;
+    return () => {
+      if (ewayWebStopRef.current) {
+        ewayWebStopRef.current();
+        ewayWebStopRef.current = null;
+      }
+    };
+  }, [ewayScanning]);
+
+  const stopEwayScanning = () => {
+    if (ewayWebStopRef.current) {
+      ewayWebStopRef.current();
+      ewayWebStopRef.current = null;
+    }
+    setEwayScanning(false);
+    setEwayScanError('');
+  };
+
+  const startEwayScanning = () => {
+    setEwayScanError('');
+    if (Platform.OS !== 'web' && ewayPermission && !ewayPermission.granted) {
+      requestEwayPermission();
+    }
+    setEwayScanning(true);
+  };
+
+  const finishEwayScan = (code) => {
+    if (!code) return;
+    stopEwayScanning();
+    const digits = digitsOnly(code, 12);
+    setProdEway(digits);
+    scheduleDelayedAction(() => productAmountInputRef.current?.focus?.(), 100);
+  };
 
   // Box Adder State
   const [boxWgt, setBoxWgt] = useState('');
@@ -552,6 +644,20 @@ export default function BookOrderScreen({
   const [prodEway, setProdEway] = useState('');
   const [prodAmount, setProdAmount] = useState('');
   const [products, setProducts] = useState([]);
+
+  // Increment Dox weight in sets of 0.25 kg (max 2.0 kg)
+  const handleIncrementDoxWeight = () => {
+    const cur = parseFloat(doxWeight) || 0;
+    let nextVal;
+    if (cur <= 0.1) {
+      nextVal = 0.25;
+    } else {
+      nextVal = Math.round((cur + 0.25) * 100) / 100;
+    }
+    if (nextVal > 2.0) nextVal = 2.0;
+    const clean = nextVal % 1 === 0 ? String(nextVal.toFixed(0)) : String(nextVal);
+    setDoxWeight(clean);
+  };
 
   // --- Add Dox Envelope Handler (Exact Web logic window._doxRenderEntry L1365-1395) ---
   const handleAddDoxEnvelope = () => {
@@ -831,7 +937,7 @@ export default function BookOrderScreen({
       Alert.alert('Error', 'Please fill all Wgt, L, B, and H fields to add a box.');
       return false;
     }
-    const pcsMultiplier = flagPcs ? (parseInt(pcsCount) || 1) : 1;
+    const pcsMultiplier = boxMode === 'Multi' ? (parseInt(pcsCount) || 1) : 1;
     const modeObj = MODE_OPTIONS_LIST.find(m => m.code === selectedMode);
     const volDivisor = modeObj ? modeObj.volIngr : 5000;
     const [computed] = recalculateAllBoxWeights([{ actualWeight: w, length: l, breadth: b, height: h }], volDivisor);
@@ -979,25 +1085,19 @@ export default function BookOrderScreen({
     if (name === 'dox') {
       if (val) {
         setFlagPcs(false);
-        setFlagTopay(false);
-        setFlagCod(false);
-        setFlagFov(false);
         if (!editRef && expressModeObj) setSelectedMode(expressModeObj.code);
       }
       setFlagDox(val);
+      setBoxMode(val ? 'DOX' : 'Single');
     } else if (name === 'pcs') {
-      if (val) setFlagDox(false);
       setFlagPcs(val);
     } else if (name === 'topay') {
-      if (val) setFlagDox(false);
       setFlagTopay(val);
     } else if (name === 'cod') {
-      if (val) setFlagDox(false);
       setFlagCod(val);
     } else if (name === 'fov') {
-      if (val) setFlagDox(false);
       setFlagFov(val);
-    } else if (name === 'sav') {
+    } else if (name === 'sav' || name === 'keep') {
       setFlagSav(val);
     }
   };
@@ -1495,11 +1595,19 @@ export default function BookOrderScreen({
         </View>
       ) : null}
 
-      {/* ── SECTION 1: Order Info & Client ── */}
-      <Tray title="1 · Order Info & Client" icon="calendar" iconColors={BOOK_GRAD} style={isFormLocked && styles.trayLocked}>
+      {/* ── SECTION 1: Order Date & Client ── */}
+      <Tray
+        title="1 · Order Date"
+        icon="calendar"
+        iconColors={BOOK_GRAD}
+        floating
+        bottomTitle="2 · Client"
+        bottomIcon="crm"
+        bottomColors={BOOK_GRAD}
+        style={isFormLocked && styles.trayLocked}
+      >
         <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
           <View style={{ flex: 2 }}>
-            <Text style={styles.labelWeb}>ORDER DATE</Text>
             <TouchableOpacity
               accessible
               accessibilityRole="button"
@@ -1510,14 +1618,13 @@ export default function BookOrderScreen({
             >
               <Icon name="calendar" size={14} color={isFormLocked ? '#94a3b8' : '#0284c7'} />
               <Text style={[styles.calendarTriggerText, isFormLocked && styles.textDisabled]}>
-                {orderDate || 'Select Date'}
+                {formatDateDisplay(orderDate)}
               </Text>
             </TouchableOpacity>
           </View>
 
           <View style={{ flex: 3 }}>
             <Dropdown
-              label="CLIENT NAME"
               value={clientCode}
               options={clientOptions}
               onChange={handleClientDropdownChange}
@@ -1529,129 +1636,157 @@ export default function BookOrderScreen({
         </View>
       </Tray>
 
-      {/* ── SECTION 2: Consignor (Sender) Details ── */}
-      <Tray title="2 · Consignor (Sender)" icon="package-up" iconColors={BOOK_GRAD} style={isFormLocked && styles.trayLocked}>
-        <Text style={styles.labelWeb}>SEARCH SENDER (NAME / MOBILE)</Text>
-        <TextInput          ref={senderInputRef}
-          onFocus={() => ensureInputVisible(senderInputRef, true)}
-          editable={!isFormLocked}
-          style={[styles.inputWeb, isFormLocked && styles.inputDisabled]}
-          placeholder="Type consignor name or phone..."
-          placeholderTextColor="#94a3b8"
-          value={senderQuery}              onChangeText={(text) => {
-            setSenderQuery(uppercaseText(text));
-            if (selectedSender) setSelectedSender(null);
-          }}
-          returnKeyType="next"
-          blurOnSubmit={false}
-          onSubmitEditing={() => {
-            if (filteredSenders.length > 0) {
-              handleSelectSender(filteredSenders[0]);
-              receiverInputRef.current?.focus?.();
-            } else {
-              receiverInputRef.current?.focus?.();
-            }
-          }}
-        />
+      {/* ── SECTION 2: Consignor & Consignee ── */}
+      <Tray
+        title="3 · Consignor"
+        icon="package-up"
+        iconColors={BOOK_GRAD}
+        floating
+        bottomTitle="4 · Consignee"
+        bottomIcon="package-down"
+        bottomColors={BOOK_GRAD}
+        style={isFormLocked && styles.trayLocked}
+      >
+        {/* Consignor (Sender) */}
+        <View style={styles.partyBlock}>
+          <TextInput
+            ref={senderInputRef}
+            onFocus={() => ensureInputVisible(senderInputRef, true)}
+            editable={!isFormLocked}
+            style={[styles.inputWeb, isFormLocked && styles.inputDisabled, styles.trayInput]}
+            placeholder="Type consignor name or phone..."
+            placeholderTextColor="#94a3b8"
+            value={senderQuery}
+            onChangeText={(text) => {
+              setSenderQuery(uppercaseText(text));
+              if (selectedSender) setSelectedSender(null);
+            }}
+            returnKeyType="next"
+            blurOnSubmit={false}
+            onSubmitEditing={() => {
+              if (filteredSenders.length > 0) {
+                handleSelectSender(filteredSenders[0]);
+                receiverInputRef.current?.focus?.();
+              } else {
+                receiverInputRef.current?.focus?.();
+              }
+            }}
+          />
 
-        {filteredSenders.length > 0 && !isFormLocked && (
-          <View style={styles.autocompleteBox}>
-            {filteredSenders.map((c, idx) => (
-              <TouchableOpacity
-                key={idx}
-                accessible
-                accessibilityRole="button"
-                accessibilityLabel={`Select sender ${c.NAME || ''}`}
-                style={styles.autocompleteItem}
-                onPress={() => handleSelectSender(c)}
-              >
-                <Text style={styles.autocompleteName}>{c.NAME}</Text>
-                <Text style={styles.autocompleteSub}>{c.CITY || 'City N/A'} | Ph: {c.MOBILE || 'N/A'}</Text>
+          {filteredSenders.length > 0 && !isFormLocked ? (
+            <View style={styles.autocompleteBox}>
+              {filteredSenders.map((c, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  accessible
+                  accessibilityRole="button"
+                  accessibilityLabel={`Select sender ${c.NAME || ''}`}
+                  style={styles.autocompleteItem}
+                  onPress={() => handleSelectSender(c)}
+                >
+                  <Text style={styles.autocompleteName}>{c.NAME}</Text>
+                  <Text style={styles.autocompleteSub}>{c.CITY || 'City N/A'} | Ph: {c.MOBILE || 'N/A'}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel="Add new sender contact" style={styles.autocompleteAddNew} onPress={() => { openAddContact('sender'); }}>
+                <Text style={styles.autocompleteAddNewText}>+ Add New Contact</Text>
               </TouchableOpacity>
-            ))}
-            <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel="Add new sender contact" style={styles.autocompleteAddNew} onPress={() => { openAddContact('sender'); }}>
-              <Text style={styles.autocompleteAddNewText}>+ Add New Contact</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+            </View>
+          ) : null}
 
-        {selectedSender ? (
-          <View style={styles.selectedContactCard}>
-            <Text style={styles.contactName}>{selectedSender.NAME}</Text>
-            <Text style={styles.contactDetail}>{selectedSender.ADDRESS || 'No Address'}</Text>
-            <Text style={styles.contactDetail}>{selectedSender.CITY} - {selectedSender.PINCODE} ({selectedSender.STATE || 'State N/A'})</Text>
-            <Text style={styles.contactDetail}>Mobile: {selectedSender.MOBILE || 'N/A'}</Text>
-            <Text style={styles.contactDetail}>Origin: {originCityInput || selectedSender.CITY || 'N/A'} - {originPincodeInput || selectedSender.PINCODE || 'N/A'}</Text>
+          {selectedSender ? (
+            <View style={styles.selectedContactCard}>
+              <Text style={styles.contactName}>{selectedSender.NAME}</Text>
+              <Text style={styles.contactDetail}>{selectedSender.ADDRESS || 'No Address'}</Text>
+              <Text style={styles.contactDetail}>{selectedSender.CITY} - {selectedSender.PINCODE} ({selectedSender.STATE || 'State N/A'})</Text>
+              <Text style={styles.contactDetail}>Mobile: {selectedSender.MOBILE || 'N/A'}</Text>
+              <Text style={styles.contactDetail}>Origin: {originCityInput || selectedSender.CITY || 'N/A'} - {originPincodeInput || selectedSender.PINCODE || 'N/A'}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Route Separator: Matching violet line with overlapping rounded pill */}
+        <View style={styles.routeSeparatorWrap}>
+          <View style={styles.routeSeparatorLine} />
+          <View style={styles.routePill}>
+            <Icon name="truck" size={13} color="#8b5cf6" />
+            <GradientText colors={BOOK_GRAD} style={styles.routePillText}>
+              {`${(originCityInput || selectedSender?.CITY || 'ORIGIN').toUpperCase()}  ⇄  ${(destCityInput || selectedReceiver?.CITY || 'DESTINATION').toUpperCase()}`}
+            </GradientText>
           </View>
-        ) : (
-          <Text style={styles.placeholderTextItalic}>Select a customer to autofill sender or type consignor name.</Text>
-        )}
+        </View>
+
+        {/* Consignee (Receiver) */}
+        <View style={styles.partyBlockConsignee}>
+          <TextInput
+            ref={receiverInputRef}
+            onFocus={() => ensureInputVisible(receiverInputRef, true)}
+            editable={!isFormLocked}
+            style={[styles.inputWeb, isFormLocked && styles.inputDisabled, styles.trayInput]}
+            placeholder="Type consignee name or phone..."
+            placeholderTextColor="#94a3b8"
+            value={receiverQuery}
+            onChangeText={(text) => {
+              setReceiverQuery(uppercaseText(text));
+              if (selectedReceiver) setSelectedReceiver(null);
+            }}
+            returnKeyType="next"
+            blurOnSubmit={false}
+            onSubmitEditing={() => {
+              if (filteredReceivers.length > 0) {
+                handleSelectReceiver(filteredReceivers[0]);
+              } else {
+                receiverInputRef.current?.focus?.();
+              }
+            }}
+          />
+
+          {filteredReceivers.length > 0 && !isFormLocked ? (
+            <View style={styles.autocompleteBox}>
+              {filteredReceivers.map((c, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  accessible
+                  accessibilityRole="button"
+                  accessibilityLabel={`Select receiver ${c.NAME || ''}`}
+                  style={styles.autocompleteItem}
+                  onPress={() => handleSelectReceiver(c)}
+                >
+                  <Text style={styles.autocompleteName}>{c.NAME}</Text>
+                  <Text style={styles.autocompleteSub}>{c.CITY || 'City N/A'} | Ph: {c.MOBILE || 'N/A'}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel="Add new receiver contact" style={styles.autocompleteAddNew} onPress={() => { openAddContact('receiver'); }}>
+                <Text style={styles.autocompleteAddNewText}>+ Add New Contact</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {selectedReceiver ? (
+            <View style={styles.selectedContactCard}>
+              <Text style={styles.contactName}>{selectedReceiver.NAME}</Text>
+              <Text style={styles.contactDetail}>{selectedReceiver.ADDRESS || 'No Address'}</Text>
+              <Text style={styles.contactDetail}>{selectedReceiver.CITY} - {selectedReceiver.PINCODE} ({selectedReceiver.STATE || 'State N/A'})</Text>
+              <Text style={styles.contactDetail}>Mobile: {selectedReceiver.MOBILE || 'N/A'} | Zone: {selectedReceiver.ZONE || 'N/A'}</Text>
+            </View>
+          ) : null}
+        </View>
       </Tray>
 
-      {/* ── SECTION 3: Consignee (Receiver) Details ── */}
-      <Tray title="3 · Consignee (Receiver)" icon="package-down" iconColors={BOOK_GRAD} style={isFormLocked && styles.trayLocked}>
-        <Text style={styles.labelWeb}>SEARCH RECEIVER (NAME / MOBILE)</Text>
-        <TextInput
-          ref={receiverInputRef}
-          onFocus={() => ensureInputVisible(receiverInputRef, true)}
-          editable={!isFormLocked}
-          style={[styles.inputWeb, isFormLocked && styles.inputDisabled]}
-          placeholder="Type consignee name or phone..."
-          placeholderTextColor="#94a3b8"
-          value={receiverQuery}              onChangeText={(text) => {
-            setReceiverQuery(uppercaseText(text));
-            if (selectedReceiver) setSelectedReceiver(null);
-          }}
-          returnKeyType="next"
-          blurOnSubmit={false}
-          onSubmitEditing={() => {
-            if (filteredReceivers.length > 0) {
-              handleSelectReceiver(filteredReceivers[0]);
-            } else {
-              // Do not open mode/carrier popups from Enter. Leave the user in
-              // the receiver field until a selector is chosen explicitly.
-              receiverInputRef.current?.focus?.();
-            }
-          }}
-        />
-
-        {filteredReceivers.length > 0 && !isFormLocked && (
-          <View style={styles.autocompleteBox}>
-            {filteredReceivers.map((c, idx) => (
-              <TouchableOpacity
-                key={idx}
-                accessible
-                accessibilityRole="button"
-                accessibilityLabel={`Select receiver ${c.NAME || ''}`}
-                style={styles.autocompleteItem}
-                onPress={() => handleSelectReceiver(c)}
-              >
-                <Text style={styles.autocompleteName}>{c.NAME}</Text>
-                <Text style={styles.autocompleteSub}>{c.CITY || 'City N/A'} | Ph: {c.MOBILE || 'N/A'}</Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity accessible accessibilityRole="button" accessibilityLabel="Add new receiver contact" style={styles.autocompleteAddNew} onPress={() => { openAddContact('receiver'); }}>
-              <Text style={styles.autocompleteAddNewText}>+ Add New Contact</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {selectedReceiver && (
-          <View style={styles.selectedContactCard}>
-            <Text style={styles.contactName}>{selectedReceiver.NAME}</Text>
-            <Text style={styles.contactDetail}>{selectedReceiver.ADDRESS || 'No Address'}</Text>
-            <Text style={styles.contactDetail}>{selectedReceiver.CITY} - {selectedReceiver.PINCODE} ({selectedReceiver.STATE || 'State N/A'})</Text>
-            <Text style={styles.contactDetail}>Mobile: {selectedReceiver.MOBILE || 'N/A'} | Zone: {selectedReceiver.ZONE || 'N/A'}</Text>
-          </View>
-        )}
-      </Tray>
-
-      {/* ── SECTION 4: Mode & Carrier ── */}
-      <Tray title="4 · Mode & Carrier" icon="truck" iconColors={BOOK_GRAD} style={isFormLocked && styles.trayLocked}>
+      {/* ── SECTION 5: Mode & Carrier ── */}
+      <Tray
+        title="5 · Mode"
+        icon="mode"
+        iconColors={BOOK_GRAD}
+        floating
+        bottomTitle="6 · Carrier"
+        bottomIcon="carrier"
+        bottomColors={BOOK_GRAD}
+        style={isFormLocked && styles.trayLocked}
+      >
         <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
           <View style={{ flex: 1 }}>
             <Dropdown
-              label="MODE"
               value={selectedMode}
               options={modeOptions}
               onChange={handleModeDropdownChange}
@@ -1661,7 +1796,6 @@ export default function BookOrderScreen({
 
           <View style={{ flex: 1 }}>
             <Dropdown
-              label="CARRIER"
               value={selectedCarrier}
               options={carrierOptions}
               onChange={handleCarrierDropdownChange}
@@ -1674,33 +1808,82 @@ export default function BookOrderScreen({
         {modeChangeMsg ? <Text style={styles.modeChangeMsg}>{modeChangeMsg}</Text> : null}
       </Tray>
 
-      {/* ── SECTION 5: Payment Type & Options ── */}
-      <Tray title="5 · Payment Type & Options" icon="cash" iconColors={BOOK_GRAD}>
-        <View style={styles.webPaymentRow}>
-          {/* Web setBookingFieldsLocked/togglePaymentModeLock parity: once a
-              consignment row exists, these booking choices cannot change. SAV
-              intentionally remains available because it only affects the next
-              booking reset. */}
-          <WebCheckbox label="Dox" value={flagDox} disabled={isFormLocked} onValueChange={(v) => setPaymentFlag('dox', v)} />
-          {/* Web togglePaymentModeLock intentionally keeps Pcs available after
-              boxes exist so the next box can still use a pieces multiplier. */}
-          <WebCheckbox label="Pcs" value={flagPcs} onValueChange={(v) => setPaymentFlag('pcs', v)} />
-          <WebCheckbox label="Topay" value={flagTopay} disabled={isFormLocked} onValueChange={(v) => setPaymentFlag('topay', v)} />
-          <WebCheckbox label="COD" value={flagCod} disabled={isFormLocked} onValueChange={(v) => setPaymentFlag('cod', v)} />
-          <WebCheckbox label="FOV" value={flagFov} disabled={isFormLocked} onValueChange={(v) => setPaymentFlag('fov', v)} />
-          <WebCheckbox label="SAV" value={flagSav} onValueChange={(v) => setPaymentFlag('sav', v)} title="Preserve customer/consignor/consignee for next booking" />
+      {/* ── SECTION 7: Payment Type & Options ── */}
+      <Tray title="7 · Payment Type & Options" icon="cash" iconColors={BOOK_GRAD} floating>
+        <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+          <View style={{ flex: 3 }}>
+            <PaymentSegmentedToggle
+              options={[
+                { key: 'topay', label: 'TOPAY', value: flagTopay, disabled: isFormLocked, onChange: (v) => setPaymentFlag('topay', v) },
+                { key: 'cod', label: 'COD', value: flagCod, disabled: isFormLocked, onChange: (v) => setPaymentFlag('cod', v) },
+                { key: 'fov', label: 'FOV', value: flagFov, disabled: isFormLocked, onChange: (v) => setPaymentFlag('fov', v) },
+              ]}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <PaymentSegmentedToggle
+              options={[
+                { key: 'keep', label: 'KEEP', value: flagSav, disabled: false, onChange: (v) => setPaymentFlag('keep', v) },
+              ]}
+            />
+          </View>
         </View>
+      </Tray>
 
-        {/* Dox Mode Envelope Options Card (Single row: Wt, DL, A4, BG) */}
-        {flagDox && (
-          <View style={{ marginTop: 10, backgroundColor: '#f0f9ff', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#bae6fd' }}>
-            <Text style={styles.labelWeb}>DOX ENVELOPE (WT & SIZE)</Text>
-            <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', marginBottom: 8 }}>
-              <View style={{ flex: 1.2 }}>
+      {/* ── SECTION 8 & 9: Consignment Boxes / Documents & Product Details ── */}
+      <Tray
+        title={boxMode === 'DOX' ? `8 · Document Envelopes (${boxes.length})` : `8 · Consignment Boxes (${boxes.length})`}
+        icon={boxMode === 'DOX' ? 'envelope' : 'boxes'}
+        iconColors={BOOK_GRAD}
+        floating
+        bottomTitle={`9 · Products & Invoice (${products.length})`}
+        bottomIcon="product"
+        bottomColors={BOOK_GRAD}
+        style={!isMainDetailsComplete && styles.trayDisabled}
+        right={
+          boxes.length > 0 ? (
+            <TouchableOpacity
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="Clear all boxes"
+              onPress={handleClearBoxes}
+              style={styles.clearCornerIconBtn}
+              hitSlop={8}
+              activeOpacity={0.75}
+            >
+              <Icon name="trash" size={13} color="#ef4444" />
+            </TouchableOpacity>
+          ) : null
+        }
+        bottomLeft={
+          products.length > 0 ? (
+            <TouchableOpacity
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="Clear all products"
+              onPress={handleClearProducts}
+              style={styles.clearCornerIconBtn}
+              hitSlop={8}
+              activeOpacity={0.75}
+            >
+              <Icon name="trash" size={13} color="#ef4444" />
+            </TouchableOpacity>
+          ) : null
+        }
+      >
+        {!isMainDetailsComplete && (
+          <Text style={styles.lockNoticeText}>⚠️ Complete Customer, Sender, Receiver, Mode & Carrier to add boxes & products.</Text>
+        )}
+
+        {/* Consignment Boxes / Document Section */}
+        <View style={styles.partyBlock}>
+          {boxMode === 'DOX' ? (
+            <View style={styles.doxRow}>
+              <View style={styles.doxInputBox}>
                 <TextInput
                   ref={doxWeightInputRef}
                   onFocus={() => ensureInputVisible(doxWeightInputRef)}
-                  style={[styles.inputWeb, { marginBottom: 0, paddingHorizontal: 8 }]}
+                  style={styles.doxWeightInput}
                   value={doxWeight}
                   keyboardType="numeric"
                   onChangeText={(t) => setDoxWeight(decimalOnly(t))}
@@ -1709,394 +1892,516 @@ export default function BookOrderScreen({
                   returnKeyType="done"
                   onSubmitEditing={handleAddDoxEnvelope}
                 />
+                <Button
+                  colors={BOOK_GRAD}
+                  size="sm"
+                  icon="plus"
+                  iconOnly
+                  onPress={handleIncrementDoxWeight}
+                  accessibilityLabel="Increase Dox weight by 0.25 kg"
+                  style={{ marginHorizontal: 3 }}
+                />
+                <View style={styles.doxToggleWrap}>
+                  <SegmentedToggle
+                    options={[
+                      { key: 'DL', label: 'DL' },
+                      { key: 'A4', label: 'A4' },
+                      { key: 'BG', label: 'BG' },
+                    ]}
+                    value={doxType}
+                    onChange={setDoxType}
+                    colors={BOOK_GRAD}
+                    size="md"
+                    flex
+                  />
+                </View>
               </View>
-              {['DL', 'A4', 'BG'].map(env => (
-                <TouchableOpacity
-                  key={env}
-                  style={[
-                    styles.selectChip,
-                    { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, paddingVertical: 8 },
-                    doxType === env && styles.selectChipActive
-                  ]}
-                  onPress={() => setDoxType(env)}
-                >
-                  <Text style={[styles.selectChipText, doxType === env && styles.selectChipTextActive]}>
-                    {env}
-                  </Text>
-                </TouchableOpacity>
+
+              <Button
+                variant="primary"
+                size="md"
+                icon="plus"
+                iconOnly
+                onPress={handleAddDoxEnvelope}
+                accessibilityLabel={`Add Dox Envelope (${doxType})`}
+              />
+            </View>
+          ) : (
+            <View style={styles.boxTableWrap}>
+              <View style={styles.boxTable}>
+                {/* PCS Cell when in Multi box mode */}
+                {boxMode === 'Multi' && (
+                  <View style={[styles.boxTableCell, { flex: 0.85 }]}>
+                    <Text style={styles.boxCellLabel}>PCS</Text>
+                    <TextInput
+                      ref={pcsCountInputRef}
+                      onFocus={() => ensureInputVisible(pcsCountInputRef)}
+                      editable={isMainDetailsComplete}
+                      style={[styles.boxCellInput, !isMainDetailsComplete && styles.inputDisabled, { color: '#8b5cf6' }]}
+                      placeholder="1"
+                      placeholderTextColor="#94a3b8"
+                      keyboardType="numeric"
+                      value={pcsCount}
+                      onChangeText={(t) => setPcsCount(digitsOnly(t, 4))}
+                      returnKeyType="next"
+                      blurOnSubmit={false}
+                      onSubmitEditing={() => focusNextIfFilled(pcsCount, boxWeightInputRef)}
+                    />
+                  </View>
+                )}
+
+                {/* Weight Cell */}
+                <View style={styles.boxTableCell}>
+                  <Text style={styles.boxCellLabel}>WT (KG)</Text>
+                  <TextInput
+                    ref={boxWeightInputRef}
+                    onFocus={() => ensureInputVisible(boxWeightInputRef)}
+                    editable={isMainDetailsComplete}
+                    style={[styles.boxCellInput, !isMainDetailsComplete && styles.inputDisabled]}
+                    placeholder="0.0"
+                    placeholderTextColor="#94a3b8"
+                    keyboardType="numeric"
+                    value={boxWgt}
+                    onChangeText={(t) => setBoxWgt(decimalOnly(t))}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => focusNextIfFilled(boxWgt, boxLengthInputRef)}
+                  />
+                </View>
+
+                {/* Length Cell */}
+                <View style={styles.boxTableCell}>
+                  <Text style={styles.boxCellLabel}>L (CM)</Text>
+                  <TextInput
+                    ref={boxLengthInputRef}
+                    onFocus={() => ensureInputVisible(boxLengthInputRef)}
+                    editable={isMainDetailsComplete}
+                    style={[styles.boxCellInput, !isMainDetailsComplete && styles.inputDisabled]}
+                    placeholder="0"
+                    placeholderTextColor="#94a3b8"
+                    keyboardType="numeric"
+                    value={boxLength}
+                    onChangeText={(t) => setBoxLength(decimalOnly(t))}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => focusNextIfFilled(boxLength, boxBreadthInputRef)}
+                  />
+                </View>
+
+                {/* Breadth Cell */}
+                <View style={styles.boxTableCell}>
+                  <Text style={styles.boxCellLabel}>B (CM)</Text>
+                  <TextInput
+                    ref={boxBreadthInputRef}
+                    onFocus={() => ensureInputVisible(boxBreadthInputRef)}
+                    editable={isMainDetailsComplete}
+                    style={[styles.boxCellInput, !isMainDetailsComplete && styles.inputDisabled]}
+                    placeholder="0"
+                    placeholderTextColor="#94a3b8"
+                    keyboardType="numeric"
+                    value={boxBreadth}
+                    onChangeText={(t) => setBoxBreadth(decimalOnly(t))}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => focusNextIfFilled(boxBreadth, boxHeightInputRef)}
+                  />
+                </View>
+
+                {/* Height Cell */}
+                <View style={[styles.boxTableCell, styles.boxTableCellLast]}>
+                  <Text style={styles.boxCellLabel}>H (CM)</Text>
+                  <TextInput
+                    ref={boxHeightInputRef}
+                    onFocus={() => ensureInputVisible(boxHeightInputRef)}
+                    editable={isMainDetailsComplete}
+                    style={[styles.boxCellInput, !isMainDetailsComplete && styles.inputDisabled]}
+                    placeholder="0"
+                    placeholderTextColor="#94a3b8"
+                    keyboardType="numeric"
+                    value={boxHeight}
+                    onChangeText={(t) => setBoxHeight(decimalOnly(t))}
+                    returnKeyType="done"
+                    onSubmitEditing={() => { handleAddBox(); }}
+                  />
+                </View>
+              </View>
+
+              <Button
+                variant="primary"
+                size="md"
+                icon="plus"
+                iconOnly
+                disabled={!isMainDetailsComplete}
+                onPress={handleAddBox}
+                accessibilityLabel="Add Box"
+              />
+            </View>
+          )}
+
+          {boxes.length > 0 ? (
+            <View style={{ marginTop: 10 }}>
+              {boxes.map((b, bi) => (
+                <View key={bi} style={styles.boxRowCard}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.boxRowTitle}>{boxMode === 'DOX' ? `Envelope #${b.BOX_NUM}` : `Box #${b.BOX_NUM}`}</Text>
+                    <Text style={styles.boxRowSub}>
+                      {boxMode === 'DOX'
+                        ? `Weight: ${b.WEIGHT} kg | Size: ${b.LENGTH || doxType || 'DL'}`
+                        : `Weight: ${b.WEIGHT} kg | ${b.LENGTH}x${b.BREADTH}x${b.HIGHT} cm | Chg Wt: ${(b.CHG_WT || b.WEIGHT).toFixed(2)} kg`}
+                    </Text>
+                  </View>
+                  <TouchableOpacity onPress={() => handleRemoveBox(bi)} hitSlop={8} style={styles.rowRemoveBtn}>
+                    <Icon name="trash" size={16} color="#ef4444" />
+                  </TouchableOpacity>
+                </View>
               ))}
             </View>
+          ) : null}
+        </View>
 
-            <Button variant="soft" size="md" label={`+ Add Dox Envelope (${doxType})`} onPress={handleAddDoxEnvelope} style={{ marginTop: 4 }} />
-          </View>
-        )}
-
-        {/* Pcs Mode Options (Web: pcs_count) */}
-        {flagPcs && (
-          <View style={{ marginTop: 10 }}>
-            <Text style={styles.labelWeb}>PIECES COUNT MULTIPLIER</Text>
-            <TextInput                ref={pcsCountInputRef}
-                onFocus={() => ensureInputVisible(pcsCountInputRef)}
-                style={styles.inputWeb}
-              value={pcsCount}
-              keyboardType="numeric"
-              onChangeText={(t) => setPcsCount(digitsOnly(t, 4))}
-              placeholder="1"
-              returnKeyType="done"
-              onSubmitEditing={() => boxWeightInputRef.current?.focus?.()}
-            />
-          </View>
-        )}
-      </Tray>
-
-      {/* ── SECTION 6: Consignment Boxes ── */}
-      <Tray
-        title={`6 · Consignment Boxes (${boxes.length})`}
-        icon="package-variant-closed"
-        iconColors={BOOK_GRAD}
-        style={!isMainDetailsComplete && styles.trayDisabled}
-        right={boxes.length > 0 ? (
-          <TouchableOpacity onPress={handleClearBoxes} hitSlop={8}>
-            <Text style={styles.clearSmallText}>Clear</Text>
-          </TouchableOpacity>
-        ) : null}
-      >
-
-        {!isMainDetailsComplete && (
-          <Text style={styles.lockNoticeText}>⚠️ Complete Customer, Sender, Receiver, Mode & Carrier to add boxes.</Text>
-        )}
-
-        {!flagDox && (
-          <>
-            <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.labelWeb}>WEIGHT (KG)</Text>
-                <TextInput
-                  ref={boxWeightInputRef}
-                  onFocus={() => ensureInputVisible(boxWeightInputRef)}
-                  editable={isMainDetailsComplete}
-                  style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
-                  placeholder="Weight"
-                  keyboardType="numeric"
-                  placeholderTextColor="#94a3b8"
-                  value={boxWgt}
-                  onChangeText={(t) => setBoxWgt(decimalOnly(t))}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => focusNextIfFilled(boxWgt, boxLengthInputRef)}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.labelWeb}>LENGTH (CM)</Text>
-                <TextInput
-                  ref={boxLengthInputRef}
-                  onFocus={() => ensureInputVisible(boxLengthInputRef)}
-                  editable={isMainDetailsComplete}
-                  style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
-                  placeholder="L"
-                  keyboardType="numeric"
-                  placeholderTextColor="#94a3b8"
-                  value={boxLength}
-                  onChangeText={(t) => setBoxLength(decimalOnly(t))}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => focusNextIfFilled(boxLength, boxBreadthInputRef)}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.labelWeb}>BREADTH (CM)</Text>
-                <TextInput
-                  ref={boxBreadthInputRef}
-                  onFocus={() => ensureInputVisible(boxBreadthInputRef)}
-                  editable={isMainDetailsComplete}
-                  style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
-                  placeholder="B"
-                  keyboardType="numeric"
-                  placeholderTextColor="#94a3b8"
-                  value={boxBreadth}
-                  onChangeText={(t) => setBoxBreadth(decimalOnly(t))}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => focusNextIfFilled(boxBreadth, boxHeightInputRef)}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.labelWeb}>HEIGHT (CM)</Text>
-                <TextInput
-                  ref={boxHeightInputRef}
-                  onFocus={() => ensureInputVisible(boxHeightInputRef)}
-                  editable={isMainDetailsComplete}
-                  style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
-                  placeholder="H"
-                  keyboardType="numeric"
-                  placeholderTextColor="#94a3b8"
-                  value={boxHeight}
-                  onChangeText={(t) => setBoxHeight(decimalOnly(t))}
-                  returnKeyType="done"
-                  onSubmitEditing={() => { handleAddBox(); }}
-                />
-              </View>
+        {/* Middle Separator with Dual Toggles on Same Row */}
+        <View style={styles.routeSeparatorWrap}>
+          <View style={styles.routeSeparatorLine} />
+          <View style={styles.separatorDualToggles}>
+            <View style={{ flex: 1 }}>
+              <SegmentedToggle
+                options={[
+                  { key: 'DOX', label: 'DOX' },
+                  { key: 'Single', label: 'Single' },
+                  { key: 'Multi', label: 'Multi' },
+                ]}
+                value={boxMode}
+                onChange={(mode) => {
+                  setBoxMode(mode);
+                  setFlagDox(mode === 'DOX');
+                }}
+                colors={BOOK_GRAD}
+                size="sm"
+                flex
+              />
             </View>
-
-            <Button
-              variant="soft"
-              size="md"
-              label="+ Add Box"
-              disabled={!isMainDetailsComplete}
-              onPress={handleAddBox}
-              style={{ marginTop: 4 }}
-            />
-          </>
-        )}
-
-        {boxes.length > 0 && (
-          <View style={{ marginTop: 10 }}>
-            {boxes.map((b, bi) => (
-              <View key={bi} style={styles.boxRowCard}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.boxRowTitle}>Box #{b.BOX_NUM}</Text>
-                  <Text style={styles.boxRowSub}>
-                    Weight: {b.WEIGHT} kg | {b.LENGTH}x{b.BREADTH}x{b.HIGHT} cm | Chg Wt: {(b.CHG_WT || b.WEIGHT).toFixed(2)} kg
-                  </Text>
-                </View>
-                <TouchableOpacity onPress={() => handleRemoveBox(bi)} hitSlop={8} style={styles.rowRemoveBtn}>
-                  <Icon name="trash" size={16} color="#ef4444" />
-                </TouchableOpacity>
-              </View>
-            ))}
+            <View style={{ flex: 1 }}>
+              <SegmentedToggle
+                options={[
+                  { key: 'INV', label: 'INV' },
+                  { key: 'CLN', label: 'CLN' },
+                  { key: 'DEC', label: 'DEC' },
+                ]}
+                value={prodDocType}
+                onChange={setProdDocType}
+                colors={BOOK_GRAD}
+                size="sm"
+                flex
+              />
+            </View>
           </View>
-        )}
-      </Tray>
+        </View>
 
-      {/* ── SECTION 7: Product & Invoice Details ── */}
-      <Tray
-        title={`7 · Product & Invoice Details (${products.length})`}
-        icon="file-document"
-        iconColors={BOOK_GRAD}
-        style={!isMainDetailsComplete && styles.trayDisabled}
-        right={products.length > 0 ? (
-          <TouchableOpacity onPress={handleClearProducts} hitSlop={8}>
-            <Text style={styles.clearSmallText}>Clear</Text>
-          </TouchableOpacity>
-        ) : null}
-      >
+        {/* Product & Invoice Details Section */}
+        <View style={styles.partyBlockConsignee}>
+          {boxMode !== 'DOX' && (
+            <View style={styles.prodTableWrap}>
+              <View style={styles.prodTable}>
+                {/* Row 1: Product Name & Doc # */}
+                <View style={styles.prodTableRow}>
+                  <View style={[styles.prodTableCell, { flex: 1.8, borderRightWidth: 1, borderRightColor: '#e2e8f0' }]}>
+                    <Text style={styles.prodCellLabel}>PRODUCT NAME</Text>
+                    <TextInput
+                      ref={productNameInputRef}
+                      onFocus={() => ensureInputVisible(productNameInputRef)}
+                      editable={isMainDetailsComplete}
+                      style={[styles.prodCellInput, !isMainDetailsComplete && styles.inputDisabled]}
+                      placeholder="e.g. Spare Parts"
+                      placeholderTextColor="#94a3b8"
+                      value={prodName}
+                      onChangeText={(text) => setProdName(uppercaseText(text))}
+                      returnKeyType="next"
+                      blurOnSubmit={false}
+                      onSubmitEditing={() => focusNextIfFilled(prodName, productDocNoInputRef)}
+                    />
+                  </View>
 
-        {!isMainDetailsComplete && (
-          <Text style={styles.lockNoticeText}>⚠️ Complete Customer, Sender, Receiver, Mode & Carrier to add products.</Text>
-        )}
+                  <View style={[styles.prodTableCell, { flex: 1.2 }]}>
+                    <Text style={styles.prodCellLabel}>DOC #</Text>
+                    <TextInput
+                      ref={productDocNoInputRef}
+                      onFocus={() => ensureInputVisible(productDocNoInputRef)}
+                      editable={isMainDetailsComplete}
+                      style={[styles.prodCellInput, !isMainDetailsComplete && styles.inputDisabled]}
+                      placeholder="Doc No"
+                      placeholderTextColor="#94a3b8"
+                      value={prodDocNo}
+                      onChangeText={(text) => setProdDocNo(uppercaseText(text))}
+                      returnKeyType="next"
+                      blurOnSubmit={false}
+                      onSubmitEditing={() => focusNextIfFilled(prodDocNo, productEwayInputRef)}
+                    />
+                  </View>
+                </View>
 
-        {!flagDox && (
-          <>
-            <Text style={styles.labelWeb}>PRODUCT NAME</Text>
-            <TextInput
-              ref={productNameInputRef}
-              onFocus={() => ensureInputVisible(productNameInputRef)}
-              editable={isMainDetailsComplete}
-              style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
-              placeholder="e.g. Spare Parts"
-              placeholderTextColor="#94a3b8"
-              value={prodName}
-              onChangeText={(text) => setProdName(uppercaseText(text))}
-              returnKeyType="next"
-              blurOnSubmit={false}
-              onSubmitEditing={() => focusNextIfFilled(prodName, productDocNoInputRef)}
-            />
+                {/* Row 2: 12-Digit EWay & Amount */}
+                <View style={[styles.prodTableRow, styles.prodTableRowLast]}>
+                  <View style={[styles.prodTableCell, { flex: 1.8, borderRightWidth: 1, borderRightColor: '#e2e8f0' }]}>
+                    <Text style={styles.prodCellLabel}>12 DIGIT EWAY</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <TextInput
+                        ref={productEwayInputRef}
+                        onFocus={() => ensureInputVisible(productEwayInputRef)}
+                        editable={isMainDetailsComplete}
+                        style={[styles.prodCellInput, { flex: 1 }, !isMainDetailsComplete && styles.inputDisabled]}
+                        placeholder="12 digit EWay"
+                        keyboardType="numeric"
+                        maxLength={12}
+                        placeholderTextColor="#94a3b8"
+                        value={prodEway}
+                        onChangeText={(t) => setProdEway(digitsOnly(t, 12))}
+                        returnKeyType="next"
+                        blurOnSubmit={false}
+                        onSubmitEditing={() => focusNextIfFilled(prodEway, productAmountInputRef)}
+                      />
+                      <TouchableOpacity
+                        onPress={() => isMainDetailsComplete && (ewayScanning ? stopEwayScanning() : startEwayScanning())}
+                        disabled={!isMainDetailsComplete}
+                        style={[styles.tinyBarcodeBtn, ewayScanning && styles.tinyBarcodeBtnActive]}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        accessibilityRole="button"
+                        accessibilityLabel={ewayScanning ? "Close Scanner" : "Scan E-Way Barcode"}
+                      >
+                        <GradientGlyph
+                          name={ewayScanning ? "close" : "barcode-scan"}
+                          size={16}
+                          colors={ewayScanning ? ['#f59e0b', '#ef4444'] : ['#0ea5e9', '#2563eb']}
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
 
-            <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
-              <View style={{ flex: 2 }}>
-                <Text style={styles.labelWeb}>DOC NO</Text>
-                <TextInput
-                  ref={productDocNoInputRef}
-                  onFocus={() => ensureInputVisible(productDocNoInputRef)}
-                  editable={isMainDetailsComplete}
-                  style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
-                  placeholder="Doc #"
-                  placeholderTextColor="#94a3b8"
-                  value={prodDocNo}
-                  onChangeText={(text) => setProdDocNo(uppercaseText(text))}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => focusNextIfFilled(prodDocNo, productEwayInputRef)}
-                />
+                  <View style={[styles.prodTableCell, { flex: 1.2 }]}>
+                    <Text style={styles.prodCellLabel}>AMOUNT (₹)</Text>
+                    <TextInput
+                      ref={productAmountInputRef}
+                      onFocus={() => ensureInputVisible(productAmountInputRef)}
+                      editable={isMainDetailsComplete}
+                      style={[styles.prodCellInput, !isMainDetailsComplete && styles.inputDisabled]}
+                      placeholder="0.00"
+                      keyboardType="numeric"
+                      placeholderTextColor="#94a3b8"
+                      value={prodAmount}
+                      onChangeText={(t) => setProdAmount(decimalOnly(t))}
+                      returnKeyType="done"
+                      onSubmitEditing={() => { handleAddProduct(); }}
+                    />
+                  </View>
+                </View>
               </View>
 
-              <View style={{ flex: 3 }}>
-                <Text style={styles.labelWeb}>DOC TYPE</Text>
-                <View style={styles.chipRowSelect}>
-                  {['INV', 'CLN', 'DEC', 'DOX'].map(dt => (
-                    <TouchableOpacity
-                      key={dt}
-                      disabled={!isMainDetailsComplete}
-                      style={[styles.selectChip, prodDocType === dt && styles.selectChipActive]}
-                      onPress={() => setProdDocType(dt)}
-                    >
-                      <Text style={[styles.selectChipText, prodDocType === dt && styles.selectChipTextActive]}>{dt}</Text>
+              <TouchableOpacity
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="Add Product"
+                disabled={!isMainDetailsComplete}
+                onPress={handleAddProduct}
+                activeOpacity={0.8}
+                style={[
+                  styles.prodAddBtnStretched,
+                  !isMainDetailsComplete && styles.btnDisabled,
+                ]}
+              >
+                <LinearGradient
+                  colors={['#9C2007', '#ef4444']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.prodAddBtnGradient}
+                >
+                  <Icon name="plus" size={18} color="#ffffff" />
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Inline Attached Barcode Scanner Stage (expands below product entry table) */}
+          <View style={[styles.ewayScanPanel, ewayScanning && styles.ewayScanPanelOpen]}>
+            {ewayScanning ? (
+              <View style={styles.ewayScanStage}>
+                {Platform.OS === 'web' ? (
+                  React.createElement('video', {
+                    ref: ewayWebVideoRef,
+                    autoPlay: true,
+                    playsInline: true,
+                    muted: true,
+                    style: { width: '100%', height: '100%', objectFit: 'cover' },
+                  })
+                ) : ewayPermission?.granted ? (
+                  <CameraView
+                    style={StyleSheet.absoluteFillObject}
+                    facing="back"
+                    barcodeScannerSettings={{
+                      barcodeTypes: [
+                        'code128', 'code39', 'code93', 'ean13', 'ean8',
+                        'qr', 'pdf417', 'datamatrix', 'itf14', 'codabar', 'aztec', 'upc_a', 'upc_e',
+                      ],
+                    }}
+                    onBarcodeScanned={(res) => finishEwayScan(res?.data || res?.raw)}
+                  />
+                ) : (
+                  <View style={styles.ewayScanPerm}>
+                    <Text style={styles.ewayScanPermText}>Camera permission required</Text>
+                    <TouchableOpacity onPress={requestEwayPermission} style={styles.ewayScanPermBtn}>
+                      <Text style={styles.ewayScanPermBtnText}>Grant Permission</Text>
                     </TouchableOpacity>
-                  ))}
+                  </View>
+                )}
+
+                {/* Dark vignette overlay + scanning reticle */}
+                <View style={styles.ewayScanDark} pointerEvents="none">
+                  <View style={styles.ewayScanFrame}>
+                    <LinearGradient colors={['#f59e0b', '#fbbf24']} style={[styles.ewayCorner, styles.ewayCornerTL]} />
+                    <LinearGradient colors={['#f59e0b', '#fbbf24']} style={[styles.ewayCorner, styles.ewayCornerTR]} />
+                    <LinearGradient colors={['#f59e0b', '#fbbf24']} style={[styles.ewayCorner, styles.ewayCornerBL]} />
+                    <LinearGradient colors={['#f59e0b', '#fbbf24']} style={[styles.ewayCorner, styles.ewayCornerBR]} />
+                    <LinearGradient
+                      colors={['transparent', '#ef4444', '#ef4444', 'transparent']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={[styles.ewayScanLine, { top: `${ewayScanLine}%` }]}
+                    />
+                    <Text style={styles.ewayScanHint}>Align 12-digit E-Way barcode</Text>
+                  </View>
                 </View>
-              </View>
-            </View>
 
-            <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.labelWeb}>EWAY BILL</Text>
-                <TextInput
-                  ref={productEwayInputRef}
-                  onFocus={() => ensureInputVisible(productEwayInputRef)}
-                  editable={isMainDetailsComplete}
-                  style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
-                  placeholder="12 digit EWay"
-                  keyboardType="numeric"
-                  maxLength={12}
-                  placeholderTextColor="#94a3b8"
-                  value={prodEway}
-                  onChangeText={(t) => setProdEway(digitsOnly(t, 12))}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => focusNextIfFilled(prodEway, productAmountInputRef)}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.labelWeb}>AMOUNT (₹)</Text>
-                <TextInput
-                ref={productAmountInputRef}
-                onFocus={() => ensureInputVisible(productAmountInputRef)}
-                editable={isMainDetailsComplete}
-                  style={[styles.inputWeb, !isMainDetailsComplete && styles.inputDisabled]}
-                  placeholder="Amount"
-                  keyboardType="numeric"
-                  placeholderTextColor="#94a3b8"
-                  value={prodAmount}
-                  onChangeText={(t) => setProdAmount(decimalOnly(t))}
-                  returnKeyType="done"
-                  onSubmitEditing={() => { handleAddProduct(); }}
-                />
-              </View>
-            </View>
-
-            <Button
-              variant="soft"
-              size="md"
-              label="+ Add Product"
-              disabled={!isMainDetailsComplete}
-              onPress={handleAddProduct}
-              style={{ marginTop: 4 }}
-            />
-          </>
-        )}
-
-        {products.length > 0 && (
-          <View style={{ marginTop: 10 }}>
-            {products.map((p, pi) => (
-              <View key={pi} style={styles.boxRowCard}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.boxRowTitle}>{p.PRODUCT}</Text>
-                  <Text style={styles.boxRowSub}>
-                    Doc: {p.DOC_NUMBER || 'N/A'} ({p.DOC_TYPE}) | EWay: {p.EWAY_IF || 'N/A'} | ₹{p.AMOUNT}
-                  </Text>
-                </View>
-                <TouchableOpacity onPress={() => handleRemoveProduct(pi)} hitSlop={8} style={styles.rowRemoveBtn}>
-                  <Icon name="trash" size={16} color="#ef4444" />
+                {/* Close scan button */}
+                <TouchableOpacity
+                  onPress={stopEwayScanning}
+                  style={styles.ewayScanCloseBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Icon name="close" size={13} color="#ffffff" />
                 </TouchableOpacity>
               </View>
-            ))}
+            ) : null}
           </View>
-        )}
-      </Tray>
 
-      {/* ── LIVE CALCULATIONS SUMMARY (Web: updateSummaryDisplay) ── */}
-      <Tray title="Consignment Live Totals" icon="calculator-variant" iconColors={['#059669', '#10b981']}>
-        <View style={styles.summaryGrid}>
-          <View style={styles.summaryItem}>
-            <Text style={styles.summaryLabel}>Total Wt</Text>
-            <Text style={styles.summaryValue}>{summaryTotals.totalWgt.toFixed(2)} kg</Text>
+          {products.length > 0 ? (
+            <View style={{ marginTop: 10 }}>
+              {products.map((p, pi) => (
+                <View key={pi} style={styles.boxRowCard}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.boxRowTitle}>{p.PRODUCT}</Text>
+                    <Text style={styles.boxRowSub}>
+                      Doc: {p.DOC_NUMBER || 'N/A'} ({p.DOC_TYPE}) | EWay: {p.EWAY_IF || 'N/A'} | ₹{p.AMOUNT}
+                    </Text>
+                  </View>
+                  <TouchableOpacity onPress={() => handleRemoveProduct(pi)} hitSlop={8} style={styles.rowRemoveBtn}>
+                    <Icon name="trash" size={16} color="#ef4444" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          ) : null}
           </View>
-          <View style={styles.summaryItem}>
-            <Text style={styles.summaryLabel}>Chg Wt</Text>
-            <Text style={styles.summaryValue}>{summaryTotals.totalChgWt.toFixed(2)} kg</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text style={styles.summaryLabel}>Pieces</Text>
-            <Text style={styles.summaryValue}>{summaryTotals.boxCount}</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text style={styles.summaryLabel}>Value</Text>
-            <Text style={styles.summaryValue}>₹{summaryTotals.totalAmount.toFixed(2)}</Text>
-          </View>
+        </Tray>
+      )}
+
+      {/* ── SECTION 10 & 11: Consignment Live Totals & Charges Breakdown (Merged Tray) ── */}
+      <Tray
+        title="10 · Consignment Live Totals"
+        icon="calculator-variant"
+        iconColors={['#059669', '#10b981']}
+        floating
+        bottomTitle="11 · Charges & Taxes Breakdown"
+        bottomIcon="chart-box-outline"
+        bottomColors={['#0284c7', '#2563eb']}
+      >
+        {/* Consignment Live Metrics & Rate Tiers */}
+        <StyledTable>
+          {/* Row 1: Live Totals */}
+          <StyledTable.Row>
+            <StyledTable.Cell label="ACTUAL WT" value={`${summaryTotals.totalWgt.toFixed(2)} kg`} />
+            <StyledTable.Cell
+              label="CHG WT"
+              value={`${summaryTotals.totalChgWt.toFixed(2)} kg`}
+              highlight
+              highlightBg="#f0fdf4"
+              highlightColor="#047857"
+            />
+            <StyledTable.Cell label="PIECES" value={String(summaryTotals.boxCount)} />
+            <StyledTable.Cell label="VALUE" value={`₹${summaryTotals.totalAmount.toFixed(2)}`} last />
+          </StyledTable.Row>
+
+          {/* Row 2: Rate Tier Details */}
+          <StyledTable.Row style={{ backgroundColor: '#f8fafc' }} last>
+            <StyledTable.Cell
+              label="BASE RATE"
+              value={helperTableData.rate != null ? `₹${helperTableData.rate}` : '—'}
+            />
+            <StyledTable.Cell
+              label="ADD RATE"
+              value={helperTableData.addRate != null ? `₹${helperTableData.addRate}` : '—'}
+            />
+            <StyledTable.Cell
+              label="CEILING"
+              value={helperTableData.weightCeiling ? `${helperTableData.weightCeiling} kg` : '—'}
+            />
+            <StyledTable.Cell
+              label="ZONE"
+              value={helperTableData.weightZone ? `${helperTableData.weightZone}${helperTableData.rateUid ? ` (${helperTableData.rateUid})` : ''}` : '—'}
+              last
+            />
+          </StyledTable.Row>
+        </StyledTable>
+
+        {/* Middle Route Separator */}
+        <View style={styles.routeSeparatorWrap}>
+          <View style={styles.routeSeparatorLine} />
         </View>
-        {/* Web parity: Helper Table (WEIGHT_CEILING / WEIGHT_ZONE / RATE_UID / RATE / ADD_RATE) */}
-        <View style={styles.rateStrip}>
-          <Text style={styles.rateStripText}>
-            Rate: {helperTableData.rate != null ? `₹${helperTableData.rate}` : '---'}{'   '}
-            Add: {helperTableData.addRate != null ? `₹${helperTableData.addRate}` : '---'}{'   '}
-            Ceiling: {helperTableData.weightCeiling} kg{'   '}
-            Zone: {helperTableData.weightZone}{'   '}
-            {helperTableData.rateUid}
-          </Text>
-        </View>
-      </Tray>
 
-      {/* ── CHARGES & TAXES BREAKDOWN (Web: Charges Section L600-635) ── */}
-      <Tray title="Charges & Taxes Breakdown" icon="chart-box-outline" iconColors={['#0ea5e9', '#2563eb']}>
-        <View style={styles.chargesGridTable}>
-          <View style={styles.chargesRow}>
-            <View style={styles.chargesCellLabel}><Text style={styles.chargesLabelText}>FRIGHT</Text></View>
-            <View style={styles.chargesCellValue}><Text style={styles.chargesValueText}>₹{calculatedCharges.fright}</Text></View>
-            <View style={styles.chargesCellLabel}><Text style={styles.chargesLabelText}>OTHER CHARGES</Text></View>
-            <View style={styles.chargesCellValue}>
-              <Text style={styles.chargesValueText}>₹{calculatedCharges.otherCharges}</Text>
-            </View>
-          </View>
+        {/* Charges & Taxes Breakdown */}
+        <StyledTable>
+          {/* Row 1: Freight, Other Charges, Taxable Value */}
+          <StyledTable.Row>
+            <StyledTable.Cell label="FREIGHT" value={`₹${calculatedCharges.fright}`} />
+            <StyledTable.Cell label="OTHER CHARGES" value={`₹${calculatedCharges.otherCharges}`} />
+            <StyledTable.Cell label="TAXABLE VALUE" value={`₹${calculatedCharges.taxable}`} last />
+          </StyledTable.Row>
 
-          <View style={styles.chargesRow}>
-            <View style={styles.chargesCellLabel}><Text style={styles.chargesLabelText}>{calculatedCharges.taxMode}</Text></View>
-            <View style={styles.chargesCellValue}>
-              <Text style={styles.chargesValueText}>₹{calculatedCharges.gstTotal}</Text>
-            </View>
-            <View style={[styles.chargesCellLabel, { backgroundColor: '#dbeafe' }]}>
-              <Text style={[styles.chargesLabelText, { color: '#1e40af', fontWeight: '800' }]}>TOTAL</Text>
-            </View>
-            <View style={[styles.chargesCellValue, { backgroundColor: '#eff6ff' }]}>
-              <Text style={[styles.chargesValueText, { color: '#1e40af', fontWeight: '800', fontSize: 14 }]}>
-                ₹{calculatedCharges.total}
-              </Text>
-            </View>
-          </View>
-          {/* Tax split (Web: SGST/CGST/IGST hidden spans) */}
-          <View style={styles.chargesRow}>
-            <View style={styles.chargesCellLabel}><Text style={styles.chargesLabelText}>SGST</Text></View>
-            <View style={styles.chargesCellValue}><Text style={styles.chargesValueText}>₹{calculatedCharges.sgst}</Text></View>
-            <View style={styles.chargesCellLabel}><Text style={styles.chargesLabelText}>CGST</Text></View>
-            <View style={styles.chargesCellValue}><Text style={styles.chargesValueText}>₹{calculatedCharges.cgst}</Text></View>
-          </View>
-          <View style={styles.chargesRow}>
-            <View style={styles.chargesCellLabel}><Text style={styles.chargesLabelText}>IGST</Text></View>
-            <View style={styles.chargesCellValue}><Text style={styles.chargesValueText}>₹{calculatedCharges.igst}</Text></View>
-            <View style={styles.chargesCellLabel}><Text style={styles.chargesLabelText}>TAXABLE</Text></View>
-            <View style={styles.chargesCellValue}><Text style={styles.chargesValueText}>₹{calculatedCharges.taxable}</Text></View>
-          </View>
-        </View>
-      </Tray>
+          {/* Row 2: Tax Components (SGST, CGST, IGST) */}
+          <StyledTable.Row style={{ backgroundColor: '#f8fafc' }}>
+            <StyledTable.Cell label="SGST" value={`₹${calculatedCharges.sgst}`} />
+            <StyledTable.Cell label="CGST" value={`₹${calculatedCharges.cgst}`} />
+            <StyledTable.Cell label="IGST" value={`₹${calculatedCharges.igst}`} last />
+          </StyledTable.Row>
 
-      {/* ── SECTION 8: Finalize Order ── */}
-      <Tray title="8 · Finalize Order" icon="check-decagram" iconColors={BOOK_GRAD}>
-        <Text style={styles.labelWeb}>AWB NUMBER</Text>
-        <View style={styles.awbInputRow}>
-          <TextInput
-          ref={awbInputRef}
-          onFocus={() => ensureInputVisible(awbInputRef)}
-          style={[styles.inputWeb, { flex: 1, marginBottom: 0 }]}
-            placeholder="Enter AWB or tap Auto Get"
-            placeholderTextColor="#94a3b8"
-            value={awbNumber}              onChangeText={(t) => { const value = uppercaseText(t); setAwbNumber(value); validateAwbPattern(value); }}
-            returnKeyType="done"
-            onSubmitEditing={handleSubmit}
+          {/* Row 3: Grand Total Banner */}
+          <StyledTable.Footer
+            icon={<Icon name="check-circle" size={16} color="#15803d" />}
+            label="TOTAL AMOUNT"
+            value={`₹${calculatedCharges.total}`}
           />
-          <Button variant="soft" size="md" icon="refresh" label="Get AWB" onPress={handleGenerateAwb} />
-        </View>
+        </StyledTable>
+      </Tray>
+
+      {/* ── SECTION 12: Finalize Order ── */}
+      <Tray title="12 · Finalize Order" icon="check-circle" iconColors={BOOK_GRAD} floating>
+        <Text style={styles.labelWeb}>AWB NUMBER</Text>
+        <SearchBar
+          value={awbNumber}
+          onChangeText={(t) => {
+            const value = uppercaseText(t);
+            setAwbNumber(value);
+            validateAwbPattern(value);
+          }}
+          placeholder="Enter or scan AWB number"
+          hints={['Enter AWB number…', 'Tap barcode to scan…', 'Tap refresh to Get AWB…']}
+          onActionPress={handleGenerateAwb}
+          actionIcon="refresh"
+          actionLabel="Get AWB"
+          actionColors={BOOK_GRAD}
+          onSubmitEditing={handleSubmit}
+          style={{ marginBottom: 0 }}
+        />
 
         {/* Web parity: validateAwbPattern hint (informational) */}
-        {awbHint && (
+        {Boolean(awbHint) ? (
           <Text style={[
             styles.awbHint,
             awbHint.kind === 'success' && styles.awbHintSuccess,
@@ -2105,7 +2410,7 @@ export default function BookOrderScreen({
           ]}>
             {awbHint.text}
           </Text>
-        )}
+        ) : null}
 
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
           <Button variant="secondary" size="md" label="Clear All" onPress={handleClearAll} style={{ flex: 1 }} />
@@ -2121,7 +2426,7 @@ export default function BookOrderScreen({
       </Tray>
 
       {/* ── LAST BOOKED SHIPMENT (Web: renderLastBooked — shown after booking) ── */}
-      {lastBookedOrder && (
+      {Boolean(lastBookedOrder) ? (
         <Tray
           title={`✓ Shipment Booked: ${lastBookedOrder.AWB_NUMBER || 'No AWB'}`}
           icon="check-circle"
@@ -2144,7 +2449,7 @@ export default function BookOrderScreen({
             <Text style={styles.lastBookedChip}>Ref: {lastBookedOrder.reference || lastBookedOrder.REFERENCE}</Text>
             <Text style={styles.lastBookedChip}>Carrier: {lastBookedOrder.CARRIER || 'N/A'}</Text>
             <Text style={styles.lastBookedChip}>Mode: {lastBookedOrder.MODE || 'N/A'}</Text>
-            <Text style={styles.lastBookedChip}>Date: {fmtFromUnix(lastBookedOrder.ORDER_DATE)}</Text>
+            <Text style={styles.lastBookedChip}>Date: {formatDateDisplay(fmtFromUnix(lastBookedOrder.ORDER_DATE))}</Text>
             <Text style={styles.lastBookedChip}>Dest: {lastBookedOrder.DEST_CITY || 'N/A'} {lastBookedOrder.DEST_PINCODE || ''}</Text>
             <Text style={styles.lastBookedChip}>Zone: {lastBookedOrder.ZONE || 'N/A'}</Text>
             <Text style={styles.lastBookedChip}>TAT: {lastBookedOrder.TAT || 'N/A'}</Text>
@@ -2178,10 +2483,10 @@ export default function BookOrderScreen({
             </TouchableOpacity>
           </View>
         </Tray>
-      )}
+      ) : null}
 
       {/* ── BOOKING TRANSACTIONS (booked / pending / error log) ── */}
-      {bookingTxns.length > 0 && (
+      {bookingTxns.length > 0 ? (
         <Tray
           title="Booking Transactions"
           icon="history"
@@ -2209,77 +2514,16 @@ export default function BookOrderScreen({
             </View>
           ))}
         </Tray>
-      )}
+      ) : null}
 
-      {/* ── Order Date Calendar Picker Modal ── */}
-      <Modal
+      {/* ── Order Date Calendar Picker Modal (Global Component) ── */}
+      <DatePickerModal
         visible={orderDateModalVisible}
-        animationType="fade"
-        transparent={true}
-        onRequestClose={() => setOrderDateModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.calendarModalContent}>
-            <View style={styles.calendarHeader}>
-              <TouchableOpacity
-                onPress={() => {
-                  if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); }
-                  else { setCalMonth(m => m - 1); }
-                }}
-                style={styles.calNavBtn}
-              >
-                <Text style={styles.calNavBtnText}>‹</Text>
-              </TouchableOpacity>
-
-              <Text style={styles.calendarMonthTitle}>
-                {MONTH_NAMES[calMonth]} {calYear}
-              </Text>
-
-              <TouchableOpacity
-                onPress={() => {
-                  if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); }
-                  else { setCalMonth(m => m + 1); }
-                }}
-                style={styles.calNavBtn}
-              >
-                <Text style={styles.calNavBtnText}>›</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.calWeekRow}>
-              {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((d, di) => (
-                <Text key={di} style={styles.calWeekDayText}>{d}</Text>
-              ))}
-            </View>
-
-            <View style={styles.calGrid}>
-              {calendarDays.map((dayNum, idx) => (
-                <TouchableOpacity
-                  key={idx}
-                  disabled={!dayNum}
-                  style={[styles.calDayBox, dayNum && styles.calDayBoxActive]}
-                  onPress={() => {
-                    if (dayNum) {
-                      const mStr = String(calMonth + 1).padStart(2, '0');
-                      const dStr = String(dayNum).padStart(2, '0');
-                      setOrderDate(`${calYear}-${mStr}-${dStr}`);
-                      setOrderDateModalVisible(false);
-                    }
-                  }}
-                >
-                  <Text style={[styles.calDayText, !dayNum && styles.calDayTextEmpty]}>
-                    {dayNum || ''}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <TouchableOpacity style={styles.calCancelBtn} onPress={() => setOrderDateModalVisible(false)}>
-              <Text style={styles.calCancelBtnText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+        value={orderDate}
+        onChange={(newDate) => setOrderDate(newDate)}
+        onClose={() => setOrderDateModalVisible(false)}
+        colors={BOOK_GRAD}
+      />
 
       {/* ── ADD CONTACT MODAL (Web: jawaS/book-order-add-contact.js) ── */}
       <Modal
@@ -2390,58 +2634,496 @@ const styles = StyleSheet.create({
   scrollPageCompact: { padding: 8 },
 
   // Page title — gradient heading + underline bar (Orders parity).
-  pageTitleBlock: { alignItems: 'center', marginBottom: 14 },
+  pageTitleBlock: { alignItems: 'center', marginTop: 6, marginBottom: 38 },
   pageTitle: { fontSize: 24, fontWeight: '900', letterSpacing: 0.5 },
   pageTitleBar: { width: 46, height: 3, borderRadius: 2, marginTop: 8 },
 
-  // Tray state overrides (shell lives in components/Tray.js)
-  trayLocked: { opacity: 0.65 },
-  trayDisabled: { opacity: 0.55 },
-  clearSmallText: { fontSize: 11, fontWeight: '800', color: '#ef4444' },
+  // Tray state overrides (locking logic preserved without visual blur/fade)
+  trayLocked: {},
+  trayDisabled: {},
+  clearCornerIconBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 2px 6px rgba(239,68,68,0.15)' }
+      : { shadowColor: '#ef4444', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } }),
+  },
+  cornerPcsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#c4b5fd',
+    minHeight: 28,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 2px 6px rgba(15,23,42,0.08)' }
+      : { shadowColor: '#0f172a', shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } }),
+  },
+  cornerPcsBtnActive: {
+    backgroundColor: '#9C2007',
+    borderColor: '#9C2007',
+  },
+  cornerPcsBtnText: {
+    fontSize: 10.5,
+    fontWeight: '900',
+    color: '#8b5cf6',
+    letterSpacing: 0.3,
+  },
+  cornerPcsBtnTextActive: {
+    color: '#ffffff',
+  },
+  pcsCountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+  },
+  pcsCountLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  pcsCountInput: {
+    width: 60,
+    minHeight: 30,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    backgroundColor: '#ffffff',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#94a3b8',
+    textAlign: 'center',
+    paddingVertical: 2,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
+  },
   rowRemoveBtn: { padding: 4 },
 
   lockNoticeText: { fontSize: 11, fontWeight: '700', color: '#b45309', marginBottom: 10, backgroundColor: '#fef3c7', padding: 8, borderRadius: 8 },
   labelWeb: { color: '#64748b', fontSize: 10, fontWeight: '800', letterSpacing: 0.8, marginBottom: 5 },
-  inputWeb: { backgroundColor: '#ffffff', borderRadius: 11, borderWidth: 1, borderColor: '#cbd5e1', color: '#0f172a', paddingHorizontal: 12, paddingVertical: 10, fontSize: 13, fontWeight: '600', marginBottom: 10 },
-  inputDisabled: { backgroundColor: '#f1f5f9', color: '#94a3b8' },
-  btnDisabled: { opacity: 0.55 },
-  textDisabled: { color: '#94a3b8' },
+  inputWeb: { backgroundColor: '#ffffff', borderRadius: 12, borderWidth: 1.5, borderColor: '#94a3b8', borderStyle: 'solid', color: '#0f172a', paddingHorizontal: 12, paddingVertical: 10, fontSize: 13, fontWeight: '600', marginBottom: 10, ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}) },
+  inputDisabled: {},
+  btnDisabled: {},
+  textDisabled: {},
   rowGrid: { flexDirection: 'row', gap: 10 },
   rowGridMobile: { gap: 6 },
+  partyBlock: { width: '100%' },
+  partyBlockConsignee: { width: '100%', paddingBottom: 6, marginBottom: 6 },
+  routeSeparatorWrap: {
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 18,
+    width: '100%',
+  },
+  separatorDualToggles: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    zIndex: 2,
+    width: '100%',
+    paddingHorizontal: 2,
+  },
+  routeSeparatorLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: '#c4b5fd',
+  },
+  routePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#c4b5fd',
+    zIndex: 2,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 2px 6px rgba(15,23,42,0.08)' }
+      : { shadowColor: '#0f172a', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } }),
+  },
+  routePillText: {
+    fontSize: 11.5,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  trayInput: {
+    minHeight: 46,
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderColor: '#94a3b8',
+    borderStyle: 'solid',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    marginBottom: 0,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
+  },
+  doxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  doxInputBox: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderColor: '#94a3b8',
+    borderStyle: 'solid',
+    minHeight: 52,
+    paddingLeft: 12,
+    paddingRight: 4,
+    paddingVertical: 3,
+    marginBottom: 0,
+  },
+  doxWeightInput: {
+    width: 65,
+    minHeight: 44,
+    color: '#0f172a',
+    fontSize: 13.5,
+    fontWeight: '700',
+    paddingHorizontal: 0,
+    paddingVertical: 6,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
+  },
+  doxToggleWrap: {
+    flex: 1,
+    marginLeft: 6,
+    justifyContent: 'center',
+  },
+
+  // Styled Table Row for Box Entry (WT, L, B, H)
+  boxTableWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  boxTable: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: '#ffffff',
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderColor: '#94a3b8',
+    borderStyle: 'solid',
+    minHeight: 52,
+    overflow: 'hidden',
+  },
+  boxTableCell: {
+    flex: 1,
+    paddingVertical: 5,
+    paddingHorizontal: 4,
+    borderRightWidth: 1,
+    borderRightColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  boxTableCellLast: {
+    borderRightWidth: 0,
+  },
+  boxCellLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#64748b',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+    marginBottom: 2,
+  },
+  boxCellInput: {
+    width: '100%',
+    textAlign: 'center',
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: '#0f172a',
+    paddingVertical: 2,
+    paddingHorizontal: 0,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
+  },
+
+  // Styled 2-Row Table for Product & Invoice Entry
+  prodTableWrap: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
+  prodTable: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderColor: '#94a3b8',
+    borderStyle: 'solid',
+    overflow: 'hidden',
+  },
+  prodTableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  prodTableRowLast: {
+    borderBottomWidth: 0,
+  },
+  prodTableCell: {
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    justifyContent: 'center',
+  },
+  prodCellLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#64748b',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  prodCellInput: {
+    width: '100%',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+    paddingVertical: 2,
+    paddingHorizontal: 0,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    minHeight: 24,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
+  },
+  tinyBarcodeBtn: {
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+  },
+  tinyBarcodeBtnActive: {
+    backgroundColor: '#fee2e2',
+  },
+
+  // Inline Attached E-Way Barcode Scanner Stage
+  ewayScanPanel: {
+    height: 0,
+    opacity: 0,
+    overflow: 'hidden',
+    ...(Platform.OS === 'web' ? { transition: 'height 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease' } : null),
+  },
+  ewayScanPanelOpen: {
+    height: 180,
+    opacity: 1,
+    marginTop: 8,
+  },
+  ewayScanStage: {
+    flex: 1,
+    borderRadius: 13,
+    overflow: 'hidden',
+    backgroundColor: '#020617',
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ewayScanPerm: {
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+  },
+  ewayScanPermText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  ewayScanPermBtn: {
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  ewayScanPermBtnText: {
+    color: '#fbbf24',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  ewayScanDark: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(2, 6, 23, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ewayScanFrame: {
+    width: 140,
+    height: 110,
+    position: 'relative',
+  },
+  ewayCorner: {
+    position: 'absolute',
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+  },
+  ewayCornerTL: { top: -2, left: -2, borderTopLeftRadius: 10 },
+  ewayCornerTR: { top: -2, right: -2, borderTopRightRadius: 10 },
+  ewayCornerBL: { bottom: -2, left: -2, borderBottomLeftRadius: 10 },
+  ewayCornerBR: { bottom: -2, right: -2, borderBottomRightRadius: 10 },
+  ewayScanLine: {
+    position: 'absolute',
+    left: 4,
+    right: 4,
+    height: 2.5,
+    borderRadius: 2,
+    opacity: 0.95,
+  },
+  ewayScanHint: {
+    position: 'absolute',
+    bottom: 8,
+    color: '#cbd5e1',
+    fontSize: 9.5,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textAlign: 'center',
+    width: '100%',
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowRadius: 4,
+  },
+  ewayScanCloseBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(15, 23, 42, 0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  prodAddBtnStretched: {
+    width: 44,
+    borderRadius: 13,
+    overflow: 'hidden',
+    alignSelf: 'stretch',
+    elevation: 4,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0px 5px 14px rgba(239, 68, 68, 0.35)' }
+      : { shadowColor: '#ef4444', shadowOpacity: 0.35, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } }),
+  },
+  prodAddBtnGradient: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    height: '100%',
+    paddingHorizontal: 10,
+  },
 
   placeholderTextItalic: { fontSize: 11.5, fontStyle: 'italic', color: '#94a3b8', paddingVertical: 6 },
 
-  // Live Totals (inside the green Tray)
-  summaryGrid: { flexDirection: 'row', justifyContent: 'space-around' },
-  summaryItem: { alignItems: 'center' },
-  summaryLabel: { fontSize: 10, fontWeight: '800', color: '#047857', textTransform: 'uppercase', letterSpacing: 0.6 },
-  summaryValue: { fontSize: 15, fontWeight: '900', color: '#15803d', marginTop: 3 },
+  // Live Totals (inside the green Floating Tray)
+  kpiCardsGrid: {
+    flexDirection: 'row',
+    gap: 8,
+    width: '100%',
+    marginBottom: 10,
+  },
+  kpiCard: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  kpiCardHighlight: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+  },
+  kpiLabel: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 3,
+  },
+  kpiValue: {
+    fontSize: 13.5,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  kpiUnit: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#94a3b8',
+  },
+  ratePillsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 8,
+  },
+  ratePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ffffff',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  ratePillLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  ratePillVal: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
 
   // Calendar Trigger Button — matches the Dropdown field height/look
-  calendarTriggerBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#ffffff', borderRadius: 13, borderWidth: 1.5, borderColor: '#34d399', paddingHorizontal: 13, paddingVertical: 9, marginBottom: 10, minHeight: 46 },
+  calendarTriggerBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#ffffff', borderRadius: 13, borderWidth: 1.5, borderColor: '#94a3b8', borderStyle: 'solid', paddingHorizontal: 13, paddingVertical: 9, marginBottom: 10, minHeight: 46 },
   calendarTriggerText: { fontSize: 13, fontWeight: '700', color: '#0284c7' },
 
-  // Modals (calendar + add-contact)
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.55)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 },
+  // Modals (add-contact)
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.60)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
   modalTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
   modalCloseX: { fontSize: 18, fontWeight: '700', color: '#94a3b8', padding: 4 },
-
-  // Calendar Modal Picker
-  calendarModalContent: { backgroundColor: '#ffffff', borderRadius: 18, padding: 16, width: '90%', maxWidth: 340, borderWidth: 1, borderColor: '#e2e8f0' },
-  calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  calendarMonthTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
-  calNavBtn: { paddingHorizontal: 12, paddingVertical: 4, backgroundColor: '#f1f5f9', borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0' },
-  calNavBtnText: { fontSize: 18, fontWeight: '800', color: '#475569' },
-  calWeekRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 6 },
-  calWeekDayText: { width: 36, textAlign: 'center', fontSize: 11, fontWeight: '800', color: '#94a3b8' },
-  calGrid: { flexDirection: 'row', flexWrap: 'wrap', width: '100%' },
-  calDayBox: { width: '14.28%', height: 36, justifyContent: 'center', alignItems: 'center', marginVertical: 2 },
-  calDayBoxActive: { backgroundColor: '#f0f9ff', borderRadius: 8, borderWidth: 1, borderColor: '#bae6fd' },
-  calDayText: { fontSize: 12, fontWeight: '700', color: '#0284c7' },
-  calDayTextEmpty: { color: 'transparent' },
-  calCancelBtn: { marginTop: 14, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', alignItems: 'center' },
-  calCancelBtnText: { fontSize: 13, fontWeight: '700', color: '#ef4444' },
 
   // Autocomplete
   autocompleteBox: { backgroundColor: '#ffffff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 10, overflow: 'hidden' },
@@ -2462,13 +3144,31 @@ const styles = StyleSheet.create({
   selectChipText: { fontSize: 11, fontWeight: '700', color: '#475569' },
   selectChipTextActive: { color: '#ffffff' },
 
-  // Payment flags — switchable gradient chips (design-system language)
-  webPaymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
-  flagChip: { borderRadius: 999, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', overflow: 'hidden' },
-  flagChipDisabled: { opacity: 0.5 },
-  flagChipFill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7 },
-  flagChipText: { fontSize: 11.5, fontWeight: '700', color: '#475569', paddingHorizontal: 12, paddingVertical: 7 },
-  flagChipTextActive: { fontSize: 11.5, fontWeight: '800', color: '#ffffff' },
+  // Payment options — multi-flag segmented toggle matching SegmentedToggle.js design
+  segGroup: {
+    flexDirection: 'row',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f1f5f9',
+    padding: 3,
+    gap: 2,
+    marginBottom: 4,
+  },
+  segBtn: { borderRadius: 999, overflow: 'hidden' },
+  segBtnFlex: { flex: 1 },
+  segDisabled: { opacity: 0.45 },
+  segPressed: { opacity: 0.75 },
+  segItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  segText: { color: '#64748b', fontWeight: '800', letterSpacing: 0.3, fontSize: 11.5 },
+  segTextActive: { color: '#ffffff', fontWeight: '900', letterSpacing: 0.3, fontSize: 11.5 },
 
   // Box / Product rows
   boxRowCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffffff', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 8 },
@@ -2478,13 +3178,65 @@ const styles = StyleSheet.create({
   // AWB row
   awbInputRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
 
-  // Charges & Taxes Breakdown Table
-  chargesGridTable: { borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', overflow: 'hidden' },
-  chargesRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  chargesCellLabel: { flex: 1, backgroundColor: '#f8fafc', padding: 9, borderRightWidth: 1, borderRightColor: '#f1f5f9', justifyContent: 'center' },
-  chargesCellValue: { flex: 1, backgroundColor: '#ffffff', padding: 9, alignItems: 'flex-end', borderRightWidth: 1, borderRightColor: '#f1f5f9', justifyContent: 'center' },
-  chargesLabelText: { fontSize: 10.5, fontWeight: '700', color: '#64748b' },
-  chargesValueText: { fontSize: 12, fontWeight: '800', color: '#0f172a' },
+  // Charges Modern Box
+  chargesModernBox: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#ffffff',
+    overflow: 'hidden',
+  },
+  chargesModernRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  chargesTaxRow: {
+    backgroundColor: '#f8fafc',
+  },
+  chargesModernItem: {
+    flex: 1,
+    paddingVertical: 9,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: '#f1f5f9',
+  },
+  chargesModernLabel: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  },
+  chargesModernVal: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  chargesGrandTotalBanner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#f0fdf4',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderTopWidth: 1.5,
+    borderTopColor: '#bbf7d0',
+  },
+  chargesGrandTotalLabel: {
+    fontSize: 11.5,
+    fontWeight: '900',
+    color: '#15803d',
+    letterSpacing: 0.6,
+  },
+  chargesGrandTotalVal: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#15803d',
+  },
 
   // Edit Banner (Web: prefillEditOrder)
   editBanner: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fffbeb', borderRadius: 12, borderWidth: 1, borderColor: '#fde68a', padding: 12, marginBottom: 12 },

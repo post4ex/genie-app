@@ -140,10 +140,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: 5,
   },
-  fieldDisabled: {
-    opacity: 0.55,
-    backgroundColor: '#f8fafc',
-  },
+  fieldDisabled: {},
   field: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -153,7 +150,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderRadius: 13,
     borderWidth: 1.5,
-    borderColor: '#34d399',   // emerald field border — the dropdown's identity colour
+    borderColor: '#94a3b8',
+    borderStyle: 'solid',
     paddingLeft: 13,
     paddingRight: 8,
     ...(Platform.OS === 'web'

@@ -47,6 +47,10 @@ export default function SearchBar({
   onFilterPress,       // embed filter button directly inside the bar
   filterActive = false,
   filterCount = 0,
+  onActionPress,       // embed custom action button directly inside the bar (e.g. Get AWB)
+  actionIcon = 'refresh',
+  actionLabel = 'Get AWB',
+  actionColors = ['#9C2007', '#f59e0b'],
   keyboardType,
   maxLength,
   style,
@@ -171,6 +175,18 @@ export default function SearchBar({
             hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
           >
             <GradientGlyph name={scanning ? 'close' : 'barcode-scan'} size={22} colors={scanning ? ['#f59e0b', '#fbbf24'] : ['#0ea5e9', '#2563eb']} />
+          </Pressable>
+        ) : null}
+
+        {onActionPress ? (
+          <Pressable
+            onPress={onActionPress}
+            style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityLabel={actionLabel || 'Action'}
+            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+          >
+            <GradientIcon name={actionIcon} size={28} iconSize={13} colors={actionColors} />
           </Pressable>
         ) : null}
 
@@ -330,6 +346,11 @@ const styles = StyleSheet.create({
   filterBtnActive: {
     backgroundColor: '#fff7f5',
     borderColor: '#F54927',
+  },
+  actionBtn: {
+    marginLeft: 6,
+    borderRadius: 8,
+    overflow: 'hidden',
   },
   filterBadge: {
     position: 'absolute',
