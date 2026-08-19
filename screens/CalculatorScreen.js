@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Modal, Platform, ScrollView,
+  ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, ScrollView,
   StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions,
 } from 'react-native';
 import { COLORS, FONTS } from '../styles/theme';
+import Dropdown from '../components/Dropdown';
 import { calculateAllCharges, calculateFreight, getHelperTableData, recalculateAllBoxWeights } from '../utils/calculations';
 import { searchPin } from '../utils/searchpin';
 
@@ -43,53 +44,6 @@ const normalizeZone = (value) => {
   return `Z${Number(match[1])}`;
 };
 
-function SelectField({ label, value, placeholder, onPress }) {
-  return (
-    <View style={styles.fieldBlock}>
-      {label ? <Text style={styles.fieldLabel}>{label}</Text> : null}
-      <TouchableOpacity style={styles.selectField} onPress={onPress} accessibilityRole="button">
-        <Text style={[styles.selectText, !value && styles.placeholderText]} numberOfLines={1}>{value || placeholder}</Text>
-        <Text style={styles.chevron}>▾</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-function ModalPicker({ visible, title, items, selected, onSelect, onClose, search = false }) {
-  const [query, setQuery] = useState('');
-  useEffect(() => { if (!visible) setQuery(''); }, [visible]);
-  const filtered = useMemo(() => {
-    if (!query.trim()) return items;
-    const q = query.toLowerCase();
-    return items.filter(item => `${item.name || ''} ${item.code || ''}`.toLowerCase().includes(q));
-  }, [items, query]);
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <View style={styles.pickerModal}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>{title}</Text>
-            <TouchableOpacity onPress={onClose} accessibilityRole="button" accessibilityLabel="Close picker"><Text style={styles.closeText}>×</Text></TouchableOpacity>
-          </View>
-          {search ? (
-            <TextInput value={query} onChangeText={setQuery} placeholder="Search..." placeholderTextColor="#94a3b8" style={styles.modalSearch} autoFocus />
-          ) : null}
-          <ScrollView keyboardShouldPersistTaps="handled" style={styles.pickerList}>
-            {items.length === 0 ? <Text style={styles.emptyText}>No options available.</Text> : null}
-            {filtered.map(item => (
-              <TouchableOpacity key={item.code} style={[styles.pickerRow, selected === item.code && styles.pickerRowSelected]} onPress={() => onSelect(item)}>
-                <Text style={[styles.pickerRowText, selected === item.code && styles.pickerRowTextSelected]}>{item.name || item.code}</Text>
-                {item.name && item.code ? <Text style={styles.pickerCode}>{item.code}</Text> : null}
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 function Metric({ label, value }) {
   return <View style={styles.metric}><Text style={styles.metricLabel}>{label}</Text><Text style={styles.metricValue}>{value}</Text></View>;
 }
@@ -116,7 +70,6 @@ export default function CalculatorScreen({ b2bList = [], modesMap = {}, carriers
   const [pcsCount, setPcsCount] = useState('1');
   const [dox, setDox] = useState({ weight: '0.1', type: 'DL' });
   const [product, setProduct] = useState({ name: '', docNo: '', type: 'INV', eway: '', amount: '' });
-  const [picker, setPicker] = useState(null);
   const [message, setMessage] = useState('');
   const [messageKind, setMessageKind] = useState('info');
 
@@ -337,7 +290,18 @@ export default function CalculatorScreen({ b2bList = [], modesMap = {}, carriers
             {/* Shipment Details */}
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Shipment Details</Text>
-              <SelectField label="Customer" value={customerLabel} placeholder="Select Customer" onPress={() => setPicker('customer')} />
+              <Dropdown
+                label="Customer"
+                value={customerCode}
+                options={clients.map(item => ({
+                  value: String(item.CODE || item.UID || ''),
+                  label: item.B2B_NAME || item.NAME || item.CODE || 'Unnamed Customer',
+                  sublabel: item.CODE ? `Code: ${item.CODE}` : undefined,
+                })).filter(item => item.value)}
+                onChange={setCustomerCode}
+                searchable
+                placeholder="Select Customer"
+              />
               <View style={styles.twoColumns}>
                 <View style={styles.halfField}>
                   <Text style={styles.fieldLabel}>From Pincode *</Text>
@@ -372,8 +336,25 @@ export default function CalculatorScreen({ b2bList = [], modesMap = {}, carriers
                 </View>
               </View>
               <View style={styles.twoColumns}>
-                <View style={styles.halfField}><SelectField label="Transport Mode" value={modeLabel} placeholder="Select Mode" onPress={() => setPicker('mode')} /></View>
-                <View style={styles.halfField}><SelectField label="Carrier" value={carrierLabel} placeholder="Select Carrier" onPress={() => setPicker('carrier')} /></View>
+                <View style={styles.halfField}>
+                  <Dropdown
+                    label="Transport Mode"
+                    value={selectedMode}
+                    options={availableModes.map(item => ({ value: item.code, label: item.name, sublabel: `Code: ${item.code}` }))}
+                    onChange={setSelectedMode}
+                    placeholder="Select Mode"
+                  />
+                </View>
+                <View style={styles.halfField}>
+                  <Dropdown
+                    label="Carrier"
+                    value={selectedCarrier}
+                    options={carriers.map(item => ({ value: item.code, label: item.name, sublabel: `Code: ${item.code}` }))}
+                    onChange={setSelectedCarrier}
+                    searchable
+                    placeholder="Select Carrier"
+                  />
+                </View>
               </View>
               <View style={styles.paymentRow}>
                 {PAYMENT_LABELS.map(([key, label]) => (
@@ -455,7 +436,13 @@ export default function CalculatorScreen({ b2bList = [], modesMap = {}, carriers
               </View>
               <View style={styles.twoColumns}>
                 <View style={styles.halfField}>
-                  <SelectField label="Product Type" value={productTypeLabel} placeholder="Select Type" onPress={() => setPicker('productType')} />
+                  <Dropdown
+                    label="Product Type"
+                    value={product.type}
+                    options={PRODUCT_TYPES.map(item => ({ value: item.code, label: item.name }))}
+                    onChange={value => setProduct(prev => ({ ...prev, type: value }))}
+                    placeholder="Select Type"
+                  />
                 </View>
                 <View style={styles.halfField}>
                   <Text style={styles.fieldLabel}>Amount *</Text>
@@ -628,41 +615,6 @@ export default function CalculatorScreen({ b2bList = [], modesMap = {}, carriers
           </View>
         </View>
 
-        {/* Modal Pickers */}
-        <ModalPicker
-          visible={picker === 'customer'}
-          title="Select Customer"
-          items={clients.map(item => ({ code: String(item.CODE || item.UID || ''), name: item.B2B_NAME || item.NAME || item.CODE }))}
-          selected={customerCode}
-          onSelect={item => { setCustomerCode(item.code); setPicker(null); }}
-          onClose={() => setPicker(null)}
-          search
-        />
-        <ModalPicker
-          visible={picker === 'mode'}
-          title="Select Transport Mode"
-          items={availableModes}
-          selected={selectedMode}
-          onSelect={item => { setSelectedMode(item.code); setPicker(null); }}
-          onClose={() => setPicker(null)}
-        />
-        <ModalPicker
-          visible={picker === 'carrier'}
-          title="Select Carrier"
-          items={carriers}
-          selected={selectedCarrier}
-          onSelect={item => { setSelectedCarrier(item.code); setPicker(null); }}
-          onClose={() => setPicker(null)}
-          search
-        />
-        <ModalPicker
-          visible={picker === 'productType'}
-          title="Select Product Type"
-          items={PRODUCT_TYPES}
-          selected={product.type}
-          onSelect={item => { setProduct(prev => ({ ...prev, type: item.code })); setPicker(null); }}
-          onClose={() => setPicker(null)}
-        />
       </ScrollView>
     </KeyboardAvoidingView>
   );

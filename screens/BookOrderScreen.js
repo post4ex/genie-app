@@ -1601,10 +1601,11 @@ export default function BookOrderScreen({
         icon="calendar"
         iconColors={BOOK_GRAD}
         floating
+        compact
         bottomTitle="2 · Client"
         bottomIcon="crm"
         bottomColors={BOOK_GRAD}
-        style={isFormLocked && styles.trayLocked}
+        style={[isFormLocked && styles.trayLocked, styles.compactBottomTitleTray]}
       >
         <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
           <View style={{ flex: 2 }}>
@@ -1613,7 +1614,7 @@ export default function BookOrderScreen({
               accessibilityRole="button"
               accessibilityLabel="Choose order date"
               disabled={isFormLocked}
-              style={[styles.calendarTriggerBtn, isFormLocked && styles.btnDisabled]}
+              style={[styles.calendarTriggerBtn, styles.compactCalendarTrigger, isFormLocked && styles.btnDisabled]}
               onPress={() => setOrderDateModalVisible(true)}
             >
               <Icon name="calendar" size={14} color={isFormLocked ? '#94a3b8' : '#0284c7'} />
@@ -1626,6 +1627,7 @@ export default function BookOrderScreen({
           <View style={{ flex: 3 }}>
             <Dropdown
               value={clientCode}
+              compact
               options={clientOptions}
               onChange={handleClientDropdownChange}
               searchable
@@ -1642,10 +1644,11 @@ export default function BookOrderScreen({
         icon="package-up"
         iconColors={BOOK_GRAD}
         floating
+        compact
         bottomTitle="4 · Consignee"
         bottomIcon="package-down"
         bottomColors={BOOK_GRAD}
-        style={isFormLocked && styles.trayLocked}
+        style={[isFormLocked && styles.trayLocked, styles.compactBottomTitleTray]}
       >
         {/* Consignor (Sender) */}
         <View style={styles.partyBlock}>
@@ -1653,7 +1656,7 @@ export default function BookOrderScreen({
             ref={senderInputRef}
             onFocus={() => ensureInputVisible(senderInputRef, true)}
             editable={!isFormLocked}
-            style={[styles.inputWeb, isFormLocked && styles.inputDisabled, styles.trayInput]}
+            style={[styles.inputWeb, isFormLocked && styles.inputDisabled, styles.trayInput, styles.compactTrayInput]}
             placeholder="Type consignor name or phone..."
             placeholderTextColor="#94a3b8"
             value={senderQuery}
@@ -1708,12 +1711,6 @@ export default function BookOrderScreen({
         {/* Route Separator: Matching violet line with overlapping rounded pill */}
         <View style={styles.routeSeparatorWrap}>
           <View style={styles.routeSeparatorLine} />
-          <View style={styles.routePill}>
-            <Icon name="truck" size={13} color="#8b5cf6" />
-            <GradientText colors={BOOK_GRAD} style={styles.routePillText}>
-              {`${(originCityInput || selectedSender?.CITY || 'ORIGIN').toUpperCase()}  ⇄  ${(destCityInput || selectedReceiver?.CITY || 'DESTINATION').toUpperCase()}`}
-            </GradientText>
-          </View>
         </View>
 
         {/* Consignee (Receiver) */}
@@ -1722,7 +1719,7 @@ export default function BookOrderScreen({
             ref={receiverInputRef}
             onFocus={() => ensureInputVisible(receiverInputRef, true)}
             editable={!isFormLocked}
-            style={[styles.inputWeb, isFormLocked && styles.inputDisabled, styles.trayInput]}
+            style={[styles.inputWeb, isFormLocked && styles.inputDisabled, styles.trayInput, styles.compactTrayInput]}
             placeholder="Type consignee name or phone..."
             placeholderTextColor="#94a3b8"
             value={receiverQuery}
@@ -1779,6 +1776,7 @@ export default function BookOrderScreen({
         icon="mode"
         iconColors={BOOK_GRAD}
         floating
+        compact
         bottomTitle="6 · Carrier"
         bottomIcon="carrier"
         bottomColors={BOOK_GRAD}
@@ -1788,6 +1786,7 @@ export default function BookOrderScreen({
           <View style={{ flex: 1 }}>
             <Dropdown
               value={selectedMode}
+              compact
               options={modeOptions}
               onChange={handleModeDropdownChange}
               placeholder="Select Mode"
@@ -1797,6 +1796,7 @@ export default function BookOrderScreen({
           <View style={{ flex: 1 }}>
             <Dropdown
               value={selectedCarrier}
+              compact
               options={carrierOptions}
               onChange={handleCarrierDropdownChange}
               searchable
@@ -2300,7 +2300,6 @@ export default function BookOrderScreen({
           ) : null}
           </View>
         </Tray>
-      )}
 
       {/* ── SECTION 10 & 11: Consignment Live Totals & Charges Breakdown (Merged Tray) ── */}
       <Tray
@@ -2721,6 +2720,7 @@ const styles = StyleSheet.create({
   inputDisabled: {},
   btnDisabled: {},
   textDisabled: {},
+  compactBottomTitleTray: { paddingBottom: 20 },
   rowGrid: { flexDirection: 'row', gap: 10 },
   rowGridMobile: { gap: 6 },
   partyBlock: { width: '100%' },
@@ -2748,25 +2748,9 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#c4b5fd',
   },
-  routePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    paddingHorizontal: 14,
+  compactTrayInput: {
+    minHeight: 40,
     paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#c4b5fd',
-    zIndex: 2,
-    ...(Platform.OS === 'web'
-      ? { boxShadow: '0 2px 6px rgba(15,23,42,0.08)' }
-      : { shadowColor: '#0f172a', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } }),
-  },
-  routePillText: {
-    fontSize: 11.5,
-    fontWeight: '900',
-    letterSpacing: 0.5,
   },
   trayInput: {
     minHeight: 46,
@@ -3117,6 +3101,7 @@ const styles = StyleSheet.create({
 
   // Calendar Trigger Button — matches the Dropdown field height/look
   calendarTriggerBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#ffffff', borderRadius: 13, borderWidth: 1.5, borderColor: '#94a3b8', borderStyle: 'solid', paddingHorizontal: 13, paddingVertical: 9, marginBottom: 10, minHeight: 46 },
+  compactCalendarTrigger: { minHeight: 40, paddingVertical: 6 },
   calendarTriggerText: { fontSize: 13, fontWeight: '700', color: '#0284c7' },
 
   // Modals (add-contact)

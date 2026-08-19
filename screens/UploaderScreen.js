@@ -12,6 +12,7 @@ import { CameraView, scanFromURLAsync, useCameraPermissions } from 'expo-camera'
 import PdfPageImageModule from 'expo-pdf-page-image';
 import { FilterImage } from 'react-native-svg/filter-image';
 import { COLORS } from '../styles/theme';
+import Dropdown from '../components/Dropdown';
 import { ROLE_LEVELS } from '../core/config';
 import { UploadViewer, resolveUploadUri, isPdfUpload } from '../utils/upload-viewer';
 import {
@@ -130,7 +131,6 @@ export default function UploaderScreen({
   const [submitStates, setSubmitStates] = useState({});
   const webInputRef = useRef(null);
   const sessionGenerationRef = useRef(0);
-  const [kycPickerVisible, setKycPickerVisible] = useState(false);
   const [enhancePanelVisible, setEnhancePanelVisible] = useState(false);
   // Web setInterfaceState('preview') parity: true only after the current image
   // has been confirmed in the cropper. The strip's preview row (Rotate / Lock /
@@ -258,7 +258,6 @@ export default function UploaderScreen({
     setExistingViewer(null);
     setDeletedUploadIds(new Set());
     setSubmitStates({});
-    setKycPickerVisible(false);
     setNativeCropVisible(false);
     setNativeCameraActive(false);
     setNativeCameraReady(false);
@@ -1193,7 +1192,6 @@ export default function UploaderScreen({
     }
     setNativeScanVisible(false);
     setNativeCropVisible(false);
-    setKycPickerVisible(false);
     setSelectedTaskIndex(null);
     setIsPreviewing(false);
     setImageQueue([]); setImageIndex(0); setStagedRows([]); setRowFields({}); setSubmitStates({}); setLocked(false); setRotation(0); setEnhancements({ brightness: 0, contrast: 0, sharpen: false, greyscale: false, bw: false });
@@ -1207,7 +1205,6 @@ export default function UploaderScreen({
     setUploadType(null);
     setMobileOrderListCollapsed(true);
     setNativeCropVisible(false);
-    setKycPickerVisible(false);
     setSelectedTaskIndex(null);
     setIsPreviewing(false);
     if (Platform.OS !== 'web') {
@@ -1229,7 +1226,6 @@ export default function UploaderScreen({
     setEnhancements({ brightness: 0, contrast: 0, sharpen: false, greyscale: false, bw: false });
     setExistingViewer(null);
     setSubmitStates({});
-    setKycPickerVisible(false);
     setMessage(`Ready. Uploading for: ${order.AWB_NUMBER || order.REFERENCE}`);
   };
 
@@ -1588,10 +1584,14 @@ export default function UploaderScreen({
                     {task.type === 'KYC' ? (
                       <View style={styles.kycCell}>
                         <TextInput style={styles.tblInput} placeholder="KYC Number" placeholderTextColor="#94a3b8" value={fields.kycNumber || ''} onFocus={() => setSelectedTaskIndex(index)} onChangeText={(value) => setTaskField(task, index, 'kycNumber', value)} />
-                        <TouchableOpacity style={styles.kycSelect} onPress={() => { setSelectedTaskIndex(index); setKycPickerVisible(true); }}>
-                          <Text style={styles.kycSelectText} numberOfLines={1}>{fields.kycType || KYC_OPTIONS[0]}</Text>
-                          <Text style={styles.kycSelectChevron}>▾</Text>
-                        </TouchableOpacity>
+                        <Dropdown
+                          value={fields.kycType || KYC_OPTIONS[0]}
+                          options={KYC_OPTION_GROUPS.flatMap(group => group.options.map(option => ({ value: option, label: option, sublabel: group.label })))}
+                          onChange={(value) => setTaskField(task, index, 'kycType', value)}
+                          searchable
+                          placeholder="Select KYC Type"
+                          style={styles.kycDropdown}
+                        />
                       </View>
                     ) : (
                       <TextInput style={styles.tblInput} placeholder={placeholder} placeholderTextColor="#94a3b8" value={fields[inputKey] || ''} onFocus={() => setSelectedTaskIndex(index)} onChangeText={(value) => setTaskField(task, index, inputKey, value)} />
@@ -1736,10 +1736,14 @@ export default function UploaderScreen({
                 {task.type === 'KYC' ? (
                   <View style={[styles.kycCell, styles.cardValueFlex]}>
                     <TextInput style={[styles.tblInput, styles.cardInput]} placeholder="KYC Number" placeholderTextColor="#94a3b8" value={fields.kycNumber || ''} onFocus={() => setSelectedTaskIndex(index)} onChangeText={(value) => setTaskField(task, index, 'kycNumber', value)} />
-                    <TouchableOpacity style={styles.kycSelect} onPress={() => { setSelectedTaskIndex(index); setKycPickerVisible(true); }}>
-                      <Text style={styles.kycSelectText} numberOfLines={1}>{fields.kycType || KYC_OPTIONS[0]}</Text>
-                      <Text style={styles.kycSelectChevron}>▾</Text>
-                    </TouchableOpacity>
+                    <Dropdown
+                      value={fields.kycType || KYC_OPTIONS[0]}
+                      options={KYC_OPTION_GROUPS.flatMap(group => group.options.map(option => ({ value: option, label: option, sublabel: group.label })))}
+                      onChange={(value) => setTaskField(task, index, 'kycType', value)}
+                      searchable
+                      placeholder="Select KYC Type"
+                      style={styles.kycDropdown}
+                    />
                   </View>
                 ) : (
                   <TextInput style={[styles.tblInput, styles.cardInput, styles.cardValueFlex]} placeholder={placeholder} placeholderTextColor="#94a3b8" value={fields[inputKey] || ''} onFocus={() => setSelectedTaskIndex(index)} onChangeText={(value) => setTaskField(task, index, inputKey, value)} />
@@ -1840,33 +1844,6 @@ export default function UploaderScreen({
       </View>
     );
   };
-
-  // ── KYC type picker (web kycOptionsHTML optgroups: Individual / Business) ──
-  const renderKycTypePicker = () => (
-    <Modal visible={kycPickerVisible} transparent animationType="fade" onRequestClose={() => setKycPickerVisible(false)}>
-      <TouchableOpacity style={styles.kycPickerOverlay} activeOpacity={1} onPress={() => setKycPickerVisible(false)}>
-        <View style={styles.kycPickerCard}>
-          <Text style={styles.kycPickerTitle}>KYC Type</Text>
-          {KYC_OPTION_GROUPS.map((group) => (
-            <View key={group.label}>
-              <Text style={styles.kycPickerGroup}>{group.label}</Text>
-              {group.options.map((option) => {
-                const pickerTask = selectedTaskIndex != null ? tasks[selectedTaskIndex] : null;
-                const pickerFields = pickerTask ? getTaskFields(pickerTask, selectedTaskIndex) : {};
-                return (
-                  <TouchableOpacity key={option} style={[styles.kycPickerOption, pickerFields.kycType === option && styles.kycPickerOptionActive]} onPress={() => { if (pickerTask) setTaskField(pickerTask, selectedTaskIndex, 'kycType', option); setKycPickerVisible(false); }}>
-                    <Text style={[styles.kycPickerOptionText, pickerFields.kycType === option && styles.kycPickerOptionTextActive]}>{option}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          ))}
-          <TouchableOpacity style={styles.kycPickerCancel} onPress={() => setKycPickerVisible(false)}><Text style={styles.kycPickerCancelText}>Cancel</Text></TouchableOpacity>
-        </View>
-      </TouchableOpacity>
-    </Modal>
-  );
-
 
   const closeWebCropper = () => {
     if (webCropperRef.current) { webCropperRef.current.destroy(); webCropperRef.current = null; }
@@ -2143,10 +2120,6 @@ export default function UploaderScreen({
         </View>
       </Modal>
 
-
-
-      {/* ── KYC type picker (web optgroups: Individual / Business) ── */}
-      {renderKycTypePicker()}
     </View>
   );
 }
@@ -2234,9 +2207,7 @@ const styles = StyleSheet.create({
   tblMessageOk: { color: '#15803d', fontWeight: '700' },
   tblInput: { borderWidth: 1, borderColor: '#ccc', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 6, fontSize: 12, backgroundColor: '#fff', minWidth: 120 },
   kycCell: { gap: 5 },
-  kycSelect: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#ccc', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 6, backgroundColor: '#fff' },
-  kycSelectText: { fontSize: 12, color: '#334155', flex: 1 },
-  kycSelectChevron: { color: '#64748b', fontSize: 12, marginLeft: 6 },
+  kycDropdown: { flex: 1 },
   pickCellBtn: { backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fca5a5', borderRadius: 5, paddingHorizontal: 12, paddingVertical: 7, alignItems: 'center', justifyContent: 'center' },
   pickCellText: { color: '#b91c1c', fontSize: 11, fontWeight: '800' },
   previewCellBtn: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 5, paddingHorizontal: 10, paddingVertical: 6, alignItems: 'center' },

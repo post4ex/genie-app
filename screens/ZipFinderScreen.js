@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import {
-  ActivityIndicator, Keyboard, Modal, Platform, ScrollView, StyleSheet, Text,
+  ActivityIndicator, Keyboard, Platform, ScrollView, StyleSheet, Text,
   TextInput, TouchableOpacity, View, useWindowDimensions,
 } from 'react-native';
 import { COLORS, FONTS } from '../styles/theme';
+import Dropdown from '../components/Dropdown';
 import { getCountryNames, resolveGlobalLocation, searchGlobalZip } from '../utils/zipfinder';
 
 const emptySide = () => ({
@@ -11,31 +12,11 @@ const emptySide = () => ({
   selectedCountry: '', cityIndex: '', selected: null,
 });
 
-function PickerModal({ visible, title, items, onSelect, onClose }) {
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <View style={styles.picker}>
-          <View style={styles.pickerHeader}><Text style={styles.pickerTitle}>{title}</Text><TouchableOpacity onPress={onClose}><Text style={styles.closeText}>×</Text></TouchableOpacity></View>
-          <ScrollView>
-            {items.map(item => (
-              <TouchableOpacity key={item.value} style={styles.pickerItem} onPress={() => onSelect(item.value)}>
-                <Text style={styles.pickerItemText}>{item.label}</Text>
-              </TouchableOpacity>
-            ))}
-            {!items.length ? <Text style={styles.emptyText}>No options available.</Text> : null}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 function ReadonlyField({ label, value, accent }) {
   return <View style={styles.outputField}><Text style={[styles.fieldLabel, accent && { color: accent }]}>{label}</Text><Text style={styles.outputValue}>{value || '—'}</Text></View>;
 }
 
-function LocationPanel({ side, state, setState, onSearch, onCountry, onCity, onOpenCountry, onOpenCity, countryOpen, cityOpen }) {
+function LocationPanel({ side, state, setState, onSearch, onCountry, onCity }) {
   const isFrom = side === 'from';
   const accent = isFrom ? '#2563eb' : '#059669';
   const countryCodes = Object.keys(state.countryNames || {});
@@ -65,7 +46,14 @@ function LocationPanel({ side, state, setState, onSearch, onCountry, onCity, onO
       {countryCodes.length > 1 ? (
         <View style={styles.stepBlock}>
           <Text style={[styles.stepLabel, { color: accent }]}>STEP 1: SELECT COUNTRY</Text>
-          <TouchableOpacity style={styles.selectBox} onPress={onOpenCountry}><Text style={styles.selectText}>{selectedCountryName || '-- Select Country --'}</Text><Text>▾</Text></TouchableOpacity>
+          <Dropdown
+            label="Country"
+            value={state.selectedCountry}
+            options={countryCodes.map(code => ({ value: code, label: state.countryNames[code] || code }))}
+            onChange={onCountry}
+            searchable={countryCodes.length > 8}
+            placeholder="Select Country"
+          />
         </View>
       ) : null}
       {countryCodes.length === 1 && !state.selectedCountry ? <Text style={styles.detailsText}>{state.countryNames[countryCodes[0]]}</Text> : null}
@@ -73,7 +61,17 @@ function LocationPanel({ side, state, setState, onSearch, onCountry, onCity, onO
       {state.selectedCountry && filtered.length > 1 ? (
         <View style={styles.stepBlock}>
           <Text style={[styles.stepLabel, { color: accent }]}>STEP 2: SELECT CITY / REGION</Text>
-          <TouchableOpacity style={styles.selectBox} onPress={onOpenCity}><Text style={styles.selectText}>{selectedCity ? `${selectedCity.city} (${selectedCity.state || 'N/A'})` : '-- Select City --'}</Text><Text>▾</Text></TouchableOpacity>
+          <Dropdown
+            label="City / Region"
+            value={state.cityIndex}
+            options={filtered.map(item => ({
+              value: String(state.results.indexOf(item)),
+              label: `${item.city} (${item.state || 'N/A'})`,
+            }))}
+            onChange={onCity}
+            searchable={filtered.length > 8}
+            placeholder="Select City / Region"
+          />
         </View>
       ) : null}
 
@@ -89,8 +87,6 @@ function LocationPanel({ side, state, setState, onSearch, onCountry, onCity, onO
         </View>
       </View>
 
-      <PickerModal visible={countryOpen} title="Select Country" items={countryCodes.map(code => ({ value: code, label: state.countryNames[code] || code }))} onSelect={onCountry} onClose={() => onOpenCountry(false)} />
-      <PickerModal visible={cityOpen} title="Select City / Region" items={filtered.map((item, index) => ({ value: String(state.results.indexOf(item)), label: `${item.city} (${item.state || 'N/A'})` }))} onSelect={onCity} onClose={() => onOpenCity(false)} />
     </View>
   );
 }
@@ -100,7 +96,6 @@ export default function ZipFinderScreen() {
   const isDesktop = width >= 768;
   const [from, setFrom] = useState(emptySide());
   const [to, setTo] = useState(emptySide());
-  const [openPicker, setOpenPicker] = useState(null);
 
   const getSide = (side) => side === 'from' ? from : to;
   const setSide = (side, updater) => side === 'from' ? setFrom(updater) : setTo(updater);
@@ -150,11 +145,7 @@ export default function ZipFinderScreen() {
   const panelProps = (side, state, setState) => ({
     side, state, setState, onSearch: fetchLocation,
     onCountry: code => chooseCountry(side, code),
-    onCity: index => { setOpenPicker(null); chooseLocation(side, Number(index)); },
-    onOpenCountry: value => setOpenPicker(value === false ? null : `${side}-country`),
-    onOpenCity: value => setOpenPicker(value === false ? null : `${side}-city`),
-    countryOpen: openPicker === `${side}-country`,
-    cityOpen: openPicker === `${side}-city`,
+    onCity: index => chooseLocation(side, Number(index)),
   });
 
   return (

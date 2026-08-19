@@ -11,15 +11,15 @@
 // Fully static — no Animated (crash-free pattern).
 
 import React, { useMemo, useState } from 'react';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { GradientGlyph } from './icons';
+import SearchBar from './SearchBar';
 
 const normalizeOptions = (options) => (options || []).map(o =>
   typeof o === 'string' ? { value: o, label: o } : o
 );
 
-const CHEVRON = ['#047857', '#065f46'];   // deep emerald accent
 const ACTIVE = ['#047857', '#065f46'];    // deep emerald (active option)
 const GRAY = ['#94a3b8', '#94a3b8'];      // neutral chevron colour
 
@@ -31,6 +31,7 @@ export default function Dropdown({
   placeholder = 'Select',
   searchable = false,
   disabled = false,
+  compact = false,
   style,
 }) {
   const [open, setOpen] = useState(false);
@@ -59,7 +60,7 @@ export default function Dropdown({
           accessibilityRole="button"
           accessibilityLabel={label ? `${label}: ${current?.label || placeholder}` : (current?.label || placeholder)}
           accessibilityState={{ disabled }}
-          style={({ pressed }) => [styles.field, disabled && styles.fieldDisabled, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.field, compact && styles.fieldCompact, disabled && styles.fieldDisabled, pressed && styles.pressed]}
         >
           <Text style={[styles.valueText, !current && styles.placeholderText]} numberOfLines={1}>
             {current ? current.label : placeholder}
@@ -85,18 +86,15 @@ export default function Dropdown({
               </Pressable>
             </View>
 
-            {searchable && opts.length > 8 ? (
-              <View style={styles.searchWrap}>
-                <GradientGlyph name="magnify" size={16} colors={CHEVRON} />
-                <TextInput
-                  style={styles.searchInput}
-                  value={q}
-                  onChangeText={setQ}
-                  placeholder="Search options…"
-                  placeholderTextColor="#94a3b8"
-                  autoFocus
-                />
-              </View>
+            {searchable ? (
+              <SearchBar
+                value={q}
+                onChangeText={setQ}
+                placeholder="Search options…"
+                hideScanner
+                autoFocus
+                style={styles.searchBar}
+              />
             ) : null}
 
             <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
@@ -141,6 +139,9 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   fieldDisabled: {},
+  fieldCompact: {
+    minHeight: 40,
+  },
   field: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -226,25 +227,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  searchBar: {
     margin: 12,
     marginBottom: 6,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 11,
-    paddingHorizontal: 10,
-    minHeight: 38,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 12.5,
-    fontWeight: '600',
-    color: '#0f172a',
-    paddingVertical: 6,
   },
   list: {
     paddingHorizontal: 12,

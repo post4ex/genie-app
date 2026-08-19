@@ -45,7 +45,7 @@ export default function Tray({
 }) {
   if (floating && title) {
     return (
-      <View style={[styles.card, compact && styles.cardCompact, styles.cardFloating, bottomTitle && styles.cardFloatingBottom, style]}>
+      <View style={[styles.card, compact && styles.cardCompact, styles.cardFloating, bottomTitle && styles.cardFloatingBottom, compact && bottomTitle && styles.cardCompactFloatingBottom, style]}>
         <View style={[styles.floatingChip, chipStyle]}>
           {icon ? (
             <GradientGlyph name={icon} size={iconSize} colors={iconColors || colors} style={styles.floatingIcon} />
@@ -117,6 +117,7 @@ const styles = StyleSheet.create({
   // with gradient title text; action buttons stay inside the card.
   cardFloating: { paddingTop: 36, marginBottom: 28 },
   cardFloatingBottom: { paddingBottom: 40, marginBottom: 38 },
+  cardCompactFloatingBottom: { marginBottom: 20 },
   floatingChip: {
     position: 'absolute', top: -13, left: 14, zIndex: 2,
     flexDirection: 'row', alignItems: 'center',

@@ -7,6 +7,7 @@ import { COLORS } from '../styles/theme';
 import Tray from '../components/Tray';
 import TrackingPane from '../components/TrackingPane';
 import PincodeResult from '../components/PincodeResult';
+import Dropdown from '../components/Dropdown';
 
 const CUSTOM_CARRIERS = [
   { value: 'jetline',    label: 'Jetline'         },
@@ -46,7 +47,6 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
   const [pincodeResult, setPincodeResult] = useState(null);
   const [error, setError] = useState('');
 
-  const selectedCarrierObj = CUSTOM_CARRIERS.find(c => c.value === carrier);
   const subCarrierList = carrier === 'tc' ? TC_CARRIERS : carrier === '17track' ? T17_CARRIERS : [];
 
   // ── Track Shipment ──────────────────────────────────────────────────────────
@@ -187,43 +187,27 @@ export default function TrackingScreen({ token, apiBase, orders, shipmentsMap })
           {/* Custom carrier pickers */}
           {activeTab === 'custom' && (
             <>
-              <Text style={styles.cardLabel}>SELECT CARRIER</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  {CUSTOM_CARRIERS.map(c => (
-                    <TouchableOpacity
-                      key={c.value}
-                      style={[styles.carrierChip, carrier === c.value && styles.carrierChipActive]}
-                      onPress={() => { setCarrier(c.value); setSubCarrier(''); }}
-                    >
-                      <Text style={[styles.carrierChipText, carrier === c.value && styles.carrierChipTextActive]}>
-                        {c.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </ScrollView>
+              <Dropdown
+                label="SELECT CARRIER"
+                value={carrier}
+                options={CUSTOM_CARRIERS.map(c => ({ value: c.value, label: c.label }))}
+                onChange={value => { setCarrier(value); setSubCarrier(''); }}
+                searchable
+                placeholder="Select Carrier"
+                style={{ marginBottom: 10 }}
+              />
 
               {/* Sub-carrier picker for tc/17track */}
               {(carrier === 'tc' || carrier === '17track') && (
-                <>
-                  <Text style={styles.cardLabel}>SELECT SUB-CARRIER</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
-                    <View style={{ flexDirection: 'row', gap: 6 }}>
-                      {subCarrierList.map(sc => (
-                        <TouchableOpacity
-                          key={sc}
-                          style={[styles.carrierChip, subCarrier === sc && styles.carrierChipActive]}
-                          onPress={() => setSubCarrier(sc)}
-                        >
-                          <Text style={[styles.carrierChipText, subCarrier === sc && styles.carrierChipTextActive]}>
-                            {sc}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </ScrollView>
-                </>
+                <Dropdown
+                  label="SELECT SUB-CARRIER"
+                  value={subCarrier}
+                  options={subCarrierList.map(value => ({ value, label: value }))}
+                  onChange={setSubCarrier}
+                  searchable
+                  placeholder="Select Sub-Carrier"
+                  style={{ marginBottom: 10 }}
+                />
               )}
             </>
           )}

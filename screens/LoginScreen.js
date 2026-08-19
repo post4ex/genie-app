@@ -10,6 +10,7 @@ import { API_BASE } from '../config/api';
 import Button from '../components/Button';
 import Icon, { GradientIcon } from '../components/icons';
 import GradientText from '../components/GradientText';
+import Dropdown from '../components/Dropdown';
 
 const TAGLINE_TEXT = 'Assistant to a Postman';
 
@@ -512,27 +513,14 @@ export default function LoginScreen({ onLoginSuccess }) {
                   <GradientText colors={['#9C2007', '#f59e0b']} style={styles.cardTitleWeb}>Complete Profile</GradientText>
                   <Text style={styles.cardSubWeb}>Step 2: KYC & Address Details</Text>
 
-                  <Text style={styles.labelWeb}>KYC Type</Text>
-                  <View style={styles.pickerRow}>
-                    {['AADHAAR', 'PAN', 'GST'].map((type) => {
-                      const active = kycType === type;
-                      return active ? (
-                        <LinearGradient
-                          key={type}
-                          colors={['#f59e0b', '#f97316']}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[styles.pickerChipWeb, styles.pickerChipActiveWeb]}
-                        >
-                          <Text style={[styles.pickerChipTextWeb, styles.pickerChipTextActiveWeb]}>{type}</Text>
-                        </LinearGradient>
-                      ) : (
-                        <TouchableOpacity key={type} style={styles.pickerChipWeb} onPress={() => setKycType(type)}>
-                          <Text style={styles.pickerChipTextWeb}>{type}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
+                  <Dropdown
+                    label="KYC TYPE"
+                    value={kycType}
+                    options={['AADHAAR', 'PAN', 'GST']}
+                    onChange={setKycType}
+                    placeholder="Select KYC Type"
+                    style={{ marginBottom: 12 }}
+                  />
 
                   <AuthInput label="Document Number" inputRef={kycNumberInputRef} field="kycNumber" focusedField={focusedField} setFocusedField={setFocusedField} placeholder="Enter ID number" value={kycNumber} onChangeText={setKycNumber} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => kycAddressInputRef.current?.focus?.()} />
 
