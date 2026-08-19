@@ -6,6 +6,7 @@
     "start": "bash start.sh",
     "start:8080": "bash start.sh --port 8080",
     "start:8081": "bash start.sh --port 8081",
+    "start:lt": "bash start_tunnel.sh",
     "start:chromebook": "bash run_chromebook.sh",
     "start:tunnel": "expo start --tunnel",
     "tunnel:lt": "npx localtunnel --port 8081",
