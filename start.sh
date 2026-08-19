@@ -25,6 +25,7 @@ adb connect 100.115.92.2:5555 2>/dev/null || true
 DEVICES=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}')
 
 export EXPO_NO_TELEMETRY=1
+export EXPO_TOKEN="FaffilCCvzYoP4e7QvClpWpPI7HbxcWgo0PFwkmk"
 export NODE_OPTIONS="--max-old-space-size=2048"
 
 if [ -n "$DEVICES" ]; then
