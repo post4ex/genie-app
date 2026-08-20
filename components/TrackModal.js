@@ -7,7 +7,7 @@
 import React, { useState } from 'react';
 import {
   StyleSheet, Modal, View, Text, TouchableOpacity,
-  ScrollView, Platform, Keyboard
+  ScrollView, Platform, Keyboard, KeyboardAvoidingView, Pressable
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../styles/theme';
@@ -219,148 +219,154 @@ export default function TrackModal({ visible, onClose, token, apiBase, orders = 
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
-      <View style={styles.overlay}>
-        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.headerTitleRow}>
-              <GradientGlyph name="scan" size={20} colors={MODE_GRAD} />
-              <View>
-                <GradientText colors={MODE_GRAD} style={styles.title}>Track Shipment</GradientText>
-                <Text style={styles.subtitle}>AWB / Reference · Pincode</Text>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+        <View style={styles.overlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={Keyboard.dismiss} />
+          <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+            {/* Header */}
+            <View style={styles.header}>
+              <View style={styles.headerTitleRow}>
+                <GradientGlyph name="scan" size={20} colors={MODE_GRAD} />
+                <View>
+                  <GradientText colors={MODE_GRAD} style={styles.title}>Track Shipment</GradientText>
+                  <Text style={styles.subtitle}>AWB / Reference · Pincode</Text>
+                </View>
               </View>
+              <TouchableOpacity style={styles.closeBtn} onPress={close} accessibilityLabel="Close track">
+                <Text style={styles.closeBtnText}>✕</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity style={styles.closeBtn} onPress={close} accessibilityLabel="Close track">
-              <Text style={styles.closeBtnText}>✕</Text>
-            </TouchableOpacity>
-          </View>
 
-          <ScrollView
-            style={styles.body}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingBottom: 18 }}
-          >
-            {/* ── Joined segmented mode switch (shared SegmentedToggle) ── */}
-            <SegmentedToggle
-              options={MODES}
-              value={activeTab}
-              onChange={switchTab}
-              colors={MODE_GRAD}
-              size="sm"
-              flex
-              iconSize={12}
-              idleIconColor={['#94a3b8', '#94a3b8']}
-              style={styles.segGap}
-            />
+            <ScrollView
+              style={styles.body}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 18 }}
+            >
+              {/* ── Joined segmented mode switch (shared SegmentedToggle) ── */}
+              <SegmentedToggle
+                options={MODES}
+                value={activeTab}
+                onChange={switchTab}
+                colors={MODE_GRAD}
+                size="sm"
+                flex
+                iconSize={12}
+                idleIconColor={['#94a3b8', '#94a3b8']}
+                style={styles.segGap}
+              />
 
-            {isPincode ? (
-              /* ── PINCODE MODE ── */
-              <Tray style={styles.trackCard}>
-                <Text style={styles.cardLabel}>6-DIGIT PINCODE</Text>
-                <SearchBar
-                  value={pincode}
-                  onChangeText={setPincode}
-                  placeholder="e.g. 248001"
-                  hideScanner
-                  keyboardType="numeric"
-                  maxLength={6}
-                  onSubmitEditing={doPincode}
-                />
-                <Button
-                  variant="primary"
-                  size="md"
-                  fullWidth
-                  icon="pincode"
-                  loading={loading}
-                  onPress={doPincode}
-                  style={{ marginTop: 12 }}
-                >
-                  SEARCH PINCODE
-                </Button>
-              </Tray>
-            ) : (
-              /* ── TRACKING MODES ── */
-              <Tray style={styles.trackCard}>
-                {activeTab === 'custom' && (
-                  <View style={styles.dropdownRow}>
-                    <Dropdown
-                      label="CARRIER"
-                      value={carrier}
-                      options={CUSTOM_CARRIERS.map(c => ({ value: c.value, label: c.label }))}
-                      onChange={setCarrier}
-                      placeholder="Select carrier"
-                      style={styles.dropdownHalf}
-                    />
-                    {(carrier === 'tc' || carrier === '17track') && (
+              {isPincode ? (
+                /* ── PINCODE MODE ── */
+                <Tray style={styles.trackCard}>
+                  <Text style={styles.cardLabel}>6-DIGIT PINCODE</Text>
+                  <SearchBar
+                    value={pincode}
+                    onChangeText={setPincode}
+                    placeholder="e.g. 248001"
+                    hideScanner
+                    keyboardType="numeric"
+                    maxLength={6}
+                    onSubmitEditing={doPincode}
+                  />
+                  <Button
+                    variant="primary"
+                    size="md"
+                    fullWidth
+                    icon="pincode"
+                    loading={loading}
+                    onPress={doPincode}
+                    style={{ marginTop: 12 }}
+                  >
+                    SEARCH PINCODE
+                  </Button>
+                </Tray>
+              ) : (
+                /* ── TRACKING MODES ── */
+                <Tray style={styles.trackCard}>
+                  {activeTab === 'custom' && (
+                    <View style={styles.dropdownRow}>
                       <Dropdown
-                        label="SUB-CARRIER"
-                        value={subCarrier}
-                        options={subCarrierList.map(s => ({ value: s, label: s }))}
-                        onChange={setSubCarrier}
-                        placeholder="Sub-carrier"
-                        searchable
+                        label="CARRIER"
+                        value={carrier}
+                        options={CUSTOM_CARRIERS.map(c => ({ value: c.value, label: c.label }))}
+                        onChange={setCarrier}
+                        placeholder="Select carrier"
                         style={styles.dropdownHalf}
                       />
-                    )}
-                  </View>
-                )}
+                      {(carrier === 'tc' || carrier === '17track') && (
+                        <Dropdown
+                          label="SUB-CARRIER"
+                          value={subCarrier}
+                          options={subCarrierList.map(s => ({ value: s, label: s }))}
+                          onChange={setSubCarrier}
+                          placeholder="Sub-carrier"
+                          searchable
+                          style={styles.dropdownHalf}
+                        />
+                      )}
+                    </View>
+                  )}
 
-                <Text style={[styles.cardLabel, activeTab === 'custom' && { marginTop: 12 }]}>
-                  AWB / REFERENCE NUMBER
-                </Text>
-                <SearchBar
-                  value={trackRef}
-                  onChangeText={setTrackRef}
-                  placeholder={activeTab === 'default' ? 'Enter 14-digit Ref or AWB' : 'Enter AWB Number'}
-                  onSubmitEditing={() => doTrack()}
-                />
+                  <Text style={[styles.cardLabel, activeTab === 'custom' && { marginTop: 12 }]}>
+                    AWB / REFERENCE NUMBER
+                  </Text>
+                  <SearchBar
+                    value={trackRef}
+                    onChangeText={setTrackRef}
+                    placeholder={activeTab === 'default' ? 'Enter 14-digit Ref or AWB' : 'Enter AWB Number'}
+                    onSubmitEditing={() => doTrack()}
+                  />
 
-                {activeTab === 'live' && (
-                  <Text style={styles.modeHint}>🔴 Fetches live data directly from the carrier API</Text>
-                )}
-                {activeTab === 'custom' && (
-                  <Text style={styles.modeHint}>⚙️ Custom carrier — direct API call to selected carrier</Text>
-                )}
+                  {activeTab === 'live' && (
+                    <Text style={styles.modeHint}>🔴 Fetches live data directly from the carrier API</Text>
+                  )}
+                  {activeTab === 'custom' && (
+                    <Text style={styles.modeHint}>⚙️ Custom carrier — direct API call to selected carrier</Text>
+                  )}
 
-                <Button
-                  variant="primary"
-                  size="md"
-                  fullWidth
-                  icon="search"
+                  <Button
+                    variant="primary"
+                    size="md"
+                    fullWidth
+                    icon="search"
+                    loading={loading}
+                    onPress={() => doTrack()}
+                    style={{ marginTop: 12 }}
+                  >
+                    TRACK SHIPMENT
+                  </Button>
+                </Tray>
+              )}
+
+              {/* Error */}
+              {!!error && (
+                <View style={styles.errorBox}>
+                  <Text style={styles.errorText}>⚠️ {error}</Text>
+                </View>
+              )}
+
+              {/* Tracking result */}
+              {result && (
+                <TrackingPane
+                  shipment={shipment}
+                  movements={movements}
+                  infoRows={paneRows}
+                  splitByType
+                  title="Tracking and History"
                   loading={loading}
-                  onPress={() => doTrack()}
-                  style={{ marginTop: 12 }}
-                >
-                  TRACK SHIPMENT
-                </Button>
-              </Tray>
-            )}
+                  onRefresh={() => doTrack(true)}
+                />
+              )}
 
-            {/* Error */}
-            {!!error && (
-              <View style={styles.errorBox}>
-                <Text style={styles.errorText}>⚠️ {error}</Text>
-              </View>
-            )}
-
-            {/* Tracking result */}
-            {result && (
-              <TrackingPane
-                shipment={shipment}
-                movements={movements}
-                infoRows={paneRows}
-                splitByType
-                title="Tracking and History"
-                loading={loading}
-                onRefresh={() => doTrack(true)}
-              />
-            )}
-
-            {/* Pincode result */}
-            {pincodeResult && <PincodeResult data={pincodeResult} />}
-          </ScrollView>
+              {/* Pincode result */}
+              {pincodeResult && <PincodeResult data={pincodeResult} />}
+            </ScrollView>
+          </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

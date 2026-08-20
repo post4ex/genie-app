@@ -7,7 +7,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   StyleSheet, View, Text, Modal, ScrollView, Pressable,
-  TextInput, Platform, Keyboard
+  TextInput, Platform, Keyboard, KeyboardAvoidingView
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -348,183 +348,190 @@ export default function UpdateStatusModal({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.headerTitleRow}>
-              <GradientGlyph name="clipboard-check" size={20} colors={BRAND} />
-              <View style={{ flex: 1 }}>
-                <GradientText colors={BRAND} style={styles.title} numberOfLines={1}>Update Status : {awb}</GradientText>
-                {/* Consignee / Nos / Weight strip */}
-                <View style={styles.metaRow}>
-                  <Text style={[styles.metaValue, styles.metaConsignee]} numberOfLines={1}>{consigneeName}</Text>
-                  <View style={styles.metaDivider} />
-                  <Text style={styles.metaValue}>Nos: {nos}</Text>
-                  <View style={styles.metaDivider} />
-                  <Text style={styles.metaValue}>Wt: {weight}</Text>
-                </View>
-              </View>
-              <Button
-                variant="tint"
-                size="sm"
-                iconOnly
-                icon="close"
-                onPress={onClose}
-                accessibilityLabel="Close update status"
-                style={{ marginLeft: 6 }}
-              />
-            </View>
-          </View>
-
-          {/* Form Scroll Area */}
-          <ScrollView
-            style={styles.body}
-            contentContainerStyle={styles.bodyContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            {errorMsg ? (
-              <View style={styles.errorBanner}>
-                <Text style={styles.errorBannerText}>⚠️ {errorMsg}</Text>
-              </View>
-            ) : null}
-
-            {/* Primary + Sub-Status — flex in one row */}
-            <View style={styles.dropdownRow}>
-              <View style={styles.dropdownHalf}>
-                <Dropdown
-                  label="PRIMARY STATUS *"
-                  value={primaryStatus}
-                  options={primaryOptions}
-                  onChange={handlePrimaryChange}
-                  placeholder="Select Primary Status"
-                />
-              </View>
-              <View style={styles.dropdownHalf}>
-                <Dropdown
-                  label="SUB-STATUS REASON *"
-                  value={subStatus}
-                  options={subOptions}
-                  onChange={setSubStatus}
-                  searchable
-                  placeholder={subOptions.length ? 'Select Reason' : '-- No reasons --'}
-                />
-              </View>
-            </View>
-
-            {/* Concerned Person + Payment — merged handover card; Relation and
-                Payment Method share one dropdown row when both apply */}
-            {(showPersonFields || showPayFields) && (
-              <SectionCard icon="clipboard-account-outline" title="Handover & Collection Details">
-                {showPersonFields && (
-                  <View style={styles.fieldRow}>
-                    <TextInput
-                      style={[styles.input, styles.fieldHalf]}
-                      placeholder="Person Name (e.g. Rahul Sharma)"
-                      placeholderTextColor="#94a3b8"
-                      value={personName}
-                      onChangeText={setPersonName}
-                    />
-                    <TextInput
-                      style={[styles.input, styles.fieldHalf]}
-                      placeholder="Phone Number"
-                      placeholderTextColor="#94a3b8"
-                      keyboardType="phone-pad"
-                      value={personPhone}
-                      onChangeText={setPersonPhone}
-                    />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+        <View style={styles.overlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={Keyboard.dismiss} />
+          <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+            {/* Header */}
+            <View style={styles.header}>
+              <View style={styles.headerTitleRow}>
+                <GradientGlyph name="clipboard-check" size={20} colors={BRAND} />
+                <View style={{ flex: 1 }}>
+                  <GradientText colors={BRAND} style={styles.title} numberOfLines={1}>Update Status : {awb}</GradientText>
+                  {/* Consignee / Nos / Weight strip */}
+                  <View style={styles.metaRow}>
+                    <Text style={[styles.metaValue, styles.metaConsignee]} numberOfLines={1}>{consigneeName}</Text>
+                    <View style={styles.metaDivider} />
+                    <Text style={styles.metaValue}>Nos: {nos}</Text>
+                    <View style={styles.metaDivider} />
+                    <Text style={styles.metaValue}>Wt: {weight}</Text>
                   </View>
-                )}
-
-                <View style={styles.dropdownRow}>
-                  {showPersonFields && (
-                    <View style={styles.dropdownHalf}>
-                      <Dropdown
-                        label="RELATION / ROLE"
-                        value={personRelation}
-                        options={RELATION_OPTIONS.map(s => ({ value: s, label: s }))}
-                        onChange={setPersonRelation}
-                        placeholder="Select relation / role"
-                      />
-                    </View>
-                  )}
-                  {showPayFields && (
-                    <View style={styles.dropdownHalf}>
-                      <Dropdown
-                        label="PAYMENT METHOD"
-                        value={payMode}
-                        options={PAYMODE_OPTIONS.map(s => ({ value: s, label: s }))}
-                        onChange={setPayMode}
-                        placeholder="Select payment method"
-                      />
-                    </View>
-                  )}
                 </View>
+                <Button
+                  variant="tint"
+                  size="sm"
+                  iconOnly
+                  icon="close"
+                  onPress={onClose}
+                  accessibilityLabel="Close update status"
+                  style={{ marginLeft: 6 }}
+                />
+              </View>
+            </View>
 
-                {showUtrField && (
-                  <TextInput
-                    style={[styles.input, { marginTop: 10 }]}
-                    placeholder="UTR / Transaction Ref / Cheque No. *"
-                    placeholderTextColor="#94a3b8"
-                    value={utrNo}
-                    onChangeText={setUtrNo}
+            {/* Form Scroll Area */}
+            <ScrollView
+              style={styles.body}
+              contentContainerStyle={styles.bodyContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              {errorMsg ? (
+                <View style={styles.errorBanner}>
+                  <Text style={styles.errorBannerText}>⚠️ {errorMsg}</Text>
+                </View>
+              ) : null}
+
+              {/* Primary + Sub-Status — flex in one row */}
+              <View style={styles.dropdownRow}>
+                <View style={styles.dropdownHalf}>
+                  <Dropdown
+                    label="PRIMARY STATUS *"
+                    value={primaryStatus}
+                    options={primaryOptions}
+                    onChange={handlePrimaryChange}
+                    placeholder="Select Primary Status"
+                    style={{ marginBottom: 12 }}
                   />
-                )}
-              </SectionCard>
-            )}
-
-            {/* Next Delivery Attempt Day */}
-            {showAttemptDayField && (
-              <SectionCard icon="calendar" title="Next Delivery Attempt Day" required>
-                <View style={styles.chipRow}>
-                  {DAY_OPTIONS.map((d) => (
-                    <ChoiceChip
-                      key={d}
-                      label={d}
-                      active={attemptDay === d}
-                      onPress={() => setAttemptDay(d)}
-                    />
-                  ))}
                 </View>
-              </SectionCard>
-            )}
+                <View style={styles.dropdownHalf}>
+                  <Dropdown
+                    label="SUB-STATUS REASON *"
+                    value={subStatus}
+                    options={subOptions}
+                    onChange={setSubStatus}
+                    searchable
+                    placeholder={subOptions.length ? 'Select Reason' : '-- No reasons --'}
+                  />
+                </View>
+              </View>
 
-            {/* Custom Remark */}
-            <View style={{ marginTop: 14 }}>
-              <Text style={styles.fieldLabel}>CUSTOM REMARK (OPTIONAL)</Text>
-              <TextInput
-                style={[styles.input, { height: 60, textAlignVertical: 'top' }]}
-                placeholder="e.g. Received by reception / Next attempt scheduled"
-                placeholderTextColor="#94a3b8"
-                multiline
-                value={customRemark}
-                onChangeText={setCustomRemark}
+              {/* Concerned Person + Payment — merged handover card; Relation and
+                  Payment Method share one dropdown row when both apply */}
+              {(showPersonFields || showPayFields) && (
+                <SectionCard icon="clipboard-account-outline" title="Handover & Collection Details">
+                  {showPersonFields && (
+                    <View style={styles.fieldRow}>
+                      <TextInput
+                        style={[styles.input, styles.fieldHalf]}
+                        placeholder="Person Name (e.g. Rahul Sharma)"
+                        placeholderTextColor="#94a3b8"
+                        value={personName}
+                        onChangeText={setPersonName}
+                      />
+                      <TextInput
+                        style={[styles.input, styles.fieldHalf]}
+                        placeholder="Phone Number"
+                        placeholderTextColor="#94a3b8"
+                        keyboardType="phone-pad"
+                        value={personPhone}
+                        onChangeText={setPersonPhone}
+                      />
+                    </View>
+                  )}
+
+                  <View style={styles.dropdownRow}>
+                    {showPersonFields && (
+                      <View style={styles.dropdownHalf}>
+                        <Dropdown
+                          label="RELATION / ROLE"
+                          value={personRelation}
+                          options={RELATION_OPTIONS.map(s => ({ value: s, label: s }))}
+                          onChange={setPersonRelation}
+                          placeholder="Select relation / role"
+                        />
+                      </View>
+                    )}
+                    {showPayFields && (
+                      <View style={styles.dropdownHalf}>
+                        <Dropdown
+                          label="PAYMENT METHOD"
+                          value={payMode}
+                          options={PAYMODE_OPTIONS.map(s => ({ value: s, label: s }))}
+                          onChange={setPayMode}
+                          placeholder="Select payment method"
+                        />
+                      </View>
+                    )}
+                  </View>
+
+                  {showUtrField && (
+                    <TextInput
+                      style={[styles.input, { marginTop: 10 }]}
+                      placeholder="UTR / Transaction Ref / Cheque No. *"
+                      placeholderTextColor="#94a3b8"
+                      value={utrNo}
+                      onChangeText={setUtrNo}
+                    />
+                  )}
+                </SectionCard>
+              )}
+
+              {/* Next Delivery Attempt Day */}
+              {showAttemptDayField && (
+                <SectionCard icon="calendar" title="Next Delivery Attempt Day" required>
+                  <View style={styles.chipRow}>
+                    {DAY_OPTIONS.map((d) => (
+                      <ChoiceChip
+                        key={d}
+                        label={d}
+                        active={attemptDay === d}
+                        onPress={() => setAttemptDay(d)}
+                      />
+                    ))}
+                  </View>
+                </SectionCard>
+              )}
+
+              {/* Custom Remark */}
+              <View style={{ marginTop: 14 }}>
+                <Text style={styles.fieldLabel}>CUSTOM REMARK (OPTIONAL)</Text>
+                <TextInput
+                  style={[styles.input, { height: 60, textAlignVertical: 'top' }]}
+                  placeholder="e.g. Received by reception / Next attempt scheduled"
+                  placeholderTextColor="#94a3b8"
+                  multiline
+                  value={customRemark}
+                  onChangeText={setCustomRemark}
+                />
+              </View>
+            </ScrollView>
+
+            {/* Footer Actions */}
+            <View style={styles.footer}>
+              <Button
+                variant="secondary"
+                size="md"
+                label="Cancel"
+                onPress={onClose}
+                disabled={loading}
+                style={styles.footerCancel}
+              />
+              <Button
+                variant="primary"
+                size="md"
+                icon="check"
+                loading={loading}
+                label="Save Status"
+                onPress={handleSubmit}
+                style={styles.footerSave}
               />
             </View>
-          </ScrollView>
-
-          {/* Footer Actions */}
-          <View style={styles.footer}>
-            <Button
-              variant="secondary"
-              size="md"
-              label="Cancel"
-              onPress={onClose}
-              disabled={loading}
-              style={styles.footerCancel}
-            />
-            <Button
-              variant="primary"
-              size="md"
-              icon="check"
-              loading={loading}
-              label="Save Status"
-              onPress={handleSubmit}
-              style={styles.footerSave}
-            />
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
