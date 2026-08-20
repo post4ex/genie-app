@@ -7,6 +7,10 @@ set -e
 # 0. Clean port 8081 of any dangling processes
 pkill -9 -f "8081" 2>/dev/null || true
 pkill -9 -f "expo.*start" 2>/dev/null || true
+fuser -k 8081/tcp 2>/dev/null || true
+for pid in $(ss -tulpn 2>/dev/null | grep ':8081 ' | sed -n 's/.*pid=\([0-9]*\).*/\1/p'); do
+    kill -9 "$pid" 2>/dev/null || true
+done
 
 TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
 
