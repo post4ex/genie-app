@@ -6,6 +6,7 @@
     "start": "bash start.sh",
     "start:8080": "bash start.sh --port 8080",
     "start:8081": "bash start.sh --port 8081",
+    "start:ts": "bash start_ts.sh",
     "start:lt": "bash start_tunnel.sh",
     "start:cf": "bash start_cf.sh",
     "start:chromebook": "bash run_chromebook.sh",
