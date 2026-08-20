@@ -361,6 +361,19 @@ export default function BookOrderScreen({
     }).slice(0, 5);
   }, [receiverQuery, selectedReceiver, contactsList, clientCode]);
 
+  // Auto-reveal Consignor & Consignee autocomplete dropdowns above soft keyboard
+  useEffect(() => {
+    if (senderQuery && filteredSenders.length > 0 && !selectedSender) {
+      ensureInputVisible(senderInputRef, true);
+    }
+  }, [senderQuery, filteredSenders.length, selectedSender]);
+
+  useEffect(() => {
+    if (receiverQuery && filteredReceivers.length > 0 && !selectedReceiver) {
+      ensureInputVisible(receiverInputRef, true);
+    }
+  }, [receiverQuery, filteredReceivers.length, selectedReceiver]);
+
   // Handle Receiver Selection (Web: autofill carrier, city, pincode, zone modes)
   const handleSelectReceiver = (contact) => {
     setSelectedReceiver(contact);
@@ -593,7 +606,7 @@ export default function BookOrderScreen({
       // A larger offset places autocomplete/dropdown inputs nearer the upper
       // edge, leaving room for their results below the field and above the
       // keyboard. No native measurement call is used here.
-      const keyboardOffset = needsDropdownRoom ? 300 : 120;
+      const keyboardOffset = needsDropdownRoom ? 380 : 140;
 
       if (
         responder &&
@@ -613,7 +626,7 @@ export default function BookOrderScreen({
           // Keep the upper-edge position below the fixed app header while
           // leaving room for autocomplete/dropdown results.
           if (needsDropdownRoom && domNode.style) {
-            domNode.style.scrollMarginTop = '96px';
+            domNode.style.scrollMarginTop = '120px';
           }
           domNode.scrollIntoView({
             block: needsDropdownRoom ? 'start' : 'center',
@@ -2539,96 +2552,102 @@ export default function BookOrderScreen({
         transparent={true}
         onRequestClose={() => setAddContactVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <ScrollView style={styles.acModalScroll} contentContainerStyle={styles.acModalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add {addContactType === 'sender' ? 'Sender' : 'Receiver'} Contact</Text>
-              <TouchableOpacity onPress={() => setAddContactVisible(false)}>
-                <Text style={styles.modalCloseX}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.labelWeb}>NAME *</Text>
-            <TextInput ref={acNameInputRef} onFocus={() => ensureInputVisible(acNameInputRef)} style={styles.inputWeb} placeholder="Full name" placeholderTextColor="#94a3b8" value={acForm.name} onChangeText={(t) => setAcForm(f => ({ ...f, name: uppercaseText(t) }))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acMobileInputRef.current?.focus?.()} />
-
-            <Text style={styles.labelWeb}>MOBILE (10 DIGITS) *</Text>
-            <TextInput
-              ref={acMobileInputRef}
-              onFocus={() => ensureInputVisible(acMobileInputRef)}
-              style={styles.inputWeb}
-              placeholder="10-digit mobile"
-              keyboardType="numeric"
-              maxLength={10}
-              placeholderTextColor="#94a3b8"
-              value={acForm.mobile}
-              onChangeText={(t) => setAcForm(f => ({ ...f, mobile: t.replace(/\D/g, '').slice(0, 10) }))}
-              returnKeyType="next"
-              blurOnSubmit={false}
-              onSubmitEditing={() => acPincodeInputRef.current?.focus?.()}
-            />
-
-            <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
-              <View style={{ flex: 2 }}>
-                <Text style={styles.labelWeb}>PINCODE *</Text>
-                <TextInput
-                  ref={acPincodeInputRef}
-                  onFocus={() => ensureInputVisible(acPincodeInputRef)}
-                  style={styles.inputWeb}
-                  placeholder="6-digit pincode"
-                  keyboardType="numeric"
-                  maxLength={6}
-                  placeholderTextColor="#94a3b8"
-                  value={acForm.pincode}
-                  onChangeText={(t) => handleAcPincodeChange(digitsOnly(t, 6))}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => acZoneInputRef.current?.focus?.()}
-                />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <View style={styles.modalOverlay}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={Keyboard.dismiss} />
+            <ScrollView style={styles.acModalScroll} contentContainerStyle={styles.acModalContent} keyboardShouldPersistTaps="handled">
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Add {addContactType === 'sender' ? 'Sender' : 'Receiver'} Contact</Text>
+                <TouchableOpacity onPress={() => setAddContactVisible(false)}>
+                  <Text style={styles.modalCloseX}>✕</Text>
+                </TouchableOpacity>
               </View>
-              <View style={{ flex: 1, justifyContent: 'center', paddingBottom: 10 }}>
-                <Text style={[styles.acPinStatus, acPinStatus === '✔' && { color: '#15803d' }, (acPinStatus === '✖' || acPinStatus === '⚠') && { color: acPinStatus === '✖' ? '#dc2626' : '#d97706' }]}>{acPinStatus}</Text>
+
+              <Text style={styles.labelWeb}>NAME *</Text>
+              <TextInput ref={acNameInputRef} onFocus={() => ensureInputVisible(acNameInputRef)} style={styles.inputWeb} placeholder="Full name" placeholderTextColor="#94a3b8" value={acForm.name} onChangeText={(t) => setAcForm(f => ({ ...f, name: uppercaseText(t) }))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acMobileInputRef.current?.focus?.()} />
+
+              <Text style={styles.labelWeb}>MOBILE (10 DIGITS) *</Text>
+              <TextInput
+                ref={acMobileInputRef}
+                onFocus={() => ensureInputVisible(acMobileInputRef)}
+                style={styles.inputWeb}
+                placeholder="10-digit mobile"
+                keyboardType="numeric"
+                maxLength={10}
+                placeholderTextColor="#94a3b8"
+                value={acForm.mobile}
+                onChangeText={(t) => setAcForm(f => ({ ...f, mobile: t.replace(/\D/g, '').slice(0, 10) }))}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => acPincodeInputRef.current?.focus?.()}
+              />
+
+              <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
+                <View style={{ flex: 2 }}>
+                  <Text style={styles.labelWeb}>PINCODE *</Text>
+                  <TextInput
+                    ref={acPincodeInputRef}
+                    onFocus={() => ensureInputVisible(acPincodeInputRef)}
+                    style={styles.inputWeb}
+                    placeholder="6-digit pincode"
+                    keyboardType="numeric"
+                    maxLength={6}
+                    placeholderTextColor="#94a3b8"
+                    value={acForm.pincode}
+                    onChangeText={(t) => handleAcPincodeChange(digitsOnly(t, 6))}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => acZoneInputRef.current?.focus?.()}
+                  />
+                </View>
+                <View style={{ flex: 1, justifyContent: 'center', paddingBottom: 10 }}>
+                  <Text style={[styles.acPinStatus, acPinStatus === '✔' && { color: '#15803d' }, (acPinStatus === '✖' || acPinStatus === '⚠') && { color: acPinStatus === '✖' ? '#dc2626' : '#d97706' }]}>{acPinStatus}</Text>
+                </View>
               </View>
-            </View>
 
-            {acPinResult?.found ? (
-              <View style={styles.acDerivedBox}>
-                <Text style={styles.acDerivedRow}>City: <Text style={styles.acDerivedStrong}>{acPinResult.city || '—'}</Text> | State: <Text style={styles.acDerivedStrong}>{acPinResult.state || '—'}</Text></Text>
-                <Text style={styles.acDerivedRow}>GST Code: {acPinResult.gstCode || '—'} | ODA: {acPinResult.oda || '—'}</Text>
-                <Text style={styles.acDerivedRow}>TATs — Express: {acPinResult.expressTat || 'N'} | Airline: {acPinResult.airlineTat || 'N'} | Surface: {acPinResult.surfaceTat || 'N'} | Premium: {acPinResult.premiumTat || 'N'}</Text>
-                {acPinResult.manualZone ? <Text style={styles.acDerivedWarn}>⚠ City/State filled. Zone must be entered manually.</Text> : null}
+              {acPinResult?.found ? (
+                <View style={styles.acDerivedBox}>
+                  <Text style={styles.acDerivedRow}>City: <Text style={styles.acDerivedStrong}>{acPinResult.city || '—'}</Text> | State: <Text style={styles.acDerivedStrong}>{acPinResult.state || '—'}</Text></Text>
+                  <Text style={styles.acDerivedRow}>GST Code: {acPinResult.gstCode || '—'} | ODA: {acPinResult.oda || '—'}</Text>
+                  <Text style={styles.acDerivedRow}>TATs — Express: {acPinResult.expressTat || 'N'} | Airline: {acPinResult.airlineTat || 'N'} | Surface: {acPinResult.surfaceTat || 'N'} | Premium: {acPinResult.premiumTat || 'N'}</Text>
+                  {acPinResult.manualZone ? <Text style={styles.acDerivedWarn}>⚠ City/State filled. Zone must be entered manually.</Text> : null}
+                </View>
+              ) : acPinStatus === '✖' ? (
+                <Text style={styles.acDerivedWarn}>Pincode not found in network map or API.</Text>
+              ) : null}
+
+              <Text style={styles.labelWeb}>ZONE *</Text>
+              <TextInput ref={acZoneInputRef} onFocus={() => ensureInputVisible(acZoneInputRef)} style={styles.inputWeb} placeholder="Zone (e.g. NORTH, WEST)" placeholderTextColor="#94a3b8" value={acPinResult?.zone || ''} onChangeText={(t) => setAcPinResult(r => (r ? { ...r, zone: uppercaseText(t) } : r))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acAddressInputRef.current?.focus?.()} />
+
+              <Text style={styles.labelWeb}>ADDRESS *</Text>
+              <TextInput ref={acAddressInputRef} onFocus={() => ensureInputVisible(acAddressInputRef)} style={styles.inputWeb} placeholder="Full address" placeholderTextColor="#94a3b8" value={acForm.address} onChangeText={(t) => setAcForm(f => ({ ...f, address: uppercaseText(t) }))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acEmailInputRef.current?.focus?.()} />
+
+              <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.labelWeb}>EMAIL</Text>
+                  <TextInput ref={acEmailInputRef} onFocus={() => ensureInputVisible(acEmailInputRef)} style={styles.inputWeb} placeholder="Email" placeholderTextColor="#94a3b8" value={acForm.email} onChangeText={(t) => setAcForm(f => ({ ...f, email: t }))} keyboardType="email-address" autoCapitalize="none" returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acGstinInputRef.current?.focus?.()} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.labelWeb}>GSTIN</Text>
+                  <TextInput ref={acGstinInputRef} onFocus={() => ensureInputVisible(acGstinInputRef)} style={styles.inputWeb} placeholder="GSTIN" maxLength={15} placeholderTextColor="#94a3b8" value={acForm.gstin} onChangeText={(t) => setAcForm(f => ({ ...f, gstin: uppercaseText(t) }))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acCarrierInputRef.current?.focus?.()} />
+                </View>
               </View>
-            ) : acPinStatus === '✖' ? (
-              <Text style={styles.acDerivedWarn}>Pincode not found in network map or API.</Text>
-            ) : null}
 
-            <Text style={styles.labelWeb}>ZONE *</Text>
-            <TextInput ref={acZoneInputRef} onFocus={() => ensureInputVisible(acZoneInputRef)} style={styles.inputWeb} placeholder="Zone (e.g. NORTH, WEST)" placeholderTextColor="#94a3b8" value={acPinResult?.zone || ''} onChangeText={(t) => setAcPinResult(r => (r ? { ...r, zone: uppercaseText(t) } : r))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acAddressInputRef.current?.focus?.()} />
+              <Text style={styles.labelWeb}>CARRIER</Text>
+              <TextInput ref={acCarrierInputRef} onFocus={() => ensureInputVisible(acCarrierInputRef)} style={styles.inputWeb} placeholder="Carrier company code" placeholderTextColor="#94a3b8" value={acForm.carrier} onChangeText={(t) => setAcForm(f => ({ ...f, carrier: uppercaseText(t) }))} returnKeyType="done" onSubmitEditing={handleAcSave} />
 
-            <Text style={styles.labelWeb}>ADDRESS *</Text>
-            <TextInput ref={acAddressInputRef} onFocus={() => ensureInputVisible(acAddressInputRef)} style={styles.inputWeb} placeholder="Full address" placeholderTextColor="#94a3b8" value={acForm.address} onChangeText={(t) => setAcForm(f => ({ ...f, address: uppercaseText(t) }))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acEmailInputRef.current?.focus?.()} />
+              {acError ? <Text style={styles.acError}>{acError}</Text> : null}
 
-            <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.labelWeb}>EMAIL</Text>
-                <TextInput ref={acEmailInputRef} onFocus={() => ensureInputVisible(acEmailInputRef)} style={styles.inputWeb} placeholder="Email" placeholderTextColor="#94a3b8" value={acForm.email} onChangeText={(t) => setAcForm(f => ({ ...f, email: t }))} keyboardType="email-address" autoCapitalize="none" returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acGstinInputRef.current?.focus?.()} />
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                <Button variant="secondary" size="md" label="Cancel" onPress={() => setAddContactVisible(false)} style={{ flex: 1 }} />
+                <Button variant="primary" size="md" label="Save Contact" loading={acSaving} onPress={handleAcSave} style={{ flex: 1.4 }} />
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.labelWeb}>GSTIN</Text>
-                <TextInput ref={acGstinInputRef} onFocus={() => ensureInputVisible(acGstinInputRef)} style={styles.inputWeb} placeholder="GSTIN" maxLength={15} placeholderTextColor="#94a3b8" value={acForm.gstin} onChangeText={(t) => setAcForm(f => ({ ...f, gstin: uppercaseText(t) }))} returnKeyType="next" blurOnSubmit={false} onSubmitEditing={() => acCarrierInputRef.current?.focus?.()} />
-              </View>
-            </View>
-
-            <Text style={styles.labelWeb}>CARRIER</Text>
-            <TextInput ref={acCarrierInputRef} onFocus={() => ensureInputVisible(acCarrierInputRef)} style={styles.inputWeb} placeholder="Carrier company code" placeholderTextColor="#94a3b8" value={acForm.carrier} onChangeText={(t) => setAcForm(f => ({ ...f, carrier: uppercaseText(t) }))} returnKeyType="done" onSubmitEditing={handleAcSave} />
-
-            {acError ? <Text style={styles.acError}>{acError}</Text> : null}
-
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-              <Button variant="secondary" size="md" label="Cancel" onPress={() => setAddContactVisible(false)} style={{ flex: 1 }} />
-              <Button variant="primary" size="md" label="Save Contact" loading={acSaving} onPress={handleAcSave} style={{ flex: 1.4 }} />
-            </View>
-          </ScrollView>
-        </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
       </ScrollView>
     </KeyboardAvoidingView>
