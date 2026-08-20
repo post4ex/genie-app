@@ -26,6 +26,7 @@ DEVICES=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}')
 
 export EXPO_NO_TELEMETRY=1
 export EXPO_TOKEN="FaffilCCvzYoP4e7QvClpWpPI7HbxcWgo0PFwkmk"
+export NGROK_AUTHTOKEN="5W1bR67GNbWcXqmxZzBG1_56GezNeaX6sSRvn8npeQ8"
 export NODE_OPTIONS="--max-old-space-size=2048"
 
 if [ -n "$DEVICES" ]; then

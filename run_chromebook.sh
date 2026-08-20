@@ -14,6 +14,7 @@ adb -s "$ARC_IP" reverse tcp:8081 tcp:8081 2>/dev/null || true
 export REACT_NATIVE_PACKAGER_HOSTNAME="$INTERNAL_IP"
 export EXPO_NO_TELEMETRY=1
 export EXPO_TOKEN="FaffilCCvzYoP4e7QvClpWpPI7HbxcWgo0PFwkmk"
+export NGROK_AUTHTOKEN="5W1bR67GNbWcXqmxZzBG1_56GezNeaX6sSRvn8npeQ8"
 export NODE_OPTIONS="--max-old-space-size=2048"
 
 echo ""
