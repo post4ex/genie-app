@@ -4,8 +4,9 @@
 # ─────────────────────────────────────────────────────────────
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+# 0. Clean port 8081 of any dangling processes
+pkill -9 -f "8081" 2>/dev/null || true
+pkill -9 -f "expo.*start" 2>/dev/null || true
 
 TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
 
