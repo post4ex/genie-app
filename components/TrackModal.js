@@ -219,12 +219,12 @@ export default function TrackModal({ visible, onClose, token, apiBase, orders = 
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1 }}
-      >
-        <View style={styles.overlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={Keyboard.dismiss} />
+      <View style={styles.overlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={Keyboard.dismiss} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.sheetContainer}
+        >
           <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
             {/* Header */}
             <View style={styles.header}>
@@ -365,8 +365,8 @@ export default function TrackModal({ visible, onClose, token, apiBase, orders = 
               {pincodeResult && <PincodeResult data={pincodeResult} />}
             </ScrollView>
           </View>
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
@@ -379,13 +379,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
   },
+  sheetContainer: {
+    width: '100%',
+    height: '90%',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
   sheet: {
     width: '100%',
     maxWidth: Platform.OS === 'web' ? 760 : '100%',
+    height: '100%',
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
-    maxHeight: '94%',
     alignSelf: 'center',
     overflow: 'hidden',
     ...(Platform.OS === 'web'

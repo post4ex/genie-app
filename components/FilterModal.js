@@ -251,6 +251,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     overflow: 'hidden',
+    height: '85%',
     maxHeight: '90%',
     alignSelf: 'center',
   },

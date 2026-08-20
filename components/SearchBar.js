@@ -37,11 +37,14 @@ const LINE_MAX = 86;
 const SCAN_H = 236;
 
 export default function SearchBar({
+  inputRef,
   value,
   onChangeText,
   placeholder = 'Search...',
   hints = [],
   onSubmitEditing,
+  onFocus,
+  onBlur,
   autoFocus,
   hideScanner = false, // render as a plain search field (no barcode scanner)
   onFilterPress,       // embed filter button directly inside the bar
@@ -132,14 +135,21 @@ export default function SearchBar({
         <GradientGlyph name="magnify" size={24} colors={['#9C2007', '#f59e0b']} style={styles.icon} />
 
         <TextInput
+          ref={inputRef}
           style={styles.input}
           placeholder={ph}
           placeholderTextColor={focused ? '#94a3b8' : '#a6b2c2'}
           value={value}
           onChangeText={onChangeText}
           onSubmitEditing={onSubmitEditing}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          onFocus={(e) => {
+            setFocused(true);
+            if (onFocus) onFocus(e);
+          }}
+          onBlur={(e) => {
+            setFocused(false);
+            if (onBlur) onBlur(e);
+          }}
           autoFocus={autoFocus}
           keyboardType={keyboardType}
           maxLength={maxLength}

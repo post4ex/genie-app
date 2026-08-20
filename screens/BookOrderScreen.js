@@ -149,6 +149,7 @@ export default function BookOrderScreen({
   const [modeTemporarilyUnlocked, setModeTemporarilyUnlocked] = useState(false);
   const [needsModeSelection, setNeedsModeSelection] = useState(false);
   const [lastBookedOrder, setLastBookedOrder] = useState(null);
+  const [bookingType, setBookingType] = useState('forward'); // 'forward' | 'reverse' | 'global'
 
   // Normalize B2B Customers Array
   const clientsArray = useMemo(() => {
@@ -218,6 +219,7 @@ export default function BookOrderScreen({
 
   // AWB pattern hint (Web: validateAwbPattern)
   const [awbHint, setAwbHint] = useState(null); // { text, kind }
+  const [ewayInlineError, setEwayInlineError] = useState('');
 
   // Mode revalidation message (Web: modeChangeMessage)
   const [modeChangeMsg, setModeChangeMsg] = useState('');
@@ -1020,12 +1022,20 @@ export default function BookOrderScreen({
       return false;
     }
     const amt = parseFloat(prodAmount) || 0;
-    if (amt >= 50000 && !prodEway) {
-      Alert.alert('EWay Required', 'EWay Bill is mandatory for invoice value ₹50,000 and above.');
+    const cleanEway = (prodEway || '').trim();
+    if (amt >= 50000 && (!cleanEway || !/^\d{12}$/.test(cleanEway))) {
+      // Smoothly shift cursor focus to 12 digit EWay field silently without popups/red banners
+      scheduleDelayedAction(() => {
+        productEwayInputRef.current?.focus?.();
+        ensureInputVisible(productEwayInputRef, false);
+      }, 50);
       return false;
     }
-    if (prodEway && !/^\d{12}$/.test(prodEway.trim())) {
-      Alert.alert('Invalid EWay Bill', 'EWay bill must be a 12-digit numeric number.');
+    if (cleanEway && !/^\d{12}$/.test(cleanEway)) {
+      scheduleDelayedAction(() => {
+        productEwayInputRef.current?.focus?.();
+        ensureInputVisible(productEwayInputRef, false);
+      }, 50);
       return false;
     }
     const newProd = {
@@ -1471,6 +1481,7 @@ export default function BookOrderScreen({
   // Submit Handler (Web: book_button click — edit → PUT /api/editOrder, new → POST /api/bookOrder,
   // waits for server confirmation, then renders the last-booked card)
   const handleSubmit = async () => {
+    Keyboard.dismiss();
     if (bookingMsgTimerRef.current) clearTimeout(bookingMsgTimerRef.current);
     setBookingMessage('');
     setBookingMessageKind('info');
@@ -1551,6 +1562,7 @@ export default function BookOrderScreen({
 
   // Clear All Form (Web: resetFullForm)
   const handleClearAll = () => {
+    Keyboard.dismiss();
     setSelectedSender(null);
     setSenderQuery('');
     setSelectedReceiver(null);
@@ -1599,33 +1611,69 @@ export default function BookOrderScreen({
         <LinearGradient colors={BOOK_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.pageTitleBar} />
       </View>
 
-      {/* ── EDIT BANNER (Web: prefillEditOrder banner) ── */}
-      {editRef ? (
-        <View style={styles.editBanner}>
-          <Text style={styles.editBannerText}>✏️ Editing Order: {editRef}</Text>
-          <TouchableOpacity onPress={() => { setEditRef(null); setBookingMessage(''); onEditDone && onEditDone(); }}>
-            <Text style={{ color: '#b45309', fontWeight: '800' }}>✕</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
+      {/* ── Forward ↔ Reverse ↔ Global mode switch ── */}
+      <View style={styles.bookingTypeToggleRow}>
+        <SegmentedToggle
+          options={[
+            { key: 'forward', label: 'Forward', icon: 'arrow-right-bold' },
+            { key: 'reverse', label: 'Reverse', icon: 'arrow-left-bold' },
+            { key: 'global', label: 'Global', icon: 'earth' },
+          ]}
+          value={bookingType}
+          onChange={setBookingType}
+          colors={BOOK_GRAD}
+          size="md"
+        />
+      </View>
 
-      {/* ── BOOKING MESSAGE (Web: bookingMessage) ── */}
-      {bookingMessage ? (
-        <View style={[styles.bookingMsgBox, bookingMessageKind === 'success' && styles.bookingMsgSuccess, bookingMessageKind === 'error' && styles.bookingMsgError, bookingMessageKind === 'warn' && styles.bookingMsgWarn]}>
-          <Text style={styles.bookingMsgText}>{bookingMessage}</Text>
-        </View>
-      ) : null}
+      {bookingType !== 'forward' ? (
+        <Tray
+          title={`${bookingType === 'reverse' ? 'Reverse' : 'Global'} Booking`}
+          icon={bookingType === 'reverse' ? 'arrow-left-bold' : 'earth'}
+          iconColors={BOOK_GRAD}
+        >
+          <View style={styles.maintenanceBlock}>
+            <GradientGlyph name="tools" size={44} colors={['#cbd5e1', '#94a3b8']} />
+            <Text style={styles.maintenanceTitle}>
+              {bookingType === 'reverse' ? 'Reverse Booking' : 'Global Booking'} under maintenance
+            </Text>
+            <Text style={styles.maintenanceSub}>
+              {bookingType === 'reverse'
+                ? 'Reverse pickup and return shipment booking is currently undergoing scheduled maintenance.'
+                : 'International and cross-border global shipment booking is currently undergoing scheduled maintenance.'}
+              {'\n\n'}Please switch back to Forward Booking for standard shipments.
+            </Text>
+          </View>
+        </Tray>
+      ) : (
+        <>
+          {/* ── EDIT BANNER (Web: prefillEditOrder banner) ── */}
+          {editRef ? (
+            <View style={styles.editBanner}>
+              <Text style={styles.editBannerText}>✏️ Editing Order: {editRef}</Text>
+              <TouchableOpacity onPress={() => { setEditRef(null); setBookingMessage(''); onEditDone && onEditDone(); }}>
+                <Text style={{ color: '#b45309', fontWeight: '800' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
-      {/* ── SECTION 1: Order Date & Client ── */}
-      <Tray
-        title="1 · Order Date"
-        icon="calendar"
-        iconColors={BOOK_GRAD}
-        floating
-        compact
-        bottomTitle="2 · Client"
-        bottomIcon="crm"
-        bottomColors={BOOK_GRAD}
+          {/* ── BOOKING MESSAGE (Web: bookingMessage) ── */}
+          {bookingMessage ? (
+            <View style={[styles.bookingMsgBox, bookingMessageKind === 'success' && styles.bookingMsgSuccess, bookingMessageKind === 'error' && styles.bookingMsgError, bookingMessageKind === 'warn' && styles.bookingMsgWarn]}>
+              <Text style={styles.bookingMsgText}>{bookingMessage}</Text>
+            </View>
+          ) : null}
+
+          {/* ── SECTION 1: Order Date & Client ── */}
+          <Tray
+            title="1 · Order Date"
+            icon="calendar"
+            iconColors={BOOK_GRAD}
+            floating
+            compact
+            bottomTitle="2 · Client"
+            bottomIcon="crm"
+            bottomColors={BOOK_GRAD}
         style={[isFormLocked && styles.trayLocked, styles.compactBottomTitleTray]}
       >
         <View style={[styles.rowGrid, isCompactMobile && styles.rowGridMobile]}>
@@ -2138,7 +2186,7 @@ export default function BookOrderScreen({
                       onChangeText={(text) => setProdName(uppercaseText(text))}
                       returnKeyType="next"
                       blurOnSubmit={false}
-                      onSubmitEditing={() => focusNextIfFilled(prodName, productDocNoInputRef)}
+                      onSubmitEditing={() => focusInput(productDocNoInputRef)}
                     />
                   </View>
 
@@ -2155,7 +2203,7 @@ export default function BookOrderScreen({
                       onChangeText={(text) => setProdDocNo(uppercaseText(text))}
                       returnKeyType="next"
                       blurOnSubmit={false}
-                      onSubmitEditing={() => focusNextIfFilled(prodDocNo, productEwayInputRef)}
+                      onSubmitEditing={() => focusInput(productEwayInputRef)}
                     />
                   </View>
                 </View>
@@ -2178,7 +2226,7 @@ export default function BookOrderScreen({
                         onChangeText={(t) => setProdEway(digitsOnly(t, 12))}
                         returnKeyType="next"
                         blurOnSubmit={false}
-                        onSubmitEditing={() => focusNextIfFilled(prodEway, productAmountInputRef)}
+                        onSubmitEditing={() => focusInput(productAmountInputRef)}
                       />
                       <TouchableOpacity
                         onPress={() => isMainDetailsComplete && (ewayScanning ? stopEwayScanning() : startEwayScanning())}
@@ -2404,6 +2452,8 @@ export default function BookOrderScreen({
       <Tray title="12 · Finalize Order" icon="check-circle" iconColors={BOOK_GRAD} floating>
         <Text style={styles.labelWeb}>AWB NUMBER</Text>
         <SearchBar
+          inputRef={awbInputRef}
+          onFocus={() => ensureInputVisible(awbInputRef, true)}
           value={awbNumber}
           onChangeText={(t) => {
             const value = uppercaseText(t);
@@ -2445,62 +2495,112 @@ export default function BookOrderScreen({
         </View>
       </Tray>
 
-      {/* ── LAST BOOKED SHIPMENT (Web: renderLastBooked — shown after booking) ── */}
+      {/* ── LAST BOOKED SHIPMENT (Redesigned with Tray, StyledTable & Button components) ── */}
       {Boolean(lastBookedOrder) ? (
         <Tray
           title={`✓ Shipment Booked: ${lastBookedOrder.AWB_NUMBER || 'No AWB'}`}
           icon="check-circle"
           iconColors={['#16a34a', '#84cc16']}
           right={
-            <TouchableOpacity onPress={() => setLastBookedOrder(null)} hitSlop={8}>
-              <Text style={styles.clearSmallText}>✕</Text>
-            </TouchableOpacity>
+            <Button
+              variant="tint"
+              size="sm"
+              iconOnly
+              icon="close"
+              onPress={() => setLastBookedOrder(null)}
+              accessibilityLabel="Close booked shipment tray"
+            />
           }
         >
-          <Text style={styles.lastBookedRoute}>
-            {(() => {
-              const cnor = contactsList.find(c => c.UID === lastBookedOrder.CONSIGNOR)?.NAME || lastBookedOrder.CONSIGNOR || 'Sender';
-              const cnee = contactsList.find(c => c.UID === lastBookedOrder.CONSIGNEE)?.NAME || lastBookedOrder.CONSIGNEE || 'Receiver';
-              return `${cnor} → ${cnee}`;
-            })()}
-          </Text>
+          {/* Route & Party Header */}
+          <View style={{ backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 12, padding: 10, marginBottom: 8 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 9, color: '#166534', fontWeight: '800', letterSpacing: 0.5 }}>SENDER</Text>
+                <Text style={{ fontSize: 12, color: '#0f172a', fontWeight: '800' }} numberOfLines={1}>
+                  {contactsList.find(c => c.UID === lastBookedOrder.CONSIGNOR)?.NAME || lastBookedOrder.CONSIGNOR || 'Sender'}
+                </Text>
+              </View>
 
-          <View style={styles.lastBookedGrid}>
-            <Text style={styles.lastBookedChip}>Ref: {lastBookedOrder.reference || lastBookedOrder.REFERENCE}</Text>
-            <Text style={styles.lastBookedChip}>Carrier: {lastBookedOrder.CARRIER || 'N/A'}</Text>
-            <Text style={styles.lastBookedChip}>Mode: {lastBookedOrder.MODE || 'N/A'}</Text>
-            <Text style={styles.lastBookedChip}>Date: {formatDateDisplay(fmtFromUnix(lastBookedOrder.ORDER_DATE))}</Text>
-            <Text style={styles.lastBookedChip}>Dest: {lastBookedOrder.DEST_CITY || 'N/A'} {lastBookedOrder.DEST_PINCODE || ''}</Text>
-            <Text style={styles.lastBookedChip}>Zone: {lastBookedOrder.ZONE || 'N/A'}</Text>
-            <Text style={styles.lastBookedChip}>TAT: {lastBookedOrder.TAT || 'N/A'}</Text>
-            <Text style={styles.lastBookedChip}>Wt: {parseFloat(lastBookedOrder.WEIGHT) || 0} kg</Text>
-            <Text style={styles.lastBookedChip}>ChgWt: {parseFloat(lastBookedOrder.CHG_WT) || 0} kg</Text>
-            <Text style={styles.lastBookedChip}>Pcs: {lastBookedOrder.PIECS || 0}</Text>
-            <Text style={styles.lastBookedChip}>Value: ₹{parseFloat(lastBookedOrder.VALUE) || 0}</Text>
-            {lastBookedOrder.COD === 'Yes' ? <Text style={styles.lastBookedChip}>COD</Text> : null}
-            {lastBookedOrder.TOPAY === 'Yes' ? <Text style={styles.lastBookedChip}>ToPay</Text> : null}
-            {lastBookedOrder.FOV === 'Yes' ? <Text style={styles.lastBookedChip}>FOV</Text> : null}
+              <View style={{ paddingHorizontal: 10, alignItems: 'center' }}>
+                <GradientGlyph name="arrow-right" size={16} colors={['#16a34a', '#84cc16']} />
+              </View>
+
+              <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                <Text style={{ fontSize: 9, color: '#166534', fontWeight: '800', letterSpacing: 0.5 }}>RECEIVER</Text>
+                <Text style={{ fontSize: 12, color: '#0f172a', fontWeight: '800' }} numberOfLines={1}>
+                  {contactsList.find(c => c.UID === lastBookedOrder.CONSIGNEE)?.NAME || lastBookedOrder.CONSIGNEE || 'Receiver'}
+                </Text>
+              </View>
+            </View>
           </View>
 
-          {/* Action row (Web: Edit / Delete buttons on the card) */}
-          <View style={styles.lastBookedActions}>
-            <TouchableOpacity style={styles.lastBookedActionBtn} onPress={() => startEditFromPayload(lastBookedOrder)}>
-              <Text style={styles.lastBookedActionEdit}>✏️ Edit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.lastBookedActionBtn} onPress={() => handleDeleteOrder(lastBookedOrder.reference || lastBookedOrder.REFERENCE)}>
-              <Text style={styles.lastBookedActionDelete}>🗑 Delete</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.lastBookedActionBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Upload shipment documents"
+          {/* Details Table using StyledTable */}
+          <StyledTable>
+            <StyledTable.Row>
+              <StyledTable.Cell label="REF / ORDER ID" value={lastBookedOrder.reference || lastBookedOrder.REFERENCE || 'N/A'} />
+              <StyledTable.Cell label="CARRIER" value={lastBookedOrder.CARRIER || 'N/A'} />
+              <StyledTable.Cell label="MODE" value={lastBookedOrder.MODE || 'N/A'} last />
+            </StyledTable.Row>
+
+            <StyledTable.Row>
+              <StyledTable.Cell label="WEIGHT" value={`${parseFloat(lastBookedOrder.WEIGHT) || 0} kg`} />
+              <StyledTable.Cell label="CHG WT" value={`${parseFloat(lastBookedOrder.CHG_WT) || 0} kg`} />
+              <StyledTable.Cell label="PIECES" value={String(lastBookedOrder.PIECS || 0)} last />
+            </StyledTable.Row>
+
+            <StyledTable.Row>
+              <StyledTable.Cell label="DESTINATION" value={`${lastBookedOrder.DEST_CITY || 'N/A'} ${lastBookedOrder.DEST_PINCODE || ''}`} />
+              <StyledTable.Cell label="ZONE" value={lastBookedOrder.ZONE || 'N/A'} />
+              <StyledTable.Cell label="TAT" value={lastBookedOrder.TAT || 'N/A'} last />
+            </StyledTable.Row>
+
+            <StyledTable.Row>
+              <StyledTable.Cell label="VALUE" value={`₹${parseFloat(lastBookedOrder.VALUE) || 0}`} />
+              <StyledTable.Cell label="DATE" value={formatDateDisplay(fmtFromUnix(lastBookedOrder.ORDER_DATE))} />
+              <StyledTable.Cell
+                label="PAYMENT FLAGS"
+                value={
+                  [
+                    lastBookedOrder.COD === 'Yes' ? 'COD' : null,
+                    lastBookedOrder.TOPAY === 'Yes' ? 'ToPay' : null,
+                    lastBookedOrder.FOV === 'Yes' ? 'FOV' : null,
+                  ].filter(Boolean).join(' · ') || 'Pre-Paid'
+                }
+                last
+              />
+            </StyledTable.Row>
+          </StyledTable>
+
+          {/* Action Row using Button components */}
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="pencil"
+              label="Edit"
+              onPress={() => startEditFromPayload(lastBookedOrder)}
+              style={{ flex: 1 }}
+            />
+            <Button
+              variant="primary"
+              size="sm"
+              icon="upload"
+              label="Upload Docs"
               onPress={() => onOpenUploader?.({
                 ...lastBookedOrder,
                 REFERENCE: lastBookedOrder.REFERENCE || lastBookedOrder.reference,
               })}
-            >
-              <Text style={styles.lastBookedActionUpload}>⬆ Upload</Text>
-            </TouchableOpacity>
+              style={{ flex: 1.4 }}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="trash"
+              label="Delete"
+              onPress={() => handleDeleteOrder(lastBookedOrder.reference || lastBookedOrder.REFERENCE)}
+              style={{ flex: 1 }}
+            />
           </View>
         </Tray>
       ) : null}
@@ -2535,6 +2635,8 @@ export default function BookOrderScreen({
           ))}
         </Tray>
       ) : null}
+      </>
+      )}
 
       {/* ── Order Date Calendar Picker Modal (Global Component) ── */}
       <DatePickerModal
@@ -2660,9 +2762,10 @@ const styles = StyleSheet.create({
   scrollPageCompact: { padding: 8 },
 
   // Page title — gradient heading + underline bar (Orders parity).
-  pageTitleBlock: { alignItems: 'center', marginTop: 6, marginBottom: 38 },
+  pageTitleBlock: { alignItems: 'center', marginTop: 4, marginBottom: 8 },
   pageTitle: { fontSize: 24, fontWeight: '900', letterSpacing: 0.5 },
-  pageTitleBar: { width: 46, height: 3, borderRadius: 2, marginTop: 8 },
+  pageTitleBar: { width: 46, height: 3, borderRadius: 2, marginTop: 6 },
+  bookingTypeToggleRow: { alignItems: 'center', marginBottom: 20 },
 
   // Tray state overrides (locking logic preserved without visual blur/fade)
   trayLocked: {},
@@ -3305,8 +3408,11 @@ const styles = StyleSheet.create({
   acPinStatus: { fontSize: 18, fontWeight: '900', color: '#94a3b8', textAlign: 'center' },
   acDerivedBox: { backgroundColor: '#f0f9ff', borderRadius: 8, borderWidth: 1, borderColor: '#bae6fd', padding: 10, marginBottom: 10 },
   acDerivedRow: { fontSize: 10.5, fontWeight: '600', color: '#475569', lineHeight: 16 },
-  acDerivedStrong: { fontWeight: '800', color: '#0369a1' },
-  acDerivedWarn: { fontSize: 10.5, fontWeight: '700', color: '#d97706', marginTop: 2 },
   acError: { fontSize: 12, fontWeight: '700', color: '#b91c1c', backgroundColor: '#fef2f2', borderRadius: 8, padding: 8, marginTop: 6 },
+
+  // Maintenance block for Reverse & Global mode switches
+  maintenanceBlock: { alignItems: 'center', paddingVertical: 44, gap: 10, paddingHorizontal: 24 },
+  maintenanceTitle: { color: '#475569', fontSize: 15, fontWeight: '800', textAlign: 'center' },
+  maintenanceSub: { color: '#94a3b8', fontSize: 12.5, fontWeight: '600', textAlign: 'center', lineHeight: 18 },
 });
 

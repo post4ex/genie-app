@@ -24,6 +24,7 @@ import Tray from '../components/Tray';
 import { GradientGlyph } from '../components/icons';
 import { useToast } from '../components/Toast';
 import UpdateStatusModal from '../components/UpdateStatusModal';
+import AssignCarrierModal from '../components/AssignCarrierModal';
 
 // Brand page accent (modal BRAND parity) + success green for the recent tray.
 const PAGE_GRAD = ['#9C2007', '#f59e0b'];
@@ -52,7 +53,7 @@ const normalizeShipmentState = (value) => String(value ?? '')
 // Order state — SHIPMENTS sheet first, then the order record (web parity).
 const getOrderState = (o, shipmentsMap) => {
   const s = shipmentsMap[o?.REFERENCE];
-  return normalizeShipmentState(s?.state || s?.STATE || o?.STATE || o?.state || 'pending');
+  return normalizeShipmentState(s?.state || s?.STATE || o?.STATE || o?.state || o?.STATUS || o?.status || 'pending');
 };
 
 // Filter dropdown options (same lists as Orders).
@@ -72,11 +73,9 @@ const PAY_OPTIONS = [
 ];
 const optionLabel = (options, v) => (options.find(o => o.value === v) || {}).label || v;
 
-// ── Docket / Runsheet / Manifest mode switch ──
-// Status updates currently cover Docket shipments only; Runsheet (driver
-// manifest) and Manifest (shipment list) are placeholders until the modules
-// land.
+// ── Assign / Docket / Runsheet / Manifest mode switch ──
 const VIEW_MODES = [
+  { key: 'assign', label: 'Assign', icon: 'truck-check' },
   { key: 'docket', label: 'Docket', icon: 'package-variant-closed' },
   { key: 'runsheet', label: 'Runsheet', icon: 'truck-fast' },
   { key: 'manifest', label: 'Manifest', icon: 'file-document-multiple' },
@@ -92,14 +91,41 @@ function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+const parseOrderDateMs = (val) => {
+  if (!val) return 0;
+  const num = Number(val);
+  if (!isNaN(num)) return num > 1e10 ? num : num * 1000;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
+};
+
+const getAwbNumber = (o, shipmentsMap = {}) => {
+  const s = shipmentsMap[o?.REFERENCE] || {};
+  return String(o?.AWB_NUMBER || o?.awb_number || o?.AWB || s?.AWB_NUMBER || s?.awb_number || s?.awb || s?.AWB || '').trim();
+};
+
+const getCarrier = (o, shipmentsMap = {}) => {
+  const s = shipmentsMap[o?.REFERENCE] || {};
+  return String(o?.CARRIER || o?.carrier || s?.CARRIER || s?.carrier || '').trim();
+};
+
+const checkIsNoAwb = (o, shipmentsMap = {}) => {
+  const awb = getAwbNumber(o, shipmentsMap);
+  return !awb || ['', '0', 'na', 'n/a', 'null', 'undefined', 'pending', 'no awb', 'no_awb', 'none', '—'].includes(awb.toLowerCase());
+};
+
 // ── List row — identical to the Orders page (WebShipmentListItem) ────────────
-function StatusRow({ order, b2b2cMap, modesMap, shipmentsMap, onPress }) {
+function StatusRow({ order, b2b2cMap, modesMap, shipmentsMap, isAssignMode, onPress }) {
+  const isNoAwb = checkIsNoAwb(order, shipmentsMap);
   const stateRaw = getOrderState(order, shipmentsMap);
   const stateCfg = STATE_CONFIG[stateRaw] || STATE_CONFIG.pending;
   const consignee = b2b2cMap[order?.CONSIGNEE]?.NAME || order?.CONSIGNEE || 'Unknown';
   const modeRec = modesMap[order?.MODE];
   const modeName = (typeof modeRec === 'string' ? modeRec : (modeRec?.MODE || modeRec?.NAME)) || order?.MODE || '';
   const hasCod = order?.COD && parseFloat(order.COD) > 0;
+  const awbDisplay = getAwbNumber(order, shipmentsMap);
+  const carrierDisplay = getCarrier(order, shipmentsMap);
+
   const meta = [
     order?.CODE || '',
     order?.WEIGHT ? `${order.WEIGHT}kg` : '',
@@ -110,16 +136,18 @@ function StatusRow({ order, b2b2cMap, modesMap, shipmentsMap, onPress }) {
   ].filter(Boolean).join(' | ');
 
   return (
-    <ListItem
-      title={consignee}
-      subtitle={[
-        `AWB: ${order?.AWB_NUMBER || 'Pending'} | Carrier: ${order?.CARRIER || '—'} | Ref: ${order?.REFERENCE || '—'}`,
-        meta,
-        `📍 ${order?.ORIGIN_CITY || 'DDN'} → 🏁 ${order?.DEST_CITY || 'DEST'}`,
-      ]}
-      status={stateCfg.label}
-      onPress={onPress}
-    />
+    <View style={isAssignMode && isNoAwb ? { backgroundColor: '#fff7ed', borderRadius: 12, marginBottom: 8, borderWidth: 1, borderColor: '#fde68a' } : null}>
+      <ListItem
+        title={consignee}
+        subtitle={[
+          `AWB: ${awbDisplay || 'No AWB'} | Carrier: ${carrierDisplay || 'No Carrier'} | Ref: ${order?.REFERENCE || '—'}`,
+          meta,
+          `📍 ${order?.ORIGIN_CITY || 'DDN'} → 🏁 ${order?.DEST_CITY || 'DEST'}`,
+        ]}
+        status={isAssignMode && isNoAwb ? 'UNASSIGNED' : stateCfg.label}
+        onPress={onPress}
+      />
+    </View>
   );
 }
 
@@ -127,10 +155,11 @@ export default function StatusUpdateScreen({
   orders = [], token = '', apiBase = '', role = 'STAFF', onRefresh,
   b2b2cMap = {}, modesMap = {}, shipmentsMap = {},
 }) {
-  const [viewMode, setViewMode] = useState('docket'); // 'docket' | 'runsheet' | 'manifest'
+  const [viewMode, setViewMode] = useState('assign'); // 'assign' | 'docket' | 'runsheet' | 'manifest'
   const modeCfg = VIEW_MODES.find((m) => m.key === viewMode) || VIEW_MODES[0];
   const [query, setQuery] = useState('');
   const [target, setTarget] = useState(null); // order selected for status update
+  const [assignTarget, setAssignTarget] = useState(null); // order selected for carrier & AWB assignment
   const [recent, setRecent] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const showToast = useToast();
@@ -146,7 +175,7 @@ export default function StatusUpdateScreen({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return orders.filter((o) => {
+    const list = orders.filter((o) => {
       const state = getOrderState(o, shipmentsMap);
       if (filterStatus !== 'ALL' && state !== filterStatus) return false;
       if (filterPayMode === 'TOPAY' && o.TOPAY !== 'Yes') return false;
@@ -157,13 +186,31 @@ export default function StatusUpdateScreen({
       if (!q) return true;
       const cnor = b2b2cMap[o.CONSIGNOR] || {};
       const cnee = b2b2cMap[o.CONSIGNEE] || {};
+      const awbVal = getAwbNumber(o, shipmentsMap);
       const haystack = [
-        o.REFERENCE, o.AWB_NUMBER, cnor.NAME || o.CONSIGNOR, cnee.NAME || o.CONSIGNEE,
+        o.REFERENCE, awbVal, cnor.NAME || o.CONSIGNOR, cnee.NAME || o.CONSIGNEE,
         cnee.CITY || o.DEST_CITY, cnee.PINCODE || o.DEST_PINCODE, cnor.CITY || o.ORIGIN_CITY,
       ].filter(Boolean).map(String).join('|').toLowerCase();
       return haystack.includes(q);
     });
-  }, [orders, query, filterStatus, filterPayMode, b2b2cMap, shipmentsMap]);
+
+    if (viewMode === 'assign') {
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const activeList = list.filter((s) => {
+        const state = getOrderState(s, shipmentsMap);
+        if (state === 'delivered') return false; // exclude delivered orders
+        const ms = parseOrderDateMs(s?.ORDER_DATE || s?.time);
+        return ms === 0 || ms >= cutoff;
+      });
+      const sortByDate = (a, b) => parseOrderDateMs(b?.ORDER_DATE || b?.time) - parseOrderDateMs(a?.ORDER_DATE || a?.time);
+
+      const incomplete = activeList.filter((s) => checkIsNoAwb(s, shipmentsMap)).sort(sortByDate);
+      const complete = activeList.filter((s) => !checkIsNoAwb(s, shipmentsMap)).sort(sortByDate);
+      return [...incomplete, ...complete];
+    }
+
+    return list;
+  }, [orders, query, filterStatus, filterPayMode, b2b2cMap, shipmentsMap, viewMode]);
 
   const hasActiveAdvancedFilters = filterStatus !== 'ALL' || filterPayMode !== 'ALL';
   const activeFilterCount = [filterStatus, filterPayMode].filter(v => v !== 'ALL').length;
@@ -246,12 +293,12 @@ export default function StatusUpdateScreen({
         <GradientText colors={PAGE_GRAD} style={styles.pageTitle}>Update Status</GradientText>
         <LinearGradient colors={PAGE_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.pageTitleBar} />
       </View>
-      {/* ── Docket / Runsheet / Manifest mode switch ── */}
+      {/* ── Assign / Docket / Runsheet / Manifest mode switch ── */}
       <View style={styles.viewToggleRow}>
         <SegmentedToggle options={VIEW_MODES} value={viewMode} onChange={setViewMode} colors={PAGE_GRAD} size="md" />
       </View>
 
-      {viewMode === 'docket' ? (
+      {viewMode === 'docket' || viewMode === 'assign' ? (
         <>
           {/* Search + filter — same row as the Orders page */}
           <View style={styles.searchFilterRow}>
@@ -271,8 +318,8 @@ export default function StatusUpdateScreen({
 
           {/* ── Tray-wrapped list (centralized Tray — same as Orders) ── */}
           <Tray
-            title={`Shipments (${filtered.length})`}
-            icon="status"
+            title={viewMode === 'assign' ? `Assign Carrier (${filtered.length})` : `Shipments (${filtered.length})`}
+            icon={viewMode === 'assign' ? 'truck-check' : 'status'}
             iconColors={PAGE_GRAD}
             headerStyle={styles.listTrayHeader}
             style={styles.listTrayFill}
@@ -286,7 +333,14 @@ export default function StatusUpdateScreen({
                   b2b2cMap={b2b2cMap}
                   modesMap={modesMap}
                   shipmentsMap={shipmentsMap}
-                  onPress={() => setTarget(item)}
+                  isAssignMode={viewMode === 'assign'}
+                  onPress={() => {
+                    if (viewMode === 'assign') {
+                      setAssignTarget(item);
+                    } else {
+                      setTarget(item);
+                    }
+                  }}
                 />
               )}
               ListHeaderComponent={recentBlock}
@@ -355,6 +409,19 @@ export default function StatusUpdateScreen({
         defaultStatus="Delivered"
         b2b2cMap={b2b2cMap}
         onSuccess={handleSuccess}
+      />
+
+      <AssignCarrierModal
+        visible={!!assignTarget}
+        onClose={() => setAssignTarget(null)}
+        order={assignTarget}
+        token={token}
+        apiBase={apiBase}
+        b2b2cMap={b2b2cMap}
+        onSuccess={(ref, carrier, awb) => {
+          showToast({ title: 'Carrier & AWB Assigned', msg: `${ref} → ${carrier} (${awb})`, tone: 'success' });
+          if (onRefresh) onRefresh();
+        }}
       />
     </View>
   );

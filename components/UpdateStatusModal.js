@@ -6,7 +6,7 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  StyleSheet, View, Text, Modal, ScrollView, Pressable,
+  StyleSheet, View, Text, Modal, ScrollView, Pressable, TouchableOpacity,
   TextInput, Platform, Keyboard, KeyboardAvoidingView
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -147,6 +147,16 @@ const PAYMODE_OPTIONS = [
   'UTR'
 ];
 
+const QUICK_REMARKS = [
+  'Handed to Security',
+  'Left at Gate / Reception',
+  'Customer Verified OTP',
+  'Address Incomplete / Door Locked',
+  'Customer Requested Reschedule',
+  'Payment / COD Collected',
+  'Phone Unreachable'
+];
+
 // Switchable gradient chip — active option gets the brand maroon→amber fill
 // with a soft glow (TrackModal segmented-control language).
 function ChoiceChip({ label, active, onPress }) {
@@ -204,7 +214,10 @@ export default function UpdateStatusModal({
   const [attemptDay, setAttemptDay] = useState('');
   const [payMode, setPayMode] = useState('');
   const [utrNo, setUtrNo] = useState('');
+  const [assignCarrier, setAssignCarrier] = useState(order?.CARRIER || '');
+  const [assignAwb, setAssignAwb] = useState(order?.AWB_NUMBER || '');
   const [customRemark, setCustomRemark] = useState('');
+  const [isRemarkFocused, setIsRemarkFocused] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -229,6 +242,8 @@ export default function UpdateStatusModal({
 
   useEffect(() => {
     if (visible && order) {
+      setAssignCarrier(order.CARRIER || '');
+      setAssignAwb(order.AWB_NUMBER || '');
       // Client role is always locked to Delivered; otherwise the initial primary
       // is the caller-provided default (e.g. the Status screen preselects
       // Delivered), falling back to the order's current status.
@@ -310,6 +325,7 @@ export default function UpdateStatusModal({
     setErrorMsg('');
 
     try {
+
       const payload = {
         reference: reference,
         status_raw: primaryStatus,
@@ -348,12 +364,12 @@ export default function UpdateStatusModal({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1 }}
-      >
-        <View style={styles.overlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={Keyboard.dismiss} />
+      <View style={styles.overlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={Keyboard.dismiss} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.sheetContainer}
+        >
           <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
             {/* Header */}
             <View style={styles.header}>
@@ -393,6 +409,7 @@ export default function UpdateStatusModal({
                   <Text style={styles.errorBannerText}>⚠️ {errorMsg}</Text>
                 </View>
               ) : null}
+
 
               {/* Primary + Sub-Status — flex in one row */}
               <View style={styles.dropdownRow}>
@@ -495,17 +512,50 @@ export default function UpdateStatusModal({
                 </SectionCard>
               )}
 
-              {/* Custom Remark */}
+              {/* Custom Remark — Furnished with quick chips & character counter */}
               <View style={{ marginTop: 14 }}>
-                <Text style={styles.fieldLabel}>CUSTOM REMARK (OPTIONAL)</Text>
-                <TextInput
-                  style={[styles.input, { height: 60, textAlignVertical: 'top' }]}
-                  placeholder="e.g. Received by reception / Next attempt scheduled"
-                  placeholderTextColor="#94a3b8"
-                  multiline
-                  value={customRemark}
-                  onChangeText={setCustomRemark}
-                />
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={styles.fieldLabel}>STATUS REMARK (OPTIONAL)</Text>
+                  {customRemark ? (
+                    <TouchableOpacity onPress={() => setCustomRemark('')}>
+                      <Text style={{ fontSize: 10, color: '#9C2007', fontWeight: '800' }}>Clear ✕</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+
+                <View style={[styles.remarkWrap, isRemarkFocused && styles.remarkWrapFocused]}>
+                  <TextInput
+                    style={styles.remarkInput}
+                    placeholder="Type custom remark or pick a quick preset below..."
+                    placeholderTextColor="#94a3b8"
+                    multiline
+                    numberOfLines={3}
+                    maxLength={200}
+                    value={customRemark}
+                    onChangeText={setCustomRemark}
+                    onFocus={() => setIsRemarkFocused(true)}
+                    onBlur={() => setIsRemarkFocused(false)}
+                  />
+                  <Text style={styles.remarkCount}>{customRemark.length}/200</Text>
+                </View>
+
+                {/* Quick Preset Chips */}
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingTop: 8, paddingBottom: 2 }}>
+                  {QUICK_REMARKS.map((preset) => {
+                    const active = customRemark === preset;
+                    return (
+                      <TouchableOpacity
+                        key={preset}
+                        style={[styles.presetChip, active && styles.presetChipActive]}
+                        onPress={() => setCustomRemark(active ? '' : preset)}
+                      >
+                        <Text style={[styles.presetChipText, active && styles.presetChipTextActive]}>
+                          {active ? '✓ ' : '+ '}{preset}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
               </View>
             </ScrollView>
 
@@ -530,8 +580,8 @@ export default function UpdateStatusModal({
               />
             </View>
           </View>
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
@@ -544,13 +594,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
   },
+  sheetContainer: {
+    width: '100%',
+    height: '90%',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
   sheet: {
     width: '100%',
     maxWidth: Platform.OS === 'web' ? 720 : '100%',
+    height: '100%',
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
-    maxHeight: '94%',
     alignSelf: 'center',
     overflow: 'hidden',
     ...(Platform.OS === 'web'
@@ -630,6 +686,60 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
     color: '#0f172a',
     fontSize: 13,
+  },
+
+  // ── Furnished Status Remark styles ──
+  remarkWrap: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#cbd5e1',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
+    position: 'relative',
+  },
+  remarkWrapFocused: {
+    borderColor: '#9C2007',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 0 0 3px rgba(156, 32, 7, 0.15)' }
+      : { shadowColor: '#9C2007', shadowOpacity: 0.15, shadowRadius: 6, elevation: 2 }),
+  },
+  remarkInput: {
+    color: '#0f172a',
+    fontSize: 13,
+    minHeight: 60,
+    maxHeight: 90,
+    textAlignVertical: 'top',
+    padding: 0,
+  },
+  remarkCount: {
+    textAlign: 'right',
+    fontSize: 10,
+    color: '#94a3b8',
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  presetChip: {
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  presetChipActive: {
+    backgroundColor: '#fff7ed',
+    borderColor: '#9C2007',
+  },
+  presetChipText: {
+    fontSize: 11,
+    color: '#475569',
+    fontWeight: '700',
+  },
+  presetChipTextActive: {
+    color: '#9C2007',
+    fontWeight: '800',
   },
 
   footer: {
