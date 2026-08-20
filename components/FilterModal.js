@@ -21,7 +21,7 @@
 // colours. Fully static — no Animated.
 
 import React, { useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Icon from './icons';
 import GradientText from './GradientText';
 import Button from './Button';
