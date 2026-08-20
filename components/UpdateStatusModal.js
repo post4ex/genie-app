@@ -380,8 +380,8 @@ export default function UpdateStatusModal({
           {/* Form Scroll Area */}
           <ScrollView
             style={styles.body}
-            keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.bodyContent}
+            keyboardShouldPersistTaps="handled"
           >
             {errorMsg ? (
               <View style={styles.errorBanner}>
@@ -534,12 +534,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.55)',
     justifyContent: 'flex-end',
+    alignItems: 'center',
+    width: '100%',
   },
   sheet: {
+    width: '100%',
+    maxWidth: Platform.OS === 'web' ? 720 : '100%',
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
-    maxHeight: '92%',
+    maxHeight: '94%',
+    alignSelf: 'center',
     overflow: 'hidden',
     ...(Platform.OS === 'web'
       ? { boxShadow: '0px -4px 24px rgba(0, 0, 0, 0.18)' }
@@ -558,8 +563,8 @@ const styles = StyleSheet.create({
   metaConsignee: { flexShrink: 1 },
   metaValue: { fontSize: 11, color: '#475569', fontWeight: '700' },
   metaDivider: { width: 1, height: 12, backgroundColor: '#e2e8f0' },
-  body: { flexGrow: 0, flexShrink: 1 },
-  bodyContent: { padding: 16, paddingBottom: 20 },
+  body: { flex: 1, minHeight: 0 },
+  bodyContent: { padding: 16, paddingBottom: 24 },
   errorBanner: { backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca', borderRadius: 10, padding: 10, marginBottom: 14 },
   errorBannerText: { color: '#b91c1c', fontSize: 12, fontWeight: '700' },
   fieldLabel: { color: '#64748b', fontSize: 10, fontWeight: '800', letterSpacing: 1, marginBottom: 6 },
@@ -612,8 +617,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 11,
+    minHeight: 44,
+    height: 44,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 0,
     color: '#0f172a',
     fontSize: 13,
   },

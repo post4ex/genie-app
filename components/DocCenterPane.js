@@ -26,6 +26,7 @@ import React, { useState } from 'react';
 import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Tray from './Tray';
 import Button from './Button';
+import IconTray from './IconTray';
 import { GradientGlyph, GRADIENTS, withAlpha } from './icons';
 import GradientText from './GradientText';
 
@@ -69,20 +70,8 @@ export default function DocCenterPane({
       title="Document Center"
       colors={['#9C2007', '#f59e0b']}
       floating
-      right={
-        <View style={styles.actionRow}>
-          {headerActions.map((a) => (
-            <Button
-              key={a.key}
-              size="xs"
-              variant="tint"
-              iconOnly
-              icon={a.icon}
-              onPress={a.onPress}
-              accessibilityLabel={a.label}
-            />
-          ))}
-        </View>
+      actionTray={
+        <IconTray actions={headerActions} />
       }
     >
       <View style={styles.rows}>
@@ -131,7 +120,6 @@ function renderRowItem(order, onPrintDoc, onMailDoc, onDownloadDoc, onWhatsAppDo
 }
 
 const styles = StyleSheet.create({
-  actionRow: { flexDirection: 'row', flexWrap: 'nowrap', gap: 4, justifyContent: 'flex-end', maxWidth: 172 },
   rows: { borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingBottom: 10 },
   // Show more / Collapse toggle — mirrors the Tray's floating title chip
   // (white pill, hairline border, soft shadow) with brand gradient text.

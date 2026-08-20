@@ -241,16 +241,18 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.5)',
     justifyContent: 'flex-end',
+    alignItems: 'center',
+    width: '100%',
   },
-  // Compact sheet: hugs its content when short, caps at 560px on tall screens,
-  // and overflow:hidden + the flex-shrinking scroll keep the footer actions
-  // pinned and visible at every viewport size.
   sheet: {
+    width: '100%',
+    maxWidth: Platform.OS === 'web' ? 640 : '100%',
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     overflow: 'hidden',
-    maxHeight: 560,
+    maxHeight: '90%',
+    alignSelf: 'center',
   },
   header: {
     flexDirection: 'row',

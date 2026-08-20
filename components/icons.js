@@ -91,6 +91,8 @@ export const ICONS = {
   'chart-box-outline': 'chart-pie',
   eye: 'eye',
   eyeSlash: 'eye-slash',
+  more: 'ellipsis',
+  moreVertical: 'ellipsis-vertical',
   lock: 'lock',
   star: 'star',
   clock: 'clock',
@@ -164,6 +166,8 @@ export const GRADIENTS = {
   eye: ['#6366f1', '#8b5cf6'],           // indigo → violet
   checkCircle: ['#16a34a', '#22c55e'],   // green → light green
   back: ['#9C2007', '#f59e0b'],          // brand maroon → amber
+  more: ['#64748b', '#475569'],          // slate → dark slate (overflow)
+  moreVertical: ['#64748b', '#475569'],  // slate → dark slate (overflow)
 };
 
 // ── Canonical action colors ──────────────────────────────────────────────────
@@ -190,6 +194,8 @@ export const ACTION_COLORS = {
   checkCircle: '#0284c7',// sky
   eye: '#4f46e5',        // indigo
   back: '#9C2007',       // brand maroon
+  more: '#64748b',       // slate (overflow)
+  moreVertical: '#64748b', // slate (overflow)
 };
 
 // ── Tint chip backgrounds (Shipment-Details style) ────────────────────────────
@@ -215,6 +221,8 @@ export const TINT_BG = {
   edit: '#ffedd5',        // orange-100
   eye: '#e0e7ff',         // indigo-100
   back: '#fde8e8',        // maroon-50
+  more: '#f1f5f9',        // slate-100
+  moreVertical: '#f1f5f9', // slate-100
 };
 
 // ── MaterialCommunityIcons semantic registry ─────────────────────────────────
@@ -279,6 +287,8 @@ export const MCI_GLYPHS = {
   // Tracking pane glyphs — MCI names for the FA6-semantic keys
   scan: 'barcode-scan',
   gear: 'cog',
+  more: 'dots-horizontal',
+  moreVertical: 'dots-vertical',
 };
 
 // Default gradient used when a name has no palette entry.

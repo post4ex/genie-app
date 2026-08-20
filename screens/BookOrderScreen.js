@@ -625,10 +625,18 @@ export default function BookOrderScreen({
   };
 
   const focusInput = (ref, needsDropdownRoom = false) => {
-    scheduleDelayedAction(() => {
-      ref?.current?.focus?.();
+    const focusAndReveal = () => {
+      const input = ref?.current;
+      if (!input) return;
+      input.focus?.();
       ensureInputVisible(ref, needsDropdownRoom);
-    }, 120);
+    };
+
+    // Dropdown selection closes a separate Modal. Focus once after that modal
+    // closes, then retry after the next layout pass so the target TextInput is
+    // mounted and the native keyboard opens reliably.
+    scheduleDelayedAction(focusAndReveal, 180);
+    scheduleDelayedAction(focusAndReveal, 420);
   };
 
   // Enter must never silently skip an empty entry field.
@@ -2700,7 +2708,8 @@ const styles = StyleSheet.create({
   },
   pcsCountInput: {
     width: 60,
-    minHeight: 30,
+    height: 40,
+    minHeight: 40,
     fontSize: 13,
     fontWeight: '800',
     color: '#0f172a',
@@ -2716,7 +2725,7 @@ const styles = StyleSheet.create({
 
   lockNoticeText: { fontSize: 11, fontWeight: '700', color: '#b45309', marginBottom: 10, backgroundColor: '#fef3c7', padding: 8, borderRadius: 8 },
   labelWeb: { color: '#64748b', fontSize: 10, fontWeight: '800', letterSpacing: 0.8, marginBottom: 5 },
-  inputWeb: { backgroundColor: '#ffffff', borderRadius: 12, borderWidth: 1.5, borderColor: '#94a3b8', borderStyle: 'solid', color: '#0f172a', paddingHorizontal: 12, paddingVertical: 10, fontSize: 13, fontWeight: '600', marginBottom: 10, ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}) },
+  inputWeb: { backgroundColor: '#ffffff', borderRadius: 12, borderWidth: 1.5, borderColor: '#94a3b8', borderStyle: 'solid', color: '#0f172a', minHeight: 44, height: 44, paddingHorizontal: 12, paddingVertical: 0, fontSize: 13, fontWeight: '600', marginBottom: 10, ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}) },
   inputDisabled: {},
   btnDisabled: {},
   textDisabled: {},
@@ -2749,8 +2758,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#c4b5fd',
   },
   compactTrayInput: {
-    minHeight: 40,
-    paddingVertical: 6,
+    minHeight: 44,
+    height: 44,
+    paddingVertical: 0,
   },
   trayInput: {
     minHeight: 46,
@@ -2841,11 +2851,13 @@ const styles = StyleSheet.create({
   },
   boxCellInput: {
     width: '100%',
+    height: 40,
+    minHeight: 40,
     textAlign: 'center',
     fontSize: 13.5,
     fontWeight: '700',
     color: '#0f172a',
-    paddingVertical: 2,
+    paddingVertical: 0,
     paddingHorizontal: 0,
     backgroundColor: 'transparent',
     borderWidth: 0,
@@ -2889,10 +2901,12 @@ const styles = StyleSheet.create({
   },
   prodCellInput: {
     width: '100%',
+    height: 40,
+    minHeight: 40,
     fontSize: 13,
     fontWeight: '700',
     color: '#0f172a',
-    paddingVertical: 2,
+    paddingVertical: 0,
     paddingHorizontal: 0,
     backgroundColor: 'transparent',
     borderWidth: 0,

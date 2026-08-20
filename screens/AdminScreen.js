@@ -20,6 +20,8 @@ import { ROLE_LEVELS } from '../core/config';
 import { getAppData } from '../core/storage';
 import { getPincodeCount, searchPin } from '../utils/searchpin';
 import * as Location from 'expo-location';
+import Tile from '../components/Tile';
+import ListItem from '../components/ListItem';
 
 const TILE_MIN_ROLE = {
   users: 'ADMIN', registrations: 'ADMIN', services: 'ADMIN', branches: 'CLIENT',
@@ -574,19 +576,45 @@ export default function AdminScreen({
     const [id, icon, label, minimum] = item;
     const allowed = can(role, minimum);
     if (!allowed) return null;
-    return <TouchableOpacity style={[styles.tile, !isMobile && styles.tileDesktop]} onPress={() => openTile(id)} accessibilityRole="button" accessibilityLabel={label}>
-      <Text style={styles.tileIcon}>{icon}</Text><Text style={styles.tileCount}>{countFor(id)}</Text><Text style={styles.tileLabel}>{label}</Text><Text style={styles.tileRole}>{minimum}+</Text>
-    </TouchableOpacity>;
+    return (
+      <Tile
+        label={label}
+        value={countFor(id)}
+        caption={`${icon}  ${minimum}+`}
+        accent={id === 'services' ? ['#6366f1', '#8b5cf6'] : ['#9C2007', '#f59e0b']}
+        size="md"
+        onPress={() => openTile(id)}
+        style={[styles.tileWrap, !isMobile && styles.tileWrapDesktop]}
+      />
+    );
   };
 
   const renderListRecord = ({ item }) => {
     const id = keyFor(activeTile, item);
-    if (activeTile === 'services') return <TouchableOpacity style={styles.listCard} onPress={() => selectRecord(item)}><Text style={styles.listTitle}>{item.icon} {item.name}</Text><Text style={styles.listSub}>{item.desc}</Text><Text style={[styles.badge, item.status === 'online' ? styles.good : styles.neutral]}>{item.status || '—'}{item.latency_ms ? ` · ${item.latency_ms}ms` : ''}</Text></TouchableOpacity>;
-    return <TouchableOpacity style={[styles.listCard, selected && keyFor(activeTile, selected) === id && styles.selectedCard]} onPress={() => selectRecord(item)}>
-      <Text style={styles.listTitle}>{displayValue(id)}</Text>
-      <Text style={styles.listSub}>{displayValue(item.NAME || item.B2B_NAME || item.STAFF_NAME || item.BRANCH_NAME || item.COMPANY_NAME || item.MODE || item.EMAIL || item.CITY)}</Text>
-      <Text style={styles.listMeta}>{displayValue(item.STATUS || item.ROLE || item.BRANCH || item.HOLIDAY_TYPE || item.SHORT)}</Text>
-    </TouchableOpacity>;
+    const isSelected = selected && keyFor(activeTile, selected) === id;
+    if (activeTile === 'services') {
+      return (
+        <ListItem
+          title={`${item.icon || '•'} ${item.name}`}
+          subtitle={[item.desc, item.latency_ms ? `${item.status || '—'} · ${item.latency_ms}ms` : (item.status || '—')]}
+          status={item.status || 'offline'}
+          onPress={() => selectRecord(item)}
+          style={isSelected ? styles.selectedListItem : undefined}
+        />
+      );
+    }
+    return (
+      <ListItem
+        title={displayValue(id)}
+        subtitle={[
+          displayValue(item.NAME || item.B2B_NAME || item.STAFF_NAME || item.BRANCH_NAME || item.COMPANY_NAME || item.MODE || item.EMAIL || item.CITY),
+          displayValue(item.STATUS || item.ROLE || item.BRANCH || item.HOLIDAY_TYPE || item.SHORT),
+        ]}
+        status={item.STATUS || undefined}
+        onPress={() => selectRecord(item)}
+        style={isSelected ? styles.selectedListItem : undefined}
+      />
+    );
   };
 
   const renderDetails = () => {
@@ -674,6 +702,8 @@ const styles = StyleSheet.create({
   tileRow: { gap: 10, marginBottom: 10 },
   tile: { flex: 1, minHeight: 132, maxWidth: '48%', padding: 12, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', shadowColor: '#0f172a', shadowOpacity: 0.06, shadowRadius: 5, elevation: 1 },
   tileDesktop: { maxWidth: '23.5%' },
+  tileWrap: { flex: 1, maxWidth: '48%' },
+  tileWrapDesktop: { maxWidth: '23.5%' },
   tileIcon: { fontSize: 27, marginBottom: 5 },
   tileCount: { color: COLORS.primary, fontSize: 23, fontWeight: '800' },
   tileLabel: { color: '#334155', fontSize: 11, fontWeight: '700', textAlign: 'center', marginTop: 4 },
@@ -692,6 +722,7 @@ const styles = StyleSheet.create({
   addText: { color: '#fff', fontSize: 21, fontWeight: '700' },
   listCard: { padding: 10, marginBottom: 7, borderRadius: 9, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff' },
   selectedCard: { borderColor: COLORS.primary, backgroundColor: '#fff7f5' },
+  selectedListItem: { borderColor: COLORS.primary, backgroundColor: '#fff7f5' },
   listTitle: { color: '#1e293b', fontSize: 13, fontWeight: '800' },
   listSub: { color: '#64748b', fontSize: 11, marginTop: 2 },
   listMeta: { color: '#94a3b8', fontSize: 10, marginTop: 4 },

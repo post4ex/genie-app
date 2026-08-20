@@ -23,7 +23,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Tray from './Tray';
-import Button from './Button';
+import IconTray from './IconTray';
 import GradientText from './GradientText';
 import { accentSparkle } from './Tile';
 
@@ -87,21 +87,23 @@ export default function ShipmentDetailsPane({
   onWhatsApp,
   onDelete,
 }) {
+  const actions = [
+    { icon: 'checkCircle', label: 'Update Status', onPress: onUpdateStatus },
+    ...(canEdit ? [{ icon: 'edit', label: 'Edit', onPress: onEdit }] : []),
+    { icon: 'copy', label: 'Copy', onPress: onCopy },
+    { icon: 'share', label: 'Share', onPress: onShare },
+    { icon: 'envelope', label: 'Email', onPress: onMail },
+    { icon: 'whatsapp', label: 'WhatsApp', onPress: onWhatsApp },
+    { icon: 'trash', label: 'Delete', onPress: onDelete },
+  ];
+
   return (
     <Tray
       title="Shipment Details"
       colors={PANE_GRAD}
       floating
-      right={
-        <View style={styles.actionRow}>
-          <Button size="xs" variant="tint" iconOnly icon="checkCircle" onPress={onUpdateStatus} accessibilityLabel="Update Status" />
-          {canEdit ? <Button size="xs" variant="tint" iconOnly icon="edit" onPress={onEdit} accessibilityLabel="Edit" /> : null}
-          <Button size="xs" variant="tint" iconOnly icon="copy" onPress={onCopy} accessibilityLabel="Copy" />
-          <Button size="xs" variant="tint" iconOnly icon="share" onPress={onShare} accessibilityLabel="Share" />
-          <Button size="xs" variant="tint" iconOnly icon="envelope" onPress={onMail} accessibilityLabel="Email" />
-          <Button size="xs" variant="tint" iconOnly icon="whatsapp" onPress={onWhatsApp} accessibilityLabel="WhatsApp" />
-          <Button size="xs" variant="tint" iconOnly icon="trash" onPress={onDelete} accessibilityLabel="Delete" />
-        </View>
+      actionTray={
+        <IconTray actions={actions} />
       }
     >
       <View style={DETAIL_TABLE_STYLES.grid}>
@@ -124,7 +126,6 @@ export default function ShipmentDetailsPane({
 }
 
 const styles = StyleSheet.create({
-  actionRow: { flexDirection: 'row', flexWrap: 'nowrap', gap: 4, justifyContent: 'flex-end', maxWidth: 200 },
   rowFull: { width: '100%' },
   labelThird: { width: '25%' },
   valueThreeQ: { width: '75%' },

@@ -53,8 +53,8 @@ export default function PartiesPane({ consignor = [], consignee = [] }) {
 
 const styles = StyleSheet.create({
   columns: { gap: 10 },
-  // Extra top padding so the floating title chip clears the Consignor card's border
-  trayPad: { paddingTop: 10 },
+  // Keep the first inner party card below the floating tray title chip.
+  trayPad: { paddingTop: 32 },
   partyCard: {
     backgroundColor: '#ffffff',
     borderRadius: 12,

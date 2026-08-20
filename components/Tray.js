@@ -30,6 +30,7 @@ export default function Tray({
   iconColors,
   iconSize = 15,
   right = null,
+  actionTray = null,
   bottomLeft = null,
   style,
   headerStyle,
@@ -52,7 +53,10 @@ export default function Tray({
           ) : null}
           <GradientText colors={colors} style={[styles.floatingChipText, titleStyle]}>{title}</GradientText>
         </View>
-        {right ? <View style={styles.floatingTopRight}>{right}</View> : null}
+        {/* Floating trays put actions in a dedicated full-width row below the
+            title chip. Keeping this in normal flow prevents action icons from
+            colliding with the title on narrow screens. */}
+        {(actionTray || right) ? <View style={styles.floatingActionRow}>{actionTray || right}</View> : null}
         {children}
         {bottomLeft ? (
           <View style={styles.floatingBottomLeft}>{bottomLeft}</View>
@@ -115,7 +119,7 @@ const styles = StyleSheet.create({
 
   // Floating title chip — a rounded, unfilled pill straddling the top-left border
   // with gradient title text; action buttons stay inside the card.
-  cardFloating: { paddingTop: 36, marginBottom: 28 },
+  cardFloating: { paddingTop: 32, marginBottom: 28 },
   cardFloatingBottom: { paddingBottom: 40, marginBottom: 38 },
   cardCompactFloatingBottom: { marginBottom: 20 },
   floatingChip: {
@@ -140,9 +144,18 @@ const styles = StyleSheet.create({
   },
   floatingIcon: { marginRight: 6 },
   floatingChipText: { fontSize: 13, fontWeight: '900', letterSpacing: 0.3 },
-  // Clearance below the floating title chip (top: -13, ~30px tall) so the
-  // header action icons never collide with the chip.
-  floatingHeaderRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingTop: 8, marginBottom: 10 },
-  floatingTopRight: { position: 'absolute', top: -13, right: 14, zIndex: 2 },
+  // Dedicated action row below the floating title chip. The action tray owns
+  // the inner border/background; this wrapper only gives it full card width.
+  // Pull the compact icon tray toward the parent border; pane content keeps
+  // the normal card padding below it.
+  floatingActionRow: {
+    width: '100%',
+    alignItems: 'flex-end',
+    marginTop: -12,
+    marginLeft: -10,
+    marginRight: -20,
+    marginBottom: 6,
+    zIndex: 1,
+  },
   floatingBottomLeft: { position: 'absolute', bottom: -13, left: 14, zIndex: 2 },
 });

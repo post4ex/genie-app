@@ -141,11 +141,22 @@ const optionLabel = (options, v) => (options.find(o => o.value === v) || {}).lab
 export default function OrdersScreen({
   orders = [], searchQuery, setSearchQuery, refreshing, onRefresh,
   b2b2cMap = {}, b2bList = [], carriersMap = {}, modesMap = {}, productsMap = {}, multiboxMap = {}, uploadsMap = {}, shipmentsMap = {},
-  branchesMap = {}, token = '', apiBase = '', onEditOrder = null, role = 'STAFF'
+  branchesMap = {}, token = '', apiBase = '', onEditOrder = null, role = 'STAFF', navigationRequest = null
 }) {
-  const [currentView, setCurrentView] = useState('tiles');
-  const [selectedTile, setSelectedTile] = useState('all');
-  const [selectedOrder, setSelectedOrder] = useState(null);
+  const requestedOrder = navigationRequest?.type === 'detail' && navigationRequest.reference != null
+    ? orders.find((order) => String(order?.REFERENCE) === String(navigationRequest.reference)) || null
+    : null;
+  const initialView = navigationRequest?.type === 'detail' && requestedOrder
+    ? 'detail'
+    : navigationRequest?.type === 'tile'
+      ? 'list'
+      : 'tiles';
+
+  // Initialize directly into the requested destination so Dashboard → Orders
+  // does not briefly render the Orders tile grid first.
+  const [currentView, setCurrentView] = useState(initialView);
+  const [selectedTile, setSelectedTile] = useState(navigationRequest?.type === 'tile' ? (navigationRequest.tileId || 'all') : 'all');
+  const [selectedOrder, setSelectedOrder] = useState(requestedOrder);
 
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [filterStatus, setFilterStatus] = useState('ALL');
@@ -181,6 +192,27 @@ export default function OrdersScreen({
   // Scroll preservation refs & effect
   const flatListRef = useRef(null);
   const listScrollOffsetRef = useRef(0);
+
+  useEffect(() => {
+    if (!navigationRequest) return;
+
+    if (navigationRequest.type === 'tile') {
+      setSelectedTile(navigationRequest.tileId || 'all');
+      setSelectedOrder(null);
+      setTatQuickFilter(null);
+      setCurrentView('list');
+      setSearchQuery?.('');
+      return;
+    }
+
+    if (navigationRequest.type === 'detail' && navigationRequest.reference != null) {
+      const target = orders.find((order) => String(order?.REFERENCE) === String(navigationRequest.reference));
+      if (target) {
+        setSelectedOrder(target);
+        setCurrentView('detail');
+      }
+    }
+  }, [navigationRequest, orders]);
 
   useEffect(() => {
     if (currentView === 'list' && listScrollOffsetRef.current > 0) {

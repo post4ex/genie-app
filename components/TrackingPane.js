@@ -7,7 +7,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Tray from './Tray';
-import Button from './Button';
+import IconTray from './IconTray';
 import GradientText from './GradientText';
 import SegmentedToggle from './SegmentedToggle';
 import { GradientGlyph } from './icons';
@@ -139,7 +139,9 @@ function Timeline({ movements, splitByType, title }) {
       {visible.length ? visible.map((movement, index) => {
         const system = movementType(movement) === 'SYSTEM';
         const latest = index === 0 && !systemOnly;
-        const num = index + 1;
+        // Keep the existing movement sort unchanged; only reverse the visual
+        // sequence number so the newest-first list displays N ... 2, 1.
+        const num = visible.length - index;
         return (
           <View key={`${movementNumber(movement)}-${movementStamp(movement)}-${index}`} style={styles.movRow}>
             <View style={styles.rail}>
@@ -237,20 +239,22 @@ export default function TrackingPane({
   return (
     <View ref={paneRef} collapsable={false} style={styles.shareWrap}>
     <Tray
-      title={`${title} - ${status.label}`}
+      title={title}
       colors={PANE_GRAD}
       icon="scan"
       iconColors={PANE_GRAD}
       floating
       style={[styles.tray, style]}
-      right={
-        <View style={styles.actionRow}>
-          <Button size="xs" variant="tint" iconOnly icon="shareImage" onPress={shareAsImage} accessibilityLabel="Share as image" />
-          {onRefresh ? <Button size="xs" variant="tint" iconOnly icon="refresh" onPress={onRefresh} accessibilityLabel="Refresh live tracking" /> : null}
-          {onMail ? <Button size="xs" variant="tint" iconOnly icon="envelope" onPress={onMail} accessibilityLabel="Email tracking" /> : null}
-          {onWhatsApp ? <Button size="xs" variant="tint" iconOnly icon="whatsapp" onPress={onWhatsApp} accessibilityLabel="WhatsApp tracking" /> : null}
-          {onViewPod ? <Button size="xs" variant="tint" iconOnly icon="eye" onPress={onViewPod} accessibilityLabel={podLabel} /> : null}
-        </View>
+      actionTray={
+        <IconTray
+          actions={[
+            { icon: 'shareImage', label: 'Share as image', onPress: shareAsImage },
+            ...(onRefresh ? [{ icon: 'refresh', label: 'Refresh live tracking', onPress: onRefresh }] : []),
+            ...(onMail ? [{ icon: 'envelope', label: 'Email tracking', onPress: onMail }] : []),
+            ...(onWhatsApp ? [{ icon: 'whatsapp', label: 'WhatsApp tracking', onPress: onWhatsApp }] : []),
+            ...(onViewPod ? [{ icon: 'eye', label: podLabel, onPress: onViewPod }] : []),
+          ]}
+        />
       }
     >
       <StatusLine status={status} raw={shipment.status_raw} loading={loading} />
@@ -353,7 +357,6 @@ const styles = StyleSheet.create({
   // Capture wrapper — invisible, just anchors the view-shot ref for sharing.
   shareWrap: { alignSelf: 'stretch' },
   tray: { marginTop: 12 },
-  actionRow: { flexDirection: 'row', flexWrap: 'nowrap', gap: 4, justifyContent: 'flex-end', maxWidth: 180 },
 
   // Light holographic status strip
   statusStrip: {

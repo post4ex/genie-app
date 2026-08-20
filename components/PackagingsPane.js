@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ActivityIndicator, Image, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Tray from './Tray';
-import Button from './Button';
+import IconTray from './IconTray';
 import Icon, { GradientGlyph, GradientIcon } from './icons';
 import GradientText from './GradientText';
 import { fmtDate } from '../utils/formatIST';
@@ -274,23 +274,25 @@ export default function PackagingsPane({
     ? [...new Set(products.map(function(p) { return p.PRODUCT || p.NAME; }).filter(Boolean))].join(', ') || products.length
     : '';
 
+  const trayActions = [
+    { icon: 'upload', label: 'Upload File', onPress: onUpload },
+    ...(onShareArea ? [{ icon: 'shareImage', label: 'Share shipment area as image', onPress: onShareArea }] : []),
+    ...(!noUploads
+      ? [
+          { icon: 'eye', label: 'View uploads', onPress: function() { setViewIndex(0); } },
+          { icon: 'envelope', label: 'Mail All', onPress: onMailAll },
+          { icon: 'whatsapp', label: 'WhatsApp All', onPress: onWhatsAppAll },
+        ]
+      : []),
+  ];
+
   return (
     <Tray
       title="Packagings & Uploads"
       colors={PANE_GRAD}
       floating
-      right={
-        <View style={styles.actionRow}>
-          <Button size="xs" variant="tint" iconOnly icon="upload" onPress={onUpload} accessibilityLabel="Upload File" />
-          {onShareArea ? <Button size="xs" variant="tint" iconOnly icon="shareImage" onPress={onShareArea} accessibilityLabel="Share shipment area as image" /> : null}
-          {!noUploads ? (
-            <View style={styles.actionRow}>
-              <Button size="xs" variant="tint" iconOnly icon="eye" onPress={function() { setViewIndex(0); }} accessibilityLabel="View uploads" />
-              <Button size="xs" variant="tint" iconOnly icon="envelope" onPress={onMailAll} accessibilityLabel="Mail All" />
-              <Button size="xs" variant="tint" iconOnly icon="whatsapp" onPress={onWhatsAppAll} accessibilityLabel="WhatsApp All" />
-            </View>
-          ) : null}
-        </View>
+      actionTray={
+        <IconTray actions={trayActions} />
       }
     >
       {isEmpty ? (

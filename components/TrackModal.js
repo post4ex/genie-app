@@ -370,12 +370,18 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.55)',
     justifyContent: 'flex-end',
+    alignItems: 'center',
+    width: '100%',
   },
   sheet: {
+    width: '100%',
+    maxWidth: Platform.OS === 'web' ? 760 : '100%',
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
-    maxHeight: '88%',
+    maxHeight: '94%',
+    alignSelf: 'center',
+    overflow: 'hidden',
     ...(Platform.OS === 'web'
       ? { boxShadow: '0px -4px 24px rgba(0, 0, 0, 0.18)' }
       : { shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.18, shadowRadius: 24, elevation: 12 }),
@@ -408,7 +414,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
-  body: { flexGrow: 1, padding: 14 },
+  body: { flex: 1, minHeight: 0, padding: 14 },
 
   // Carrier + sub-carrier dropdowns share one row (flex) when both visible
   dropdownRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },

@@ -260,7 +260,17 @@ function ServiceLevelChart({ data }) {
   );
 }
 
-export default function DashboardScreen({ orders = [], shipmentsMap = {}, b2b2cMap = {}, modesMap = {}, refreshing, onRefresh, onNavigate }) {
+export default function DashboardScreen({
+  orders = [],
+  shipmentsMap = {},
+  b2b2cMap = {},
+  modesMap = {},
+  refreshing,
+  onRefresh,
+  onNavigate,
+  onOpenOrdersTile,
+  onOpenOrder,
+}) {
   // 1. Overall Stats linked with SHIPMENTS sheet state
   const totalOrders = orders.length;
 
@@ -386,19 +396,30 @@ export default function DashboardScreen({ orders = [], shipmentsMap = {}, b2b2cM
           label="Total Orders"
           value={totalOrders}
           accent={['#2563eb', '#06b6d4']}
-          onPress={() => onNavigate && onNavigate('orders')}
+          onPress={() => {
+            if (onOpenOrdersTile) onOpenOrdersTile('all');
+            else if (onNavigate) onNavigate('orders');
+          }}
         />
         <Tile
           size="sm"
           label="In Transit"
           value={inTransitCount}
           accent={['#f59e0b', '#f97316']}
+          onPress={() => {
+            if (onOpenOrdersTile) onOpenOrdersTile('intransit');
+            else if (onNavigate) onNavigate('orders');
+          }}
         />
         <Tile
           size="sm"
           label="Delivered"
           value={deliveredCount}
           accent={['#10b981', '#22c55e']}
+          onPress={() => {
+            if (onOpenOrdersTile) onOpenOrdersTile('delivered');
+            else if (onNavigate) onNavigate('orders');
+          }}
         />
       </View>
 
@@ -481,7 +502,9 @@ export default function DashboardScreen({ orders = [], shipmentsMap = {}, b2b2cM
                 `📍 ${ord.ORIGIN_CITY || 'DDN'} → 🏁 ${ord.DEST_CITY || 'DEST'}`,
               ]}
               status={stateStr || 'BOOKED'}
-              onPress={onNavigate ? () => onNavigate('orders') : undefined}
+              onPress={onOpenOrder
+                ? () => onOpenOrder(ord)
+                : (onNavigate ? () => onNavigate('orders') : undefined)}
             />
           );
         })}

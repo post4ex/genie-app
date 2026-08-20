@@ -34,8 +34,11 @@ const STATUS_COLORS = {
   cancelled: ['#ef4444', '#dc2626'],      // red
   rto: ['#e11d48', '#be123c'],            // rose → crimson
   exception: ['#f97316', '#ef4444'],      // orange → red
-  pickup: ['#a855f7', '#7c3aed'],         // purple → violet
-  deleted: ['#94a3b8', '#64748b'],        // muted gray
+  pickup: ['#a855f7', '#7c3aed'],         // purple → violet  deleted: ['#94a3b8', '#64748b'],      // muted gray
+  active: ['#10b981', '#22c55e'],        // enabled/active
+  online: ['#10b981', '#22c55e'],        // service online
+  inactive: ['#94a3b8', '#64748b'],      // disabled/inactive
+  offline: ['#ef4444', '#dc2626'],       // service offline
 };
 const DEFAULT_STATUS = ['#9C2007', '#ef4444'];
 

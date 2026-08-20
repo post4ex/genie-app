@@ -61,10 +61,16 @@ function MainApp() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState('');
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'orders' | 'book' | 'track' | 'pincode' | 'calc' | 'zipfinder' | 'complaint' | 'uploader'
+  const [ordersNavigation, setOrdersNavigation] = useState(null);
 
   const [orders, setOrders] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  const openOrdersFromDashboard = (request) => {
+    setOrdersNavigation({ ...request, requestId: Date.now() });
+    setActiveTab('orders');
+  };
 
   const [trackRef, setTrackRef] = useState('');
   const [trackResult, setTrackResult] = useState(null);
@@ -1086,7 +1092,17 @@ function MainApp() {
 
       <View style={styles.mainContent}>
         {activeTab === 'dashboard' && (
-          <DashboardScreen orders={orders} shipmentsMap={shipmentsMap} b2b2cMap={b2b2cMap} modesMap={modesMap} refreshing={refreshing} onRefresh={onRefresh} onNavigate={setActiveTab} />
+          <DashboardScreen
+            orders={orders}
+            shipmentsMap={shipmentsMap}
+            b2b2cMap={b2b2cMap}
+            modesMap={modesMap}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            onNavigate={setActiveTab}
+            onOpenOrdersTile={(tileId) => openOrdersFromDashboard({ type: 'tile', tileId })}
+            onOpenOrder={(order) => openOrdersFromDashboard({ type: 'detail', reference: order?.REFERENCE })}
+          />
         )}
         {activeTab === 'orders' && (
           <OrdersScreen
@@ -1109,6 +1125,7 @@ function MainApp() {
             apiBase={API_BASE}
             onEditOrder={handleEditOrder}
             role={user?.ROLE || 'STAFF'}
+            navigationRequest={ordersNavigation}
           />
         )}
         {activeTab === 'book' && (
